@@ -1,6 +1,22 @@
 import { Database } from 'bun:sqlite'
 import type { ActivityEntry, BoardMetrics } from './types.ts'
 
+export function getDiscoveredAssignees(db: Database): string[] {
+  return (
+    db
+      .query("SELECT DISTINCT assignee FROM tasks WHERE assignee != '' ORDER BY assignee")
+      .all() as { assignee: string }[]
+  ).map((r) => r.assignee)
+}
+
+export function getDiscoveredProjects(db: Database): string[] {
+  return (
+    db.query("SELECT DISTINCT project FROM tasks WHERE project != '' ORDER BY project").all() as {
+      project: string
+    }[]
+  ).map((r) => r.project)
+}
+
 export function getBoardMetrics(db: Database): BoardMetrics {
   const tasksByColumn = db
     .query(
@@ -67,17 +83,8 @@ export function getBoardMetrics(db: Database): BoardMetrics {
 
   const completionPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
 
-  const assignees = (
-    db
-      .query("SELECT DISTINCT assignee FROM tasks WHERE assignee != '' ORDER BY assignee")
-      .all() as { assignee: string }[]
-  ).map((r) => r.assignee)
-
-  const projects = (
-    db.query("SELECT DISTINCT project FROM tasks WHERE project != '' ORDER BY project").all() as {
-      project: string
-    }[]
-  ).map((r) => r.project)
+  const assignees = getDiscoveredAssignees(db)
+  const projects = getDiscoveredProjects(db)
 
   return {
     tasksByColumn,

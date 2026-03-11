@@ -12,7 +12,7 @@ import {
   moveTask,
   updateTask,
 } from '../db.ts'
-import { getBoardMetrics } from '../metrics.ts'
+import { getBoardMetrics, getDiscoveredAssignees, getDiscoveredProjects } from '../metrics.ts'
 import type { BoardBootstrap, BoardConfig, Task } from '../types.ts'
 import { LOCAL_CAPABILITIES } from './capabilities.ts'
 import type {
@@ -115,12 +115,11 @@ export class LocalProvider implements KanbanProvider {
 
   async getConfig(): Promise<BoardConfig> {
     const config = loadConfig(this.dbPath)
-    const metrics = getBoardMetrics(this.db)
     return {
       ...config,
       provider: 'local',
-      discoveredAssignees: metrics.assignees,
-      discoveredProjects: metrics.projects,
+      discoveredAssignees: getDiscoveredAssignees(this.db),
+      discoveredProjects: getDiscoveredProjects(this.db),
     }
   }
 
