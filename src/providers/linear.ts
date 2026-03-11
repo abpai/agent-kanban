@@ -225,8 +225,27 @@ export class LinearProvider implements KanbanProvider {
     if (!result.success || !result.issue) {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear issue creation failed')
     }
-    await this.sync(true)
-    return this.resolveTask(result.issue.id)
+    const issue = result.issue
+    upsertIssues(this.db, [
+      {
+        id: issue.id,
+        identifier: issue.identifier,
+        title: issue.title,
+        description: issue.description ?? '',
+        priority: issue.priority ?? 0,
+        assigneeId: issue.assignee?.id ?? null,
+        assigneeName: issue.assignee?.name ?? issue.assignee?.displayName ?? '',
+        projectId: issue.project?.id ?? null,
+        projectName: issue.project?.name ?? '',
+        stateId: issue.state.id,
+        stateName: issue.state.name,
+        statePosition: issue.state.position,
+        url: issue.url ?? null,
+        createdAt: issue.createdAt,
+        updatedAt: issue.updatedAt,
+      },
+    ])
+    return this.resolveTask(issue.id)
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput) {

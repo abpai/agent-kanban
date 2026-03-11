@@ -199,7 +199,7 @@ export class LinearClient {
         }
       } = await this.query(
         `
-          query Issues($teamId: String!, $after: String, $updatedAfter: DateTimeOrDuration) {
+          query Issues($teamId: ID!, $after: String, $updatedAfter: DateTimeOrDuration) {
             issues(
               first: 100
               after: $after
@@ -269,9 +269,9 @@ export class LinearClient {
     priority?: number
     assigneeId?: string
     projectId?: string
-  }): Promise<{ success: boolean; issue: { id: string } | null }> {
+  }): Promise<{ success: boolean; issue: LinearIssue | null }> {
     const data = await this.query<{
-      issueCreate: { success: boolean; issue: { id: string } | null }
+      issueCreate: { success: boolean; issue: LinearIssue | null }
     }>(
       `
         mutation CreateIssue($input: IssueCreateInput!) {
@@ -279,6 +279,16 @@ export class LinearClient {
             success
             issue {
               id
+              identifier
+              title
+              description
+              priority
+              url
+              createdAt
+              updatedAt
+              assignee { id name displayName }
+              project { id name url state }
+              state { id name position }
             }
           }
         }
