@@ -72,7 +72,10 @@ export class LinearProvider implements KanbanProvider {
       this.client.getTeam(this.teamId),
       this.client.listUsers(),
       this.client.listProjects(),
-      this.client.listIssues(this.teamId, meta.lastIssueUpdatedAt ?? undefined),
+      this.client.listIssues(
+        this.teamId,
+        force ? undefined : (meta.lastIssueUpdatedAt ?? undefined),
+      ),
     ])
 
     replaceStates(this.db, team.states)

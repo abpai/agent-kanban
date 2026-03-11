@@ -114,20 +114,23 @@ export function replaceStates(
     type?: string | null
   }>,
 ): void {
-  db.run('DELETE FROM linear_states')
-  const stmt = db.prepare(
-    `INSERT INTO linear_states (id, name, position, color, type, created_at, updated_at)
-     VALUES ($id, $name, $position, $color, $type, datetime('now'), datetime('now'))`,
-  )
-  for (const state of states) {
-    stmt.run({
-      $id: state.id,
-      $name: state.name,
-      $position: state.position,
-      $color: state.color ?? null,
-      $type: state.type ?? null,
-    })
-  }
+  const run = db.transaction(() => {
+    db.run('DELETE FROM linear_states')
+    const stmt = db.prepare(
+      `INSERT INTO linear_states (id, name, position, color, type, created_at, updated_at)
+       VALUES ($id, $name, $position, $color, $type, datetime('now'), datetime('now'))`,
+    )
+    for (const state of states) {
+      stmt.run({
+        $id: state.id,
+        $name: state.name,
+        $position: state.position,
+        $color: state.color ?? null,
+        $type: state.type ?? null,
+      })
+    }
+  })
+  run()
 }
 
 export function upsertUsers(
@@ -245,12 +248,12 @@ function mapPriority(priority: number): Task['priority'] {
       return 'urgent'
     case 2:
       return 'high'
-    case 4:
-      return 'low'
-    case 0:
     case 3:
-    default:
       return 'medium'
+    case 0:
+    case 4:
+    default:
+      return 'low'
   }
 }
 

@@ -10,9 +10,12 @@ export function createProvider(db: Database, dbPath = getDbPath()): KanbanProvid
   if (providerType === 'linear') {
     const apiKey = process.env['LINEAR_API_KEY']
     const teamId = process.env['LINEAR_TEAM_ID']
-    if (!apiKey) providerNotConfigured('LINEAR_API_KEY is required when KANBAN_PROVIDER=linear')
-    if (!teamId) providerNotConfigured('LINEAR_TEAM_ID is required when KANBAN_PROVIDER=linear')
-    return new LinearProvider(db, teamId, apiKey)
+    if (!apiKey || !teamId) {
+      providerNotConfigured(
+        'LINEAR_API_KEY and LINEAR_TEAM_ID are required when KANBAN_PROVIDER=linear',
+      )
+    }
+    return new LinearProvider(db, teamId!, apiKey!)
   }
 
   initSchema(db)
