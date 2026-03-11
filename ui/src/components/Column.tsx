@@ -15,7 +15,7 @@ const COLUMN_COLORS: Record<string, string> = {
 }
 
 export function Column({ column }: ColumnProps) {
-  const { filterAssignee, filterProject, setShowNewTaskModal } = useStore()
+  const { filterAssignee, filterProject, setShowNewTaskModal, capabilities } = useStore()
 
   const filteredTasks = column.tasks.filter((task) => {
     if (filterAssignee && task.assignee !== filterAssignee) return false
@@ -31,13 +31,15 @@ export function Column({ column }: ColumnProps) {
         <div className="columnDot" style={{ background: dotColor }} />
         <span className="columnName">{column.name}</span>
         <span className="columnCount">{filteredTasks.length}</span>
-        <button
-          className="columnAddBtn"
-          title="Add task to this column"
-          onClick={() => setShowNewTaskModal(true, column.name)}
-        >
-          +
-        </button>
+        {capabilities.taskCreate && (
+          <button
+            className="columnAddBtn"
+            title="Add task to this column"
+            onClick={() => setShowNewTaskModal(true, column.name)}
+          >
+            +
+          </button>
+        )}
       </div>
       <div className="columnBody">
         {filteredTasks.length === 0 ? (

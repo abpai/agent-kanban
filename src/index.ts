@@ -1,41 +1,36 @@
 #!/usr/bin/env bun
 
 import { parseArgs } from 'node:util'
-import type { Database } from 'bun:sqlite'
+import { Database } from 'bun:sqlite'
 import { KanbanError, ErrorCode } from './errors.ts'
-import { formatOutput, error } from './output.ts'
-import { openDb, getDbPath, initSchema, migrateSchema } from './db.ts'
-import { boardInit, boardView, boardReset } from './commands/board.ts'
+import { formatOutput, error, success } from './output.ts'
+import { openDb, getDbPath, initSchema, migrateSchema, seedDefaultColumns } from './db.ts'
+import { boardInit, boardReset } from './commands/board.ts'
 import {
   columnAdd,
+  columnDelete,
   columnList,
   columnRename,
   columnReorder,
-  columnDelete,
 } from './commands/column.ts'
-import {
-  taskAdd,
-  taskList,
-  taskView,
-  taskUpdate,
-  taskDelete,
-  taskMove,
-  taskAssign,
-  taskPrioritize,
-} from './commands/task.ts'
-import { bulkMoveAllCmd, bulkClearDoneCmd } from './commands/bulk.ts'
-import { loadConfig, saveConfig, getConfigPath } from './config.ts'
-import type { CliOutput } from './types.ts'
-import { success } from './output.ts'
+import { bulkClearDoneCmd, bulkMoveAllCmd } from './commands/bulk.ts'
+import { getConfigPath, loadConfig, saveConfig } from './config.ts'
+import type { CliOutput, Priority } from './types.ts'
+import { createProvider } from './providers/index.ts'
+import { unsupportedOperation } from './providers/errors.ts'
 
-function run(argv: string[]): { output: CliOutput; exitCode: number } {
-  const { values, positionals } = parseArgs({
+interface ParsedArgs {
+  values: Record<string, unknown>
+  positionals: string[]
+}
+
+function parseCliArgs(argv: string[]): ParsedArgs {
+  return parseArgs({
     args: argv,
     options: {
       pretty: { type: 'boolean', default: false },
       db: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
-      // task/column flags
       d: { type: 'string' },
       c: { type: 'string' },
       p: { type: 'string' },
@@ -52,119 +47,99 @@ function run(argv: string[]): { output: CliOutput; exitCode: number } {
     strict: false,
     allowPositionals: true,
   })
-
-  if (values.help) {
-    return {
-      output: { ok: true, data: { message: HELP_TEXT } },
-      exitCode: 0,
-    }
-  }
-
-  const dbPath = (values.db as string | undefined) ?? getDbPath()
-  const db = openDb(dbPath)
-  migrateSchema(db)
-
-  try {
-    const group = positionals[0]
-    const action = positionals[1]
-
-    // Default: board view
-    if (!group) {
-      initSchema(db)
-      return { output: boardView(db), exitCode: 0 }
-    }
-
-    const output = routeCommand(db, group, action, positionals, values)
-    return { output, exitCode: 0 }
-  } finally {
-    db.close()
-  }
 }
 
-function routeCommand(
-  db: Database,
-  group: string,
+function requireLocalProvider(providerType: string, feature: string): void {
+  if (providerType === 'linear') unsupportedOperation(`${feature} is only available in local mode`)
+}
+
+async function routeTask(
+  provider: ReturnType<typeof createProvider>,
   action: string | undefined,
   positionals: string[],
   values: Record<string, unknown>,
-): CliOutput {
-  switch (group) {
-    case 'board':
-      return routeBoard(db, action)
-    case 'task':
-      return routeTask(db, action, positionals, values)
-    case 'column':
-      return routeColumn(db, action, positionals, values)
-    case 'bulk':
-      return routeBulk(db, action, positionals)
-    case 'config':
-      return routeConfig(group, action, positionals, values)
-    default:
-      throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown command group '${group}'`)
-  }
-}
-
-function routeBoard(db: Database, action: string | undefined): CliOutput {
+): Promise<CliOutput> {
   switch (action) {
-    case 'init':
-      return boardInit(db)
-    case 'view':
-    case undefined:
-      if (action === undefined) initSchema(db)
-      return boardView(db)
-    case 'reset':
-      return boardReset(db)
-    default:
-      throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown board command '${action}'`)
-  }
-}
-
-function routeTask(
-  db: Database,
-  action: string | undefined,
-  positionals: string[],
-  values: Record<string, unknown>,
-): CliOutput {
-  switch (action) {
-    case 'add':
-      return taskAdd(db, {
-        title: positionals[2],
-        description: values.d as string | undefined,
-        column: values.c as string | undefined,
-        priority: values.p as string | undefined,
-        assignee: values.a as string | undefined,
-        project: values.project as string | undefined,
-        metadata: values.m as string | undefined,
-      })
+    case 'add': {
+      const title = positionals[2]
+      if (!title) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task title is required')
+      return success(
+        await provider.createTask({
+          title,
+          description: values.d as string | undefined,
+          column: values.c as string | undefined,
+          priority: values.p as Priority | undefined,
+          assignee: values.a as string | undefined,
+          project: values.project as string | undefined,
+          metadata: values.m as string | undefined,
+        }),
+      )
+    }
     case 'list':
-      return taskList(db, {
-        column: values.c as string | undefined,
-        priority: values.p as string | undefined,
-        assignee: values.a as string | undefined,
-        project: values.project as string | undefined,
-        limit: values.l as string | undefined,
-        sort: values.sort as string | undefined,
-      })
-    case 'view':
-      return taskView(db, { id: positionals[2] })
-    case 'update':
-      return taskUpdate(db, {
-        id: positionals[2],
-        title: values.title as string | undefined,
-        description: values.d as string | undefined,
-        priority: values.p as string | undefined,
-        assignee: values.a as string | undefined,
-        project: values.project as string | undefined,
-        metadata: values.m as string | undefined,
-      })
-    case 'delete':
-      return taskDelete(db, { id: positionals[2] })
-    case 'move':
-      return taskMove(db, { id: positionals[2], column: positionals[3] })
-    case 'assign':
-      return taskAssign(db, { id: positionals[2], assignee: positionals[3] })
-    case 'prioritize':
-      return taskPrioritize(db, { id: positionals[2], priority: positionals[3] })
+      return success(
+        await provider.listTasks({
+          column: values.c as string | undefined,
+          priority: values.p as string | undefined,
+          assignee: values.a as string | undefined,
+          project: values.project as string | undefined,
+          limit: values.l ? parseInt(values.l as string, 10) : undefined,
+          sort: values.sort as string | undefined,
+        }),
+      )
+    case 'view': {
+      const id = positionals[2]
+      if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
+      return success(await provider.getTask(id))
+    }
+    case 'update': {
+      const id = positionals[2]
+      if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
+      return success(
+        await provider.updateTask(id, {
+          title: values.title as string | undefined,
+          description: values.d as string | undefined,
+          priority: values.p as Priority | undefined,
+          assignee: values.a as string | undefined,
+          project: values.project as string | undefined,
+          metadata: values.m as string | undefined,
+        }),
+      )
+    }
+    case 'delete': {
+      const id = positionals[2]
+      if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
+      return success(await provider.deleteTask(id))
+    }
+    case 'move': {
+      const id = positionals[2]
+      const column = positionals[3]
+      if (!id || !column) {
+        throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Usage: kanban task move <id> <column>')
+      }
+      return success(await provider.moveTask(id, column))
+    }
+    case 'assign': {
+      const id = positionals[2]
+      const assignee = positionals[3]
+      if (!id || assignee === undefined) {
+        throw new KanbanError(
+          ErrorCode.MISSING_ARGUMENT,
+          'Usage: kanban task assign <id> <assignee>',
+        )
+      }
+      return success(await provider.updateTask(id, { assignee }))
+    }
+    case 'prioritize': {
+      const id = positionals[2]
+      const priority = positionals[3]
+      if (!id || !priority) {
+        throw new KanbanError(
+          ErrorCode.MISSING_ARGUMENT,
+          'Usage: kanban task prioritize <id> <level>',
+        )
+      }
+      return success(await provider.updateTask(id, { priority: priority as Priority }))
+    }
     default:
       throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown task command '${action}'`)
   }
@@ -172,10 +147,12 @@ function routeTask(
 
 function routeColumn(
   db: Database,
+  providerType: string,
   action: string | undefined,
   positionals: string[],
   values: Record<string, unknown>,
 ): CliOutput {
+  requireLocalProvider(providerType, 'Column commands')
   switch (action) {
     case 'add':
       return columnAdd(db, {
@@ -196,7 +173,13 @@ function routeColumn(
   }
 }
 
-function routeBulk(db: Database, action: string | undefined, positionals: string[]): CliOutput {
+function routeBulk(
+  db: Database,
+  providerType: string,
+  action: string | undefined,
+  positionals: string[],
+): CliOutput {
+  requireLocalProvider(providerType, 'Bulk commands')
   switch (action) {
     case 'move-all':
       return bulkMoveAllCmd(db, { from: positionals[2], to: positionals[3] })
@@ -207,26 +190,33 @@ function routeBulk(db: Database, action: string | undefined, positionals: string
   }
 }
 
-function routeConfig(
-  _group: string,
+async function routeConfig(
+  provider: ReturnType<typeof createProvider>,
+  dbPath: string,
   action: string | undefined,
   positionals: string[],
   values: Record<string, unknown>,
-): CliOutput {
-  const dbPath = (values.db as string | undefined) ?? getDbPath()
+): Promise<CliOutput> {
+  if (provider.type === 'linear') {
+    if (action === 'show' || action === undefined) {
+      return success(await provider.getConfig())
+    }
+    unsupportedOperation('Config mutation is only available in local mode')
+  }
+
   const configPath = getConfigPath(dbPath)
   const config = loadConfig(dbPath)
 
   switch (action) {
     case 'show':
     case undefined:
-      return success(config)
+      return success(await provider.getConfig())
     case 'set-member': {
       const name = positionals[2]
       if (!name) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Member name is required')
       const role =
         (values.role as string | undefined) === 'agent' ? ('agent' as const) : ('human' as const)
-      const existing = config.members.findIndex((m) => m.name === name)
+      const existing = config.members.findIndex((member) => member.name === name)
       if (existing >= 0) {
         config.members[existing] = { name, role }
       } else {
@@ -238,7 +228,7 @@ function routeConfig(
     case 'remove-member': {
       const name = positionals[2]
       if (!name) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Member name is required')
-      config.members = config.members.filter((m) => m.name !== name)
+      config.members = config.members.filter((member) => member.name !== name)
       saveConfig(configPath, config)
       return success({ message: `Member '${name}' removed` })
     }
@@ -254,12 +244,82 @@ function routeConfig(
     case 'remove-project': {
       const name = positionals[2]
       if (!name) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Project name is required')
-      config.projects = config.projects.filter((p) => p !== name)
+      config.projects = config.projects.filter((project) => project !== name)
       saveConfig(configPath, config)
       return success({ message: `Project '${name}' removed` })
     }
     default:
       throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown config command '${action}'`)
+  }
+}
+
+async function routeBoard(
+  db: Database,
+  provider: ReturnType<typeof createProvider>,
+  action: string | undefined,
+): Promise<CliOutput> {
+  switch (action) {
+    case 'init':
+      requireLocalProvider(provider.type, 'Board initialization')
+      return boardInit(db)
+    case 'view':
+    case undefined:
+      if (provider.type === 'local') {
+        initSchema(db)
+        seedDefaultColumns(db)
+      }
+      return success(await provider.getBoard())
+    case 'reset':
+      requireLocalProvider(provider.type, 'Board reset')
+      return boardReset(db)
+    default:
+      throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown board command '${action}'`)
+  }
+}
+
+async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: number }> {
+  const { values, positionals } = parseCliArgs(argv)
+  if (values.help) {
+    return { output: { ok: true, data: { message: HELP_TEXT } }, exitCode: 0 }
+  }
+
+  const dbPath = (values.db as string | undefined) ?? getDbPath()
+  const db = openDb(dbPath)
+  migrateSchema(db)
+
+  try {
+    const provider = createProvider(db, dbPath)
+    const group = positionals[0]
+    const action = positionals[1]
+
+    if (!group) {
+      return { output: await routeBoard(db, provider, undefined), exitCode: 0 }
+    }
+
+    let output: CliOutput
+    switch (group) {
+      case 'board':
+        output = await routeBoard(db, provider, action)
+        break
+      case 'task':
+        output = await routeTask(provider, action, positionals, values)
+        break
+      case 'column':
+        output = routeColumn(db, provider.type, action, positionals, values)
+        break
+      case 'bulk':
+        output = routeBulk(db, provider.type, action, positionals)
+        break
+      case 'config':
+        output = await routeConfig(provider, dbPath, action, positionals, values)
+        break
+      default:
+        throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown command group '${group}'`)
+    }
+
+    return { output, exitCode: 0 }
+  } finally {
+    db.close()
   }
 }
 
@@ -307,49 +367,39 @@ Options:
 if (import.meta.main) {
   const argv = process.argv.slice(2)
 
-  // Intercept 'serve' command before run() — server needs DB to stay open
   if (argv[0] === 'serve') {
     const portIdx = argv.indexOf('--port')
     const port = portIdx !== -1 ? parseInt(argv[portIdx + 1]!, 10) : 3000
 
-    const { parseArgs: parseServeArgs } = await import('node:util')
-    const { values: serveValues } = parseServeArgs({
+    const { values } = parseArgs({
       args: argv,
       options: { db: { type: 'string' }, port: { type: 'string' } },
       strict: false,
       allowPositionals: true,
     })
 
-    const dbPath = (serveValues.db as string | undefined) ?? getDbPath()
+    const dbPath = (values.db as string | undefined) ?? getDbPath()
     const db = openDb(dbPath)
     migrateSchema(db)
-    initSchema(db)
-
-    const { seedDefaultColumns } = await import('./db.ts')
-    seedDefaultColumns(db)
-
+    const provider = createProvider(db, dbPath)
     const { startServer } = await import('./server.ts')
-    startServer(db, port)
+    startServer(provider, port)
   } else {
     let exitCode = 0
-    let pretty = argv.includes('--pretty')
+    const pretty = argv.includes('--pretty')
 
     try {
-      const result = run(argv)
+      const result = await run(argv)
       exitCode = result.exitCode
-      pretty = argv.includes('--pretty')
-      const output = formatOutput(result.output, pretty)
-      console.info(output)
+      console.info(formatOutput(result.output, pretty))
     } catch (err) {
       if (err instanceof KanbanError) {
         exitCode = 1
-        const output = formatOutput(error(err.code, err.message), pretty)
-        console.error(output)
+        console.error(formatOutput(error(err.code, err.message), pretty))
       } else {
         exitCode = 2
         const msg = err instanceof Error ? err.message : String(err)
-        const output = formatOutput(error(ErrorCode.INTERNAL_ERROR, msg), pretty)
-        console.error(output)
+        console.error(formatOutput(error(ErrorCode.INTERNAL_ERROR, msg), pretty))
       }
     }
 

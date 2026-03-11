@@ -1,8 +1,8 @@
-import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { handleRequest } from './api.ts'
 import type { ServerWebSocket } from 'bun'
+import type { KanbanProvider } from './providers/types.ts'
 
 const wsClients = new Set<ServerWebSocket<unknown>>()
 const CORS_HEADERS = {
@@ -24,7 +24,7 @@ function applyCorsHeaders(response: Response): void {
   }
 }
 
-export function startServer(db: Database, port: number): void {
+export function startServer(provider: KanbanProvider, port: number): void {
   const distDir = join(import.meta.dir, '..', 'ui', 'dist')
   const hasStatic = existsSync(distDir)
 
@@ -57,11 +57,15 @@ export function startServer(db: Database, port: number): void {
       }
 
       if (url.pathname === '/api/health') {
-        return Response.json({ ok: true, data: { status: 'running', wsClients: wsClients.size } })
+        const context = await provider.getContext()
+        return Response.json({
+          ok: true,
+          data: { status: 'running', wsClients: wsClients.size, provider: context.provider },
+        })
       }
 
       if (url.pathname.startsWith('/api/')) {
-        const result = await handleRequest(db, req)
+        const result = await handleRequest(provider, req)
         applyCorsHeaders(result.response)
         if (result.mutated && result.response.ok) {
           broadcast({ type: 'refresh' })

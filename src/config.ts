@@ -1,10 +1,6 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-
-export interface BoardConfig {
-  members: { name: string; role: 'human' | 'agent' }[]
-  projects: string[]
-}
+import type { BoardConfig } from './types.ts'
 
 const DEFAULT_CONFIG: BoardConfig = { members: [], projects: [] }
 

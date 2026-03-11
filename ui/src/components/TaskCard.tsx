@@ -16,7 +16,10 @@ export function TaskCard({ task }: TaskCardProps) {
     >
       <div className="taskCardHeader">
         <div className={`priorityDot ${task.priority}`} title={task.priority} />
-        <div className="taskTitle">{task.title}</div>
+        <div className="taskTitle">
+          {task.externalRef && task.externalRef !== task.id ? `${task.externalRef} ` : ''}
+          {task.title}
+        </div>
       </div>
       {task.description && <div className="taskDescription">{task.description}</div>}
       <div className="taskFooter">

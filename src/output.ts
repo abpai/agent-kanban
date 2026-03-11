@@ -1,4 +1,4 @@
-import type { CliOutput, BoardView, TaskWithColumn, Column } from './types.ts'
+import type { CliOutput, BoardView, Task, TaskWithColumn, Column } from './types.ts'
 
 export function success<T>(data: T): CliOutput<T> {
   return { ok: true, data }
@@ -53,24 +53,27 @@ const PRIORITY_ICONS: Record<string, string> = {
   low: '.  ',
 }
 
-function formatTaskLine(task: TaskWithColumn): string {
+function formatTaskLine(task: Task): string {
   const pri = PRIORITY_ICONS[task.priority] ?? '   '
   const assignee = task.assignee ? ` @${task.assignee}` : ''
   const project = task.project ? ` [${task.project}]` : ''
-  return `  [${pri}] ${task.id}  ${task.title}${assignee}${project}`
+  const ref = task.externalRef && task.externalRef !== task.id ? ` (${task.externalRef})` : ''
+  return `  [${pri}] ${task.id}${ref}  ${task.title}${assignee}${project}`
 }
 
-function formatTaskDetail(task: TaskWithColumn): string {
+function formatTaskDetail(task: Task): string {
   const lines = [
     `Task: ${task.id}`,
+    ...(task.externalRef && task.externalRef !== task.id ? [`Ref: ${task.externalRef}`] : []),
     `Title: ${task.title}`,
-    `Column: ${task.column_name}`,
     `Priority: ${task.priority}`,
   ]
+  if ('column_name' in task && task.column_name) lines.push(`Column: ${task.column_name}`)
   if (task.assignee) lines.push(`Assignee: ${task.assignee}`)
   if (task.project) lines.push(`Project: ${task.project}`)
   if (task.description) lines.push(`Description: ${task.description}`)
   if (task.metadata !== '{}') lines.push(`Metadata: ${task.metadata}`)
+  if (task.url) lines.push(`URL: ${task.url}`)
   lines.push(`Created: ${task.created_at}`)
   lines.push(`Updated: ${task.updated_at}`)
   return lines.join('\n')

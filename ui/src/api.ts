@@ -1,4 +1,12 @@
-import type { BoardView, ActivityEntry, BoardMetrics, Task, BoardConfig, Priority } from './types'
+import type {
+  BoardBootstrap,
+  BoardConfig,
+  BoardMetrics,
+  BoardView,
+  ActivityEntry,
+  Task,
+  Priority,
+} from './types'
 
 const BASE = '/api'
 
@@ -10,6 +18,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getBootstrap: () => fetchJson<BoardBootstrap>('/bootstrap'),
   getBoard: () => fetchJson<BoardView>('/board'),
   getActivity: (limit = 50) => fetchJson<ActivityEntry[]>(`/activity?limit=${limit}`),
   getMetrics: () => fetchJson<BoardMetrics>('/metrics'),

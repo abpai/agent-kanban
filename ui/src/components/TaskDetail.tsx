@@ -4,8 +4,17 @@ import { relativeTime, getAvatarColor } from '../utils'
 import type { Priority } from '../types'
 
 export function TaskDetail() {
-  const { board, metrics, config, selectedTaskId, selectTask, moveTask, removeTask, updateTask } =
-    useStore()
+  const {
+    board,
+    metrics,
+    config,
+    capabilities,
+    selectedTaskId,
+    selectTask,
+    moveTask,
+    removeTask,
+    updateTask,
+  } = useStore()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editingField, setEditingField] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -76,6 +85,34 @@ export function TaskDetail() {
     setEditValue('')
   }
 
+  const editButtons = (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <button
+        className="btnPrimary"
+        style={{ fontSize: 12, padding: '4px 12px' }}
+        onClick={saveEdit}
+      >
+        Save
+      </button>
+      <button
+        className="btnSecondary"
+        style={{ fontSize: 12, padding: '4px 12px' }}
+        onClick={cancelEdit}
+      >
+        Cancel
+      </button>
+    </div>
+  )
+
+  const editableProps = (field: string, value: string, extra?: React.CSSProperties) => ({
+    style: {
+      cursor: capabilities.taskUpdate ? 'pointer' : 'default',
+      ...extra,
+    } as React.CSSProperties,
+    onClick: () => capabilities.taskUpdate && startEdit(field, value),
+    title: capabilities.taskUpdate ? 'Click to edit' : undefined,
+  })
+
   return (
     <>
       <div className="taskDetailOverlay" onClick={() => selectTask(null)} />
@@ -93,29 +130,10 @@ export function TaskDetail() {
               autoFocus
               style={{ marginBottom: 8 }}
             />
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button
-                className="btnPrimary"
-                style={{ fontSize: 12, padding: '4px 12px' }}
-                onClick={saveEdit}
-              >
-                Save
-              </button>
-              <button
-                className="btnSecondary"
-                style={{ fontSize: 12, padding: '4px 12px' }}
-                onClick={cancelEdit}
-              >
-                Cancel
-              </button>
-            </div>
+            {editButtons}
           </div>
         ) : (
-          <div
-            className="detailTitle"
-            style={{ cursor: 'pointer' }}
-            onClick={() => startEdit('title', task!.title)}
-          >
+          <div className="detailTitle" {...editableProps('title', task!.title)}>
             {task.title}
           </div>
         )}
@@ -126,6 +144,15 @@ export function TaskDetail() {
             {task.id}
           </div>
         </div>
+
+        {task.externalRef && task.externalRef !== task.id && (
+          <div className="detailField">
+            <div className="detailLabel">Ref</div>
+            <div className="detailValue" style={{ fontFamily: 'monospace', fontSize: 12 }}>
+              {task.externalRef}
+            </div>
+          </div>
+        )}
 
         <div className="detailField">
           <div className="detailLabel">Column</div>
@@ -149,29 +176,16 @@ export function TaskDetail() {
                 <option value="high">high</option>
                 <option value="urgent">urgent</option>
               </select>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  className="btnPrimary"
-                  style={{ fontSize: 12, padding: '4px 12px' }}
-                  onClick={saveEdit}
-                >
-                  Save
-                </button>
-                <button
-                  className="btnSecondary"
-                  style={{ fontSize: 12, padding: '4px 12px' }}
-                  onClick={cancelEdit}
-                >
-                  Cancel
-                </button>
-              </div>
+              {editButtons}
             </div>
           ) : (
             <div
               className="detailValue"
-              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-              onClick={() => startEdit('priority', task!.priority)}
-              title="Click to edit"
+              {...editableProps('priority', task!.priority, {
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              })}
             >
               <div className={`priorityDot ${task.priority}`} />
               {task.priority}
@@ -196,29 +210,16 @@ export function TaskDetail() {
                   </option>
                 ))}
               </select>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  className="btnPrimary"
-                  style={{ fontSize: 12, padding: '4px 12px' }}
-                  onClick={saveEdit}
-                >
-                  Save
-                </button>
-                <button
-                  className="btnSecondary"
-                  style={{ fontSize: 12, padding: '4px 12px' }}
-                  onClick={cancelEdit}
-                >
-                  Cancel
-                </button>
-              </div>
+              {editButtons}
             </div>
           ) : (
             <div
               className="detailValue"
-              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-              onClick={() => startEdit('assignee', task!.assignee)}
-              title="Click to edit"
+              {...editableProps('assignee', task!.assignee, {
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              })}
             >
               {task.assignee ? (
                 <>
@@ -259,30 +260,10 @@ export function TaskDetail() {
                   </option>
                 ))}
               </select>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  className="btnPrimary"
-                  style={{ fontSize: 12, padding: '4px 12px' }}
-                  onClick={saveEdit}
-                >
-                  Save
-                </button>
-                <button
-                  className="btnSecondary"
-                  style={{ fontSize: 12, padding: '4px 12px' }}
-                  onClick={cancelEdit}
-                >
-                  Cancel
-                </button>
-              </div>
+              {editButtons}
             </div>
           ) : (
-            <div
-              className="detailValue"
-              style={{ cursor: 'pointer' }}
-              onClick={() => startEdit('project', task!.project)}
-              title="Click to edit"
-            >
+            <div className="detailValue" {...editableProps('project', task!.project)}>
               {task.project ? (
                 <span className="projectTag">{task.project}</span>
               ) : (
@@ -303,29 +284,12 @@ export function TaskDetail() {
                 autoFocus
                 style={{ marginBottom: 8 }}
               />
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  className="btnPrimary"
-                  style={{ fontSize: 12, padding: '4px 12px' }}
-                  onClick={saveEdit}
-                >
-                  Save
-                </button>
-                <button
-                  className="btnSecondary"
-                  style={{ fontSize: 12, padding: '4px 12px' }}
-                  onClick={cancelEdit}
-                >
-                  Cancel
-                </button>
-              </div>
+              {editButtons}
             </div>
           ) : (
             <div
               className="detailValue"
-              style={{ cursor: 'pointer', minHeight: 20 }}
-              onClick={() => startEdit('description', task!.description || '')}
-              title="Click to edit"
+              {...editableProps('description', task!.description || '', { minHeight: 20 })}
             >
               {task.description || (
                 <span style={{ color: 'var(--text-muted)' }}>Click to add description...</span>
@@ -353,21 +317,34 @@ export function TaskDetail() {
           <div className="detailValue">{relativeTime(task.updated_at)}</div>
         </div>
 
+        {task.url && (
+          <div className="detailField">
+            <div className="detailLabel">Link</div>
+            <a className="detailValue" href={task.url} target="_blank" rel="noreferrer">
+              Open in provider
+            </a>
+          </div>
+        )}
+
         <div className="detailActions">
-          <select
-            className="detailSelect"
-            value={columnName}
-            onChange={(e) => handleMove(e.target.value)}
-          >
-            {board.columns.map((col) => (
-              <option key={col.id} value={col.name}>
-                {col.name}
-              </option>
-            ))}
-          </select>
-          <button className="deleteBtn" onClick={handleDelete}>
-            {confirmDelete ? 'Confirm Delete' : 'Delete'}
-          </button>
+          {capabilities.taskMove && (
+            <select
+              className="detailSelect"
+              value={columnName}
+              onChange={(e) => handleMove(e.target.value)}
+            >
+              {board.columns.map((col) => (
+                <option key={col.id} value={col.name}>
+                  {col.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {capabilities.taskDelete && (
+            <button className="deleteBtn" onClick={handleDelete}>
+              {confirmDelete ? 'Confirm Delete' : 'Delete'}
+            </button>
+          )}
         </div>
       </div>
     </>

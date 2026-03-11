@@ -1,47 +1,9 @@
-import { Database } from 'bun:sqlite'
-import { KanbanError } from './errors.ts'
-import {
-  getBoardView,
-  listColumns,
-  addTask,
-  getTask,
-  listTasks,
-  updateTask,
-  deleteTask,
-  moveTask,
-  getDbPath,
-} from './db.ts'
-import { listActivity } from './activity.ts'
-import { getBoardMetrics } from './metrics.ts'
-import { loadConfig, saveConfig, getConfigPath } from './config.ts'
-import type { Priority, CliOutput } from './types.ts'
-
-interface CreateTaskBody {
-  title?: string
-  description?: string
-  column?: string
-  priority?: Priority
-  assignee?: string
-  project?: string
-  metadata?: string
-}
-
-interface UpdateTaskBody {
-  title?: string
-  description?: string
-  priority?: Priority
-  assignee?: string
-  project?: string
-  metadata?: string
-}
+import { KanbanError, ErrorCode } from './errors.ts'
+import type { BoardConfig, CliOutput } from './types.ts'
+import type { CreateTaskInput, UpdateTaskInput, KanbanProvider } from './providers/types.ts'
 
 interface MoveTaskBody {
   column?: string
-}
-
-interface PatchConfigBody {
-  members?: { name: string; role: 'human' | 'agent' }[]
-  projects?: string[]
 }
 
 function json(data: unknown, status = 200): Response {
@@ -59,19 +21,29 @@ function missingArgument(field: string): Response {
   )
 }
 
-function toResponse(result: CliOutput): Response {
-  if (result.ok) return json(result)
-  const status = result.error.code.includes('NOT_FOUND') ? 404 : 400
-  return json(result, status)
+function statusForCode(code: string): number {
+  if (code === ErrorCode.TASK_NOT_FOUND || code === ErrorCode.COLUMN_NOT_FOUND) return 404
+  if (code === ErrorCode.PROVIDER_AUTH_FAILED) return 401
+  if (code === ErrorCode.PROVIDER_RATE_LIMITED) return 429
+  if (code === ErrorCode.UNSUPPORTED_OPERATION) return 400
+  if (code === ErrorCode.PROVIDER_NOT_CONFIGURED) return 500
+  return 400
 }
 
-function wrapHandler(fn: () => CliOutput): Response {
+function toResponse(result: CliOutput): Response {
+  if (result.ok) return json(result)
+  return json(result, statusForCode(result.error.code))
+}
+
+async function wrapHandler(fn: () => Promise<CliOutput> | CliOutput): Promise<Response> {
   try {
-    return toResponse(fn())
+    return toResponse(await fn())
   } catch (err) {
     if (err instanceof KanbanError) {
-      const status = err.code.includes('NOT_FOUND') ? 404 : 400
-      return json({ ok: false, error: { code: err.code, message: err.message } }, status)
+      return json(
+        { ok: false, error: { code: err.code, message: err.message } },
+        statusForCode(err.code),
+      )
     }
     const msg = err instanceof Error ? err.message : String(err)
     return json({ ok: false, error: { code: 'INTERNAL_ERROR', message: msg } }, 500)
@@ -83,22 +55,42 @@ export interface ApiResult {
   mutated: boolean
 }
 
-export async function handleRequest(db: Database, req: Request): Promise<ApiResult> {
+export async function handleRequest(provider: KanbanProvider, req: Request): Promise<ApiResult> {
   const url = new URL(req.url)
   const path = url.pathname
   const method = req.method
 
+  if (path === '/api/bootstrap' && method === 'GET') {
+    return {
+      response: await wrapHandler(async () => ({ ok: true, data: await provider.getBootstrap() })),
+      mutated: false,
+    }
+  }
+
+  if (path === '/api/provider' && method === 'GET') {
+    return {
+      response: await wrapHandler(async () => ({ ok: true, data: await provider.getContext() })),
+      mutated: false,
+    }
+  }
+
   if (path === '/api/board' && method === 'GET') {
-    return { response: wrapHandler(() => ({ ok: true, data: getBoardView(db) })), mutated: false }
+    return {
+      response: await wrapHandler(async () => ({ ok: true, data: await provider.getBoard() })),
+      mutated: false,
+    }
   }
 
   if (path === '/api/columns' && method === 'GET') {
-    return { response: wrapHandler(() => ({ ok: true, data: listColumns(db) })), mutated: false }
+    return {
+      response: await wrapHandler(async () => ({ ok: true, data: await provider.listColumns() })),
+      mutated: false,
+    }
   }
 
   if (path === '/api/tasks' && method === 'GET') {
     return {
-      response: wrapHandler(() => {
+      response: await wrapHandler(async () => {
         const column = url.searchParams.get('column') ?? undefined
         const priority = url.searchParams.get('priority') ?? undefined
         const assignee = url.searchParams.get('assignee') ?? undefined
@@ -107,7 +99,7 @@ export async function handleRequest(db: Database, req: Request): Promise<ApiResu
         const limit = parseOptionalInt(url.searchParams.get('limit'))
         return {
           ok: true,
-          data: listTasks(db, { column, priority, assignee, project, limit, sort }),
+          data: await provider.listTasks({ column, priority, assignee, project, sort, limit }),
         }
       }),
       mutated: false,
@@ -115,16 +107,12 @@ export async function handleRequest(db: Database, req: Request): Promise<ApiResu
   }
 
   if (path === '/api/tasks' && method === 'POST') {
-    const body = (await req.json()) as CreateTaskBody
-    if (!body.title) {
-      return {
-        response: missingArgument('title'),
-        mutated: false,
-      }
-    }
-    const response = wrapHandler(() => ({
+    const body = (await req.json()) as Partial<CreateTaskInput>
+    if (!body.title) return { response: missingArgument('title'), mutated: false }
+    const response = await wrapHandler(async () => ({
       ok: true,
-      data: addTask(db, body.title!, {
+      data: await provider.createTask({
+        title: body.title!,
         description: body.description,
         column: body.column,
         priority: body.priority,
@@ -138,44 +126,51 @@ export async function handleRequest(db: Database, req: Request): Promise<ApiResu
 
   const taskMatch = path.match(/^\/api\/tasks\/([^/]+)$/)
   if (taskMatch) {
-    const id = taskMatch[1]!
+    const id = decodeURIComponent(taskMatch[1]!)
 
     if (method === 'GET') {
-      return { response: wrapHandler(() => ({ ok: true, data: getTask(db, id) })), mutated: false }
+      return {
+        response: await wrapHandler(async () => ({ ok: true, data: await provider.getTask(id) })),
+        mutated: false,
+      }
     }
 
     if (method === 'PATCH') {
-      const body = (await req.json()) as UpdateTaskBody
-      const response = wrapHandler(() => ({ ok: true, data: updateTask(db, id, body) }))
+      const body = (await req.json()) as UpdateTaskInput
+      const response = await wrapHandler(async () => ({
+        ok: true,
+        data: await provider.updateTask(id, body),
+      }))
       return { response, mutated: response.ok }
     }
 
     if (method === 'DELETE') {
-      const response = wrapHandler(() => ({ ok: true, data: deleteTask(db, id) }))
+      const response = await wrapHandler(async () => ({
+        ok: true,
+        data: await provider.deleteTask(id),
+      }))
       return { response, mutated: response.ok }
     }
   }
 
   const moveMatch = path.match(/^\/api\/tasks\/([^/]+)\/move$/)
   if (moveMatch && method === 'PATCH') {
-    const id = moveMatch[1]!
+    const id = decodeURIComponent(moveMatch[1]!)
     const body = (await req.json()) as MoveTaskBody
-    if (!body.column) {
-      return {
-        response: missingArgument('column'),
-        mutated: false,
-      }
-    }
-    const response = wrapHandler(() => ({ ok: true, data: moveTask(db, id, body.column!) }))
+    if (!body.column) return { response: missingArgument('column'), mutated: false }
+    const response = await wrapHandler(async () => ({
+      ok: true,
+      data: await provider.moveTask(id, body.column!),
+    }))
     return { response, mutated: response.ok }
   }
 
   if (path === '/api/activity' && method === 'GET') {
     return {
-      response: wrapHandler(() => {
+      response: await wrapHandler(async () => {
         const taskId = url.searchParams.get('taskId') ?? undefined
         const limit = parseOptionalInt(url.searchParams.get('limit'))
-        return { ok: true, data: listActivity(db, { taskId, limit }) }
+        return { ok: true, data: await provider.getActivity(limit, taskId) }
       }),
       mutated: false,
     }
@@ -183,50 +178,30 @@ export async function handleRequest(db: Database, req: Request): Promise<ApiResu
 
   if (path === '/api/metrics' && method === 'GET') {
     return {
-      response: wrapHandler(() => ({ ok: true, data: getBoardMetrics(db) })),
+      response: await wrapHandler(async () => ({ ok: true, data: await provider.getMetrics() })),
       mutated: false,
     }
   }
 
   if (path === '/api/config' && method === 'GET') {
-    const dbPath = (db.filename as string) || getDbPath()
     return {
-      response: wrapHandler(() => {
-        const config = loadConfig(dbPath)
-        const metrics = getBoardMetrics(db)
-        return {
-          ok: true,
-          data: {
-            members: config.members,
-            projects: [...new Set([...config.projects, ...metrics.projects])],
-            discoveredAssignees: metrics.assignees,
-            discoveredProjects: metrics.projects,
-          },
-        }
-      }),
+      response: await wrapHandler(async () => ({ ok: true, data: await provider.getConfig() })),
       mutated: false,
     }
   }
 
   if (path === '/api/config' && method === 'PATCH') {
-    const dbPath = (db.filename as string) || getDbPath()
-    const body = (await req.json()) as PatchConfigBody
-    const response = wrapHandler(() => {
-      const config = loadConfig(dbPath)
-      if (body.members) config.members = body.members
-      if (body.projects) config.projects = body.projects
-      saveConfig(getConfigPath(dbPath), config)
-      return { ok: true, data: config }
-    })
+    const body = (await req.json()) as Partial<BoardConfig>
+    const response = await wrapHandler(async () => ({
+      ok: true,
+      data: await provider.patchConfig(body),
+    }))
     return { response, mutated: response.ok }
   }
 
   return {
     response: json(
-      {
-        ok: false,
-        error: { code: 'NOT_FOUND', message: `No route: ${method} ${path}` },
-      },
+      { ok: false, error: { code: 'NOT_FOUND', message: `No route: ${method} ${path}` } },
       404,
     ),
     mutated: false,

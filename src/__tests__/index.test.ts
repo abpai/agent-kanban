@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { run } from '../index.ts'
 
 describe('run', () => {
-  test('applies schema migration before task commands', () => {
+  test('applies schema migration before task commands', async () => {
+    process.env['KANBAN_PROVIDER'] = 'local'
     const dir = mkdtempSync(join(tmpdir(), 'kanban-run-'))
     const dbPath = join(dir, 'board.db')
 
@@ -59,7 +60,7 @@ describe('run', () => {
     legacy.close()
 
     try {
-      const result = run(['--db', dbPath, 'task', 'add', 'Migrated task'])
+      const result = await run(['--db', dbPath, 'task', 'add', 'Migrated task'])
       expect(result.exitCode).toBe(0)
       expect(result.output.ok).toBe(true)
 

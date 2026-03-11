@@ -1,9 +1,29 @@
 import { create } from 'zustand'
 import { api } from './api'
-import type { BoardView, ActivityEntry, BoardMetrics, BoardConfig, Priority } from './types'
+import type {
+  BoardConfig,
+  BoardMetrics,
+  BoardView,
+  Priority,
+  ProviderCapabilities,
+  ProviderTeamInfo,
+  ActivityEntry,
+} from './types'
 
 function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
+}
+
+const defaultCapabilities: ProviderCapabilities = {
+  taskCreate: true,
+  taskUpdate: true,
+  taskMove: true,
+  taskDelete: true,
+  activity: true,
+  metrics: true,
+  columnCrud: true,
+  bulk: true,
+  configEdit: true,
 }
 
 interface AppState {
@@ -11,6 +31,9 @@ interface AppState {
   activity: ActivityEntry[]
   metrics: BoardMetrics | null
   config: BoardConfig | null
+  provider: 'local' | 'linear'
+  capabilities: ProviderCapabilities
+  team: ProviderTeamInfo | null
   selectedTaskId: string | null
   loading: boolean
   error: string | null
@@ -24,10 +47,7 @@ interface AppState {
   ws: WebSocket | null
   wsReconnectTimer: ReturnType<typeof setTimeout> | null
 
-  fetchBoard: () => Promise<void>
-  fetchActivity: () => Promise<void>
-  fetchMetrics: () => Promise<void>
-  fetchConfig: () => Promise<void>
+  fetchBootstrap: () => Promise<void>
   fetchAll: () => Promise<void>
   selectTask: (id: string | null) => void
   setFilterAssignee: (assignee: string | null) => void
@@ -64,6 +84,9 @@ export const useStore = create<AppState>((set, get) => ({
   activity: [],
   metrics: null,
   config: null,
+  provider: 'local',
+  capabilities: defaultCapabilities,
+  team: null,
   selectedTaskId: null,
   loading: false,
   error: null,
@@ -77,55 +100,31 @@ export const useStore = create<AppState>((set, get) => ({
   ws: null,
   wsReconnectTimer: null,
 
-  fetchBoard: async () => {
+  fetchBootstrap: async () => {
     try {
-      const board = await api.getBoard()
-      set({ board, error: null })
+      const bootstrap = await api.getBootstrap()
+      set({
+        board: bootstrap.board,
+        activity: bootstrap.activity,
+        metrics: bootstrap.metrics,
+        config: bootstrap.config,
+        provider: bootstrap.provider,
+        capabilities: bootstrap.capabilities,
+        team: bootstrap.team,
+        error: null,
+      })
     } catch (err) {
       set({ error: getErrorMessage(err, 'Failed to fetch board') })
     }
   },
 
-  fetchActivity: async () => {
-    try {
-      const activity = await api.getActivity()
-      set({ activity, error: null })
-    } catch (err) {
-      set({ error: getErrorMessage(err, 'Failed to fetch activity') })
-    }
-  },
-
-  fetchMetrics: async () => {
-    try {
-      const metrics = await api.getMetrics()
-      set({ metrics, error: null })
-    } catch (err) {
-      set({ error: getErrorMessage(err, 'Failed to fetch metrics') })
-    }
-  },
-
-  fetchConfig: async () => {
-    try {
-      const config = await api.getConfig()
-      set({ config })
-    } catch {
-      // Config is optional
-    }
-  },
-
   fetchAll: async () => {
     set({ loading: true })
-    await Promise.all([
-      get().fetchBoard(),
-      get().fetchActivity(),
-      get().fetchMetrics(),
-      get().fetchConfig(),
-    ])
+    await get().fetchBootstrap()
     set({ loading: false })
   },
 
   selectTask: (id) => set({ selectedTaskId: id }),
-
   setFilterAssignee: (assignee) => set({ filterAssignee: assignee }),
   setFilterProject: (project) => set({ filterProject: project }),
   setShowNewTaskModal: (show, defaultColumn) =>
@@ -133,23 +132,19 @@ export const useStore = create<AppState>((set, get) => ({
 
   createTask: async (data) => {
     await api.createTask(data)
-    await get().fetchAll()
   },
 
   updateTask: async (id, data) => {
     await api.updateTask(id, data)
-    await get().fetchAll()
   },
 
   moveTask: async (id, column) => {
     await api.moveTask(id, column)
-    await get().fetchAll()
   },
 
   removeTask: async (id) => {
     await api.deleteTask(id)
     set({ selectedTaskId: null })
-    await get().fetchAll()
   },
 
   connectWebSocket: () => {
@@ -190,7 +185,6 @@ export const useStore = create<AppState>((set, get) => ({
     ws.onclose = () => {
       set({ wsConnected: false, ws: null })
       if (!get().pollingEnabled) return
-      // Auto-reconnect after 3s (tracked so disconnectWebSocket can cancel)
       const timer = setTimeout(() => {
         set({ wsReconnectTimer: null })
         if (get().pollingEnabled && !get().ws) get().connectWebSocket()
@@ -207,7 +201,7 @@ export const useStore = create<AppState>((set, get) => ({
     const { ws, wsReconnectTimer } = get()
     if (wsReconnectTimer) clearTimeout(wsReconnectTimer)
     if (ws) {
-      ws.onclose = null // Prevent auto-reconnect
+      ws.onclose = null
       ws.close()
     }
     set({ ws: null, wsConnected: false, wsReconnectTimer: null })

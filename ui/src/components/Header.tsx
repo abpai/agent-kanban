@@ -4,6 +4,9 @@ export function Header() {
   const {
     metrics,
     config,
+    provider,
+    team,
+    capabilities,
     filterAssignee,
     filterProject,
     setFilterAssignee,
@@ -34,9 +37,16 @@ export function Header() {
             />
           </span>
         </h1>
-        <button className="newTaskBtn" onClick={() => setShowNewTaskModal(true)}>
-          + New Task
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            {provider === 'linear' && team ? `${team.name} (${team.key})` : provider}
+          </div>
+          {capabilities.taskCreate && (
+            <button className="newTaskBtn" onClick={() => setShowNewTaskModal(true)}>
+              + New Task
+            </button>
+          )}
+        </div>
       </div>
 
       {metrics && (

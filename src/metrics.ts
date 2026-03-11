@@ -1,19 +1,5 @@
 import { Database } from 'bun:sqlite'
-import type { ActivityEntry } from './types.ts'
-
-export interface BoardMetrics {
-  tasksByColumn: { column_name: string; count: number }[]
-  tasksByPriority: { priority: string; count: number }[]
-  totalTasks: number
-  completedTasks: number
-  avgCompletionHours: number | null
-  recentActivity: ActivityEntry[]
-  tasksCreatedThisWeek: number
-  inProgressCount: number
-  completionPercent: number
-  assignees: string[]
-  projects: string[]
-}
+import type { ActivityEntry, BoardMetrics } from './types.ts'
 
 export function getBoardMetrics(db: Database): BoardMetrics {
   const tasksByColumn = db

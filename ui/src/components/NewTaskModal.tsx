@@ -7,6 +7,7 @@ export function NewTaskModal() {
     showNewTaskModal,
     setShowNewTaskModal,
     createTask,
+    capabilities,
     board,
     metrics,
     config,
@@ -45,7 +46,7 @@ export function NewTaskModal() {
     return () => document.removeEventListener('keydown', handleEsc)
   }, [showNewTaskModal, setShowNewTaskModal])
 
-  if (!showNewTaskModal) return null
+  if (!showNewTaskModal || !capabilities.taskCreate) return null
 
   const columns = board?.columns ?? []
   const allAssignees = [
