@@ -1,6 +1,6 @@
 ---
 name: agent-kanban
-description: Operate the local agent-kanban board through the `kanban` CLI — init, task lifecycle, column/config management, and the web dashboard.
+description: Operate the agent-kanban board through the `kanban` CLI — supports local (SQLite) and Linear providers.
 ---
 
 # agent-kanban Usage Skill
@@ -12,6 +12,32 @@ Use this skill when working inside the `agent-kanban` repository and you need to
 - Bun is installed (`>=1.1.0`).
 - The CLI is globally available as `kanban` (run `bun link` once from repo root).
 - Fallback: `bun src/index.ts <command>`.
+
+## Provider configuration
+
+| Variable          | Default            | Description                            |
+| ----------------- | ------------------ | -------------------------------------- |
+| `KANBAN_PROVIDER` | `local`            | `local` or `linear`                    |
+| `KANBAN_DB_PATH`  | `.kanban/board.db` | SQLite database path                   |
+| `LINEAR_API_KEY`  | —                  | Required when `KANBAN_PROVIDER=linear` |
+| `LINEAR_TEAM_ID`  | —                  | Required when `KANBAN_PROVIDER=linear` |
+
+In Linear mode, tasks have an `externalRef` (e.g. `R2P-123`). Use it interchangeably with UUIDs:
+
+```bash
+kanban task view R2P-123
+```
+
+## Linear mode limits
+
+These commands return `UNSUPPORTED_OPERATION` in Linear mode:
+
+- `task delete`
+- `column add/rename/reorder/delete`
+- `bulk move-all`, `bulk clear-done`
+- `config set-member/remove-member/add-project/remove-project`
+
+Works in both modes: `task add/list/view/update/move`, `board view`, `column list`, `config show`, `serve`.
 
 ## Output format
 
@@ -56,7 +82,18 @@ kanban config add-project myapp
 kanban config show
 ```
 
+### Linear mode — no board init needed
+
+```bash
+export KANBAN_PROVIDER=linear
+export LINEAR_API_KEY=lin_api_...
+export LINEAR_TEAM_ID=<team-id>
+kanban board view
+```
+
 ## Task lifecycle
+
+In Linear mode, omit `delete`. Use external refs (`R2P-123`) interchangeably with IDs.
 
 ```bash
 # Create

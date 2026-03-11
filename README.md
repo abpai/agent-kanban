@@ -4,7 +4,7 @@ Agent-friendly kanban board CLI. Manage tasks via bash commands, parse structure
 
 ## Why
 
-Most project-management tools are built for humans clicking through UIs. `agent-kanban` is built for **CLI-first workflows** — AI agents and scripts get deterministic JSON they can parse, humans get a pretty-printed view and a web dashboard. One SQLite file, zero external dependencies.
+Most project-management tools are built for humans clicking through UIs. `agent-kanban` is built for **CLI-first workflows** — AI agents and scripts get deterministic JSON they can parse, humans get a pretty-printed view and a web dashboard. Runs against a local SQLite file or a Linear backend.
 
 ## Install
 
@@ -33,6 +33,42 @@ kanban board view --pretty
 ```
 
 Running `kanban` with no arguments is equivalent to `kanban board view`.
+
+## Providers
+
+All operations route through a provider backend. Set `KANBAN_PROVIDER` to choose one.
+
+| Variable          | Default            | Description                            |
+| ----------------- | ------------------ | -------------------------------------- |
+| `KANBAN_PROVIDER` | `local`            | `local` or `linear`                    |
+| `KANBAN_DB_PATH`  | `.kanban/board.db` | SQLite database path                   |
+| `LINEAR_API_KEY`  | —                  | Required when `KANBAN_PROVIDER=linear` |
+| `LINEAR_TEAM_ID`  | —                  | Required when `KANBAN_PROVIDER=linear` |
+
+### Linear quick start
+
+```bash
+export KANBAN_PROVIDER=linear
+export LINEAR_API_KEY=lin_api_...
+export LINEAR_TEAM_ID=<your-team-id>
+kanban board view
+```
+
+### Capability matrix
+
+| Capability              | Local | Linear |
+| ----------------------- | ----- | ------ |
+| task create/update/move | yes   | yes    |
+| task delete             | yes   | no     |
+| activity log            | yes   | no     |
+| metrics                 | yes   | no     |
+| column CRUD             | yes   | no     |
+| bulk operations         | yes   | no     |
+| config edit             | yes   | no     |
+
+Linear tasks carry an `externalRef` (e.g. `R2P-123`) and a `url`. Commands accept either the internal ID or the external ref.
+
+Unsupported operations return error code `UNSUPPORTED_OPERATION` with exit code 1.
 
 ## Commands
 
@@ -169,6 +205,8 @@ Pass `--pretty` for human-readable output — board view, task lists, and detail
 ```bash
 kanban serve
 ```
+
+In Linear mode the dashboard hides unsupported actions and shows Linear issue identifiers and links on task cards.
 
 Starts a Bun HTTP server with:
 

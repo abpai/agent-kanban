@@ -1,19 +1,12 @@
-# Linear Integration Plan
+# Linear Integration
+
+**Status: shipped**
 
 ## Summary
 
-Keep the current REST/CLI surface and introduce a strict provider abstraction so we can run against either:
-
-- Local SQLite backend (`local`)
-- Linear backend (`linear`)
-
-This avoids a large API rewrite and ships value faster.
+agent-kanban runs against either a local SQLite backend or Linear's GraphQL API. A `KanbanProvider` interface sits between the CLI/API/UI and the storage layer, so the rest of the codebase doesn't know which backend is active.
 
 ## Architecture
-
-### Provider-first design
-
-Create a `KanbanProvider` interface and route all business operations through it.
 
 ```text
 Agents / CLI / UI
@@ -27,100 +20,65 @@ KanbanProvider
   |- LinearProvider -> calls Linear GraphQL API
 ```
 
-## Phase 1: First Changes in This Repo
+`KANBAN_PROVIDER` env var selects the backend at startup. Linear mode requires `LINEAR_API_KEY` and `LINEAR_TEAM_ID`.
 
-1. Add provider contract and shared DTOs:
-   - `src/providers/types.ts`
-   - `src/providers/errors.ts`
-   - `src/providers/capabilities.ts`
-2. Implement `LocalProvider` wrapper:
-   - `src/providers/local.ts`
-   - Reuse logic in `src/db.ts`, `src/activity.ts`, `src/metrics.ts`
-3. Add provider factory and runtime selection:
-   - `src/providers/index.ts`
-   - Env vars:
-     - `KANBAN_PROVIDER=local|linear` (default `local`)
-     - `LINEAR_API_KEY` (required for `linear`)
-     - `LINEAR_TEAM_ID` (required for create/move in linear mode)
-4. Route server through provider:
-   - Update `src/api.ts`, `src/server.ts`
-   - Unsupported provider features return `UNSUPPORTED_OPERATION`
-5. Route CLI through provider:
-   - Update `src/index.ts` and `src/commands/*`
-   - Keep current command names (`task`, `column`, etc.)
+## What shipped
 
-## Phase 2: Linear Adapter
+Eight provider files in `src/providers/`:
 
-1. Implement `LinearProvider`:
-   - `src/providers/linear.ts`
-   - `src/providers/linear-client.ts`
-   - `src/providers/linear-mappers.ts`
-2. v1 parity across both providers:
-   - `task list/view/add/update/move`
-   - `column list`
-   - board view
-3. Mark local-only for v1 (capabilities false in linear mode):
-   - activity log
-   - metrics
-   - column CRUD
-   - bulk commands
-   - config-discovery extras
+| File               | Purpose                                                                                                         |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `types.ts`         | `KanbanProvider` interface and shared DTOs                                                                      |
+| `errors.ts`        | Provider-specific error constructors (`UNSUPPORTED_OPERATION`, `PROVIDER_AUTH_FAILED`, `PROVIDER_RATE_LIMITED`) |
+| `capabilities.ts`  | Capability flags per provider                                                                                   |
+| `index.ts`         | Factory — reads env vars, returns the right provider                                                            |
+| `local.ts`         | `LocalProvider` — wraps existing SQLite logic                                                                   |
+| `linear.ts`        | `LinearProvider` — implements the interface against Linear's API                                                |
+| `linear-client.ts` | GraphQL client, query builders, response parsing                                                                |
+| `linear-cache.ts`  | In-memory cache for workflow states and team metadata                                                           |
 
-## Phase 3: UI and Agent Hardening
+### Capability matrix
 
-1. Capability-aware UI:
-   - Update `ui/src/api.ts`, `ui/src/types.ts`, affected components
-   - Hide/disable unsupported actions in linear mode
-2. Stable identifiers:
-   - Return both:
-     - `id` (provider-native)
-     - `externalRef` (e.g. `ABC-123` from Linear)
+| Capability              | Local | Linear |
+| ----------------------- | ----- | ------ |
+| task create/update/move | yes   | yes    |
+| task delete             | yes   | no     |
+| activity log            | yes   | no     |
+| metrics                 | yes   | no     |
+| column CRUD             | yes   | no     |
+| bulk operations         | yes   | no     |
+| config edit             | yes   | no     |
 
-## API/Interface Changes
+The CLI, API server, and web UI check capabilities before calling the provider. Unsupported operations return `UNSUPPORTED_OPERATION` (exit code 1). The UI hides actions the active provider can't do.
 
-1. Keep endpoint paths, switch internals to provider-backed behavior.
-2. Add capability surface (config endpoint extension or dedicated endpoint).
-3. Add provider-aware error codes:
-   - `UNSUPPORTED_OPERATION`
-   - `PROVIDER_AUTH_FAILED`
-   - `PROVIDER_RATE_LIMITED`
+## API/Interface changes
 
-## Test Strategy
+Endpoint paths stayed the same. Internals switched from direct `db.ts` calls to `provider.methodName()`. Three error codes were added:
 
-1. Provider contract suite:
-   - Run shared tests against `LocalProvider` and `LinearProvider` (mocked by default)
-2. Integration:
-   - API tests in local mode for current behavior parity
-   - API tests in linear mode for mapping and error translation
-3. Optional live linear smoke tests:
-   - Enabled only when `LINEAR_API_KEY` exists
-4. Guardrails:
-   - ESLint rule: no direct `db.ts` imports outside `LocalProvider`
-   - CI matrix for provider-mode smoke tests
+- `UNSUPPORTED_OPERATION` — capability not available in the active provider
+- `PROVIDER_AUTH_FAILED` — bad or missing API key
+- `PROVIDER_RATE_LIMITED` — Linear API rate limit hit
 
-## Milestones
+Linear tasks include `externalRef` (e.g. `R2P-123`) and `url` in their response payloads. Commands accept either ID form.
 
-1. Milestone A: Provider contract + LocalProvider + server wiring
-   - Checkpoint: existing API tests pass in local mode
-2. Milestone B: CLI migrated to provider path
-   - Checkpoint: CLI tests green with parity
-3. Milestone C: Linear read support
-   - Checkpoint: board/task list/view in linear mode
-4. Milestone D: Linear write support
-   - Checkpoint: add/update/move works; unsupported ops return capability errors
-5. Milestone E: UI capability adaptation
-   - Checkpoint: UI works cleanly in both modes
+## Test coverage
 
-## Defaults
+93 tests pass across 11 test files. Coverage includes:
 
-1. Single Linear team in v1
-2. API key auth only in v1
-3. No webhook sync in v1 (poll/manual refresh acceptable)
-4. Endpoint stability preferred unless intentionally changed
+- Provider contract tests against `LocalProvider`
+- API integration tests in local mode (existing behavior parity)
+- Live Linear testing performed manually (board view, task create/update/move, error paths)
 
-## Questions to Ask at the End of Implementation
+## Current limitations
 
-1. Should v2 include labels/comments across both providers?
-2. In linear mode, should delete be archive-only or hard-delete if available?
-3. Do we need webhook near-real-time sync, or keep polling/manual refresh?
-4. Should the UI always show provider-agnostic issue identifier columns?
+1. Single Linear team per instance
+2. API key auth only (no OAuth)
+3. No webhook sync — poll or manual refresh
+4. Endpoint paths unchanged
+
+## Future work
+
+- Labels and comments sync across both providers
+- Delete-as-archive in Linear mode
+- Webhook-based real-time sync
+- Multi-team support
