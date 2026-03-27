@@ -2,6 +2,23 @@
   "name": "agent-kanban",
   "version": "0.1.0",
   "description": "Agent-friendly kanban board CLI. Manage tasks via bash commands, parse structured JSON output.",
+  "homepage": "https://github.com/abpai/agent-kanban#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abpai/agent-kanban.git"
+  },
+  "bugs": {
+    "url": "https://github.com/abpai/agent-kanban/issues"
+  },
+  "keywords": [
+    "agent",
+    "kanban",
+    "cli",
+    "bun",
+    "sqlite",
+    "linear",
+    "automation"
+  ],
   "bin": {
     "kanban": "src/index.ts"
   },
@@ -9,7 +26,8 @@
   "main": "src/index.ts",
   "module": "src/index.ts",
   "files": [
-    "src"
+    "src",
+    "ui/dist"
   ],
   "engines": {
     "bun": ">=1.1.0"
@@ -19,7 +37,7 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
-    "build": "bun build ./src/index.ts --outdir ./dist",
+    "build": "bun build ./src/index.ts --target bun --outdir ./dist",
     "link": "bun link",
     "lint": "bunx eslint .",
     "format": "bunx prettier --write .",
@@ -27,10 +45,14 @@
     "check": "bun run lint && bun run typecheck",
     "test": "bun test",
     "test:watch": "bun test --watch",
+    "seed:test": "bun --env-file=.env.test scripts/seed-test-db.ts",
     "serve": "bun src/index.ts serve",
     "ui:dev": "cd ui && bun run dev",
     "ui:build": "cd ui && bun run build",
-    "prepare": "husky install"
+    "dev:ui": "bun scripts/dev.ts",
+    "build:ui": "bun run ui:build",
+    "prepare": "if [ \"${HUSKY:-1}\" != \"0\" ] && command -v husky >/dev/null 2>&1; then husky install; fi",
+    "prepack": "cd ui && bun install --frozen-lockfile && bun run build"
   },
   "dependencies": {},
   "devDependencies": {

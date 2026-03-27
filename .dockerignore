@@ -1,0 +1,17 @@
+node_modules/
+ui/node_modules/
+.git/
+.claude/
+.agents/
+scripts/
+.husky/
+.kanban/
+dist/
+*.md
+!package.json
+.env*
+!.env.example
+.gitignore
+.prettierrc*
+.eslintrc*
+eslint.config.*

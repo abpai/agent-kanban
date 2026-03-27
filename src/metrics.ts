@@ -1,20 +1,24 @@
 import { Database } from 'bun:sqlite'
 import type { ActivityEntry, BoardMetrics } from './types.ts'
 
-export function getDiscoveredAssignees(db: Database): string[] {
+function getDistinctTaskFieldValues(db: Database, field: 'assignee' | 'project'): string[] {
   return (
     db
-      .query("SELECT DISTINCT assignee FROM tasks WHERE assignee != '' ORDER BY assignee")
-      .all() as { assignee: string }[]
-  ).map((r) => r.assignee)
+      .query(`SELECT DISTINCT ${field} as value FROM tasks WHERE ${field} != '' ORDER BY ${field}`)
+      .all() as { value: string }[]
+  ).map((row) => row.value)
+}
+
+function getCount(db: Database, sql: string): number {
+  return (db.query(sql).get() as { count: number }).count
+}
+
+export function getDiscoveredAssignees(db: Database): string[] {
+  return getDistinctTaskFieldValues(db, 'assignee')
 }
 
 export function getDiscoveredProjects(db: Database): string[] {
-  return (
-    db.query("SELECT DISTINCT project FROM tasks WHERE project != '' ORDER BY project").all() as {
-      project: string
-    }[]
-  ).map((r) => r.project)
+  return getDistinctTaskFieldValues(db, 'project')
 }
 
 export function getBoardMetrics(db: Database): BoardMetrics {
@@ -35,17 +39,13 @@ export function getBoardMetrics(db: Database): BoardMetrics {
     )
     .all() as { priority: string; count: number }[]
 
-  const totalTasks = (db.query('SELECT COUNT(*) as count FROM tasks').get() as { count: number })
-    .count
+  const totalTasks = getCount(db, 'SELECT COUNT(*) as count FROM tasks')
 
-  const completedTasks = (
-    db
-      .query(
-        `SELECT COUNT(*) as count FROM tasks t
-         JOIN columns c ON t.column_id = c.id WHERE LOWER(c.name) = 'done'`,
-      )
-      .get() as { count: number }
-  ).count
+  const completedTasks = getCount(
+    db,
+    `SELECT COUNT(*) as count FROM tasks t
+     JOIN columns c ON t.column_id = c.id WHERE LOWER(c.name) = 'done'`,
+  )
 
   const avgResult = db
     .query(
@@ -66,20 +66,16 @@ export function getBoardMetrics(db: Database): BoardMetrics {
     .query('SELECT * FROM activity_log ORDER BY timestamp DESC, rowid DESC LIMIT 20')
     .all() as ActivityEntry[]
 
-  const tasksCreatedThisWeek = (
-    db
-      .query("SELECT COUNT(*) as count FROM tasks WHERE created_at >= datetime('now', '-7 days')")
-      .get() as { count: number }
-  ).count
+  const tasksCreatedThisWeek = getCount(
+    db,
+    "SELECT COUNT(*) as count FROM tasks WHERE created_at >= datetime('now', '-7 days')",
+  )
 
-  const inProgressCount = (
-    db
-      .query(
-        `SELECT COUNT(*) as count FROM tasks t
-         JOIN columns c ON t.column_id = c.id WHERE LOWER(c.name) = 'in-progress'`,
-      )
-      .get() as { count: number }
-  ).count
+  const inProgressCount = getCount(
+    db,
+    `SELECT COUNT(*) as count FROM tasks t
+     JOIN columns c ON t.column_id = c.id WHERE LOWER(c.name) = 'in-progress'`,
+  )
 
   const completionPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
 

@@ -23,6 +23,20 @@ import type {
   UpdateTaskInput,
 } from './types.ts'
 
+function buildLocalConfig(
+  db: Database,
+  dbPath: string,
+  discoveredAssignees = getDiscoveredAssignees(db),
+  discoveredProjects = getDiscoveredProjects(db),
+): BoardConfig {
+  return {
+    ...loadConfig(dbPath),
+    provider: 'local',
+    discoveredAssignees,
+    discoveredProjects,
+  }
+}
+
 function enrichTask(task: Task): Task {
   return {
     ...task,
@@ -42,7 +56,7 @@ export class LocalProvider implements KanbanProvider {
 
   async getContext(): Promise<ProviderContext> {
     return {
-      provider: 'local',
+      provider: this.type,
       capabilities: LOCAL_CAPABILITIES,
       team: null,
     }
@@ -50,17 +64,11 @@ export class LocalProvider implements KanbanProvider {
 
   async getBootstrap(): Promise<BoardBootstrap> {
     const metrics = getBoardMetrics(this.db)
-    const config = loadConfig(this.dbPath)
     return {
-      provider: 'local',
+      provider: this.type,
       capabilities: LOCAL_CAPABILITIES,
       board: await this.getBoard(),
-      config: {
-        ...config,
-        provider: 'local',
-        discoveredAssignees: metrics.assignees,
-        discoveredProjects: metrics.projects,
-      },
+      config: buildLocalConfig(this.db, this.dbPath, metrics.assignees, metrics.projects),
       metrics,
       activity: listActivity(this.db, { limit: 50 }),
       team: null,
@@ -114,13 +122,7 @@ export class LocalProvider implements KanbanProvider {
   }
 
   async getConfig(): Promise<BoardConfig> {
-    const config = loadConfig(this.dbPath)
-    return {
-      ...config,
-      provider: 'local',
-      discoveredAssignees: getDiscoveredAssignees(this.db),
-      discoveredProjects: getDiscoveredProjects(this.db),
-    }
+    return buildLocalConfig(this.db, this.dbPath)
   }
 
   async patchConfig(input: Partial<BoardConfig>) {

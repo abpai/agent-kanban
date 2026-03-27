@@ -369,7 +369,10 @@ if (import.meta.main) {
 
   if (argv[0] === 'serve') {
     const portIdx = argv.indexOf('--port')
-    const port = portIdx !== -1 ? parseInt(argv[portIdx + 1]!, 10) : 3000
+    const port =
+      portIdx !== -1
+        ? parseInt(argv[portIdx + 1]!, 10)
+        : parseInt(process.env['PORT'] || '3000', 10)
 
     const { values } = parseArgs({
       args: argv,
