@@ -1,5 +1,6 @@
 # Kanban board data
 .kanban/
+.tmp/
 
 # General
 .DS_Store
@@ -159,3 +160,5 @@ dist
 .yarn/install-state.gz
 .pnp.*
 .npm-cache/
+.env.*
+!.env.example

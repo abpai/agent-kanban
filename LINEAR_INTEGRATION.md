@@ -59,7 +59,7 @@ Endpoint paths stayed the same. Internals switched from direct `db.ts` calls to 
 - `PROVIDER_AUTH_FAILED` — bad or missing API key
 - `PROVIDER_RATE_LIMITED` — Linear API rate limit hit
 
-Linear tasks include `externalRef` (e.g. `R2P-123`) and `url` in their response payloads. Commands accept either ID form.
+Linear tasks include `externalRef` (e.g. `TEAM-123`) and `url` in their response payloads. Commands accept either ID form.
 
 ## Test coverage
 

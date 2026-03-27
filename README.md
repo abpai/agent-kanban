@@ -1,5 +1,7 @@
 # agent-kanban
 
+[![CI](https://github.com/abpai/agent-kanban/actions/workflows/ci.yml/badge.svg)](https://github.com/abpai/agent-kanban/actions/workflows/ci.yml)
+
 Agent-friendly kanban board CLI. Manage tasks via bash commands, parse structured JSON output.
 
 ## Why
@@ -12,16 +14,19 @@ Most project-management tools are built for humans clicking through UIs. `agent-
 bun install -g agent-kanban
 ```
 
+`agent-kanban` targets the Bun runtime. Install Bun first if it is not already available on your machine.
+
 ### Local development
 
 ```bash
-git clone <repo-url> && cd agent-kanban
+git clone https://github.com/abpai/agent-kanban.git
+cd agent-kanban
 bun install
-chmod +x src/index.ts
-ln -sf "$(pwd)/src/index.ts" ~/.bun/bin/kanban
+cd ui && bun install && cd ..
+bun link
 ```
 
-The symlink makes `kanban` available globally while you hack on the source.
+`bun link` makes `kanban` available globally while you work on the source checkout.
 
 ## Getting started
 
@@ -50,7 +55,7 @@ All operations route through a provider backend. Set `KANBAN_PROVIDER` to choose
 ```bash
 export KANBAN_PROVIDER=linear
 export LINEAR_API_KEY=lin_api_...
-export LINEAR_TEAM_ID=<your-team-id>
+export LINEAR_TEAM_ID=<team-id>
 kanban board view
 ```
 
@@ -66,7 +71,7 @@ kanban board view
 | bulk operations         | yes   | no     |
 | config edit             | yes   | no     |
 
-Linear tasks carry an `externalRef` (e.g. `R2P-123`) and a `url`. Commands accept either the internal ID or the external ref.
+Linear tasks carry an `externalRef` (e.g. `TEAM-123`) and a `url`. Commands accept either the internal ID or the external ref.
 
 Unsupported operations return error code `UNSUPPORTED_OPERATION` with exit code 1.
 
@@ -212,7 +217,7 @@ Starts a Bun HTTP server with:
 
 - **REST API** at `/api/*` — same operations as the CLI (board, tasks, columns, activity, metrics, config)
 - **WebSocket** at `/ws` — push notifications on board mutations (clients receive `{"type":"refresh"}`)
-- **Static UI** served from `ui/dist/` (build with `bun run ui:build`)
+- **Static UI** served from `ui/dist/` (build with `bun run build:ui` or `bun run ui:build`)
 - **Health check** at `/api/health`
 
 ## Scripts
@@ -230,11 +235,60 @@ Starts a Bun HTTP server with:
 | `bun run test:watch` | Tests in watch mode    |
 | `bun run serve`      | Start web dashboard    |
 | `bun run ui:dev`     | UI dev server          |
+| `bun run dev:ui`     | API + UI dev servers   |
 | `bun run ui:build`   | Build UI to `ui/dist/` |
+| `bun run build:ui`   | Alias for `ui:build`   |
+
+## Deployment
+
+Build the Docker image:
+
+```bash
+docker build -t agent-kanban .
+```
+
+The same image works for both provider modes — only runtime env/volume config differs.
+
+### Local mode (SQLite)
+
+Mount a volume for the database directory. WAL mode creates `-wal` and `-shm` sibling files, so the volume must cover the directory, not just the `.db` file.
+
+```bash
+docker run -d \
+  -p 3000:3000 \
+  -v kanban-data:/data \
+  -e KANBAN_DB_PATH=/data/board.db \
+  agent-kanban
+```
+
+### Linear mode
+
+No volume needed — all state lives in Linear.
+
+```bash
+docker run -d \
+  -p 3000:3000 \
+  -e KANBAN_PROVIDER=linear \
+  -e LINEAR_API_KEY=lin_api_... \
+  -e LINEAR_TEAM_ID=team-id \
+  agent-kanban
+```
+
+### Dokploy
+
+Set the port via `PORT` env var (defaults to `3000`). Port resolution order: `--port` flag → `PORT` env → `3000`. Add provider env vars through Dokploy's environment configuration.
 
 ## Agent skill
 
 This repo includes an agent usage skill at `SKILL.md` — a practical workflow for operating the board entirely via `kanban` commands.
+
+## Community
+
+If you want to contribute or report an issue, start with these guides:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [SECURITY.md](SECURITY.md)
 
 ## License
 

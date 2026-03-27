@@ -22,10 +22,10 @@ Use this skill when working inside the `agent-kanban` repository and you need to
 | `LINEAR_API_KEY`  | —                  | Required when `KANBAN_PROVIDER=linear` |
 | `LINEAR_TEAM_ID`  | —                  | Required when `KANBAN_PROVIDER=linear` |
 
-In Linear mode, tasks have an `externalRef` (e.g. `R2P-123`). Use it interchangeably with UUIDs:
+In Linear mode, tasks have an `externalRef` (e.g. `TEAM-123`). Use it interchangeably with UUIDs:
 
 ```bash
-kanban task view R2P-123
+kanban task view TEAM-123
 ```
 
 ## Linear mode limits
@@ -58,12 +58,12 @@ Task and column IDs are returned in `data.id`. To chain commands, capture the ID
 
 ```bash
 # Add a task and capture its ID
-result=$(kanban task add "Implement auth" -p high -a Claude --project myapp)
+result=$(kanban task add "Implement auth" -p high -a BuildBot --project myapp)
 task_id=$(echo "$result" | jq -r '.data.id')
 
 # Use the ID in follow-up commands
 kanban task move "$task_id" in-progress
-kanban task assign "$task_id" Alice
+kanban task assign "$task_id" Alex
 kanban task view "$task_id"
 ```
 
@@ -74,8 +74,8 @@ kanban task view "$task_id"
 kanban board init
 
 # 2. Configure team
-kanban config set-member Andy --role human
-kanban config set-member Claude --role agent
+kanban config set-member Alex --role human
+kanban config set-member BuildBot --role agent
 kanban config add-project myapp
 
 # 3. Verify
@@ -93,15 +93,15 @@ kanban board view
 
 ## Task lifecycle
 
-In Linear mode, omit `delete`. Use external refs (`R2P-123`) interchangeably with IDs.
+In Linear mode, omit `delete`. Use external refs (`TEAM-123`) interchangeably with IDs.
 
 ```bash
 # Create
-kanban task add "Build auth module" -d "JWT + refresh tokens" -c backlog -p high -a Claude --project myapp -m '{"effort":"large"}'
+kanban task add "Build auth module" -d "JWT + refresh tokens" -c backlog -p high -a BuildBot --project myapp -m '{"effort":"large"}'
 
 # List with filters
 kanban task list -c backlog
-kanban task list -a Claude -p high
+kanban task list -a BuildBot -p high
 kanban task list --project myapp --sort priority -l 10
 
 # Read details
@@ -109,7 +109,7 @@ kanban task view <id>
 
 # Update fields
 kanban task update <id> --title "Build OAuth module" -d "Switch to OAuth2" -p urgent
-kanban task update <id> -a Andy --project other-project -m '{"effort":"small"}'
+kanban task update <id> -a Alex --project other-project -m '{"effort":"small"}'
 
 # Move through columns
 kanban task move <id> in-progress
@@ -117,7 +117,7 @@ kanban task move <id> review
 kanban task move <id> done
 
 # Reassign and reprioritize (shortcuts)
-kanban task assign <id> Alice
+kanban task assign <id> Alex
 kanban task prioritize <id> urgent
 
 # Delete
