@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>agent-kanban Common Workflow</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23b45309'/%3E%3Cpath d='M18 20h28M18 32h20M18 44h24' stroke='white' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Merriweather:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      ;(function () {
+        var stored = localStorage.getItem('theme')
+        if (stored === 'dark') document.documentElement.classList.add('dark')
+      })()
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              serif: ['Merriweather', 'Georgia', 'serif'],
+              sans: ['Inter', 'system-ui', 'sans-serif'],
+            },
+            colors: {
+              bronze: {
+                50: '#fef7ed',
+                100: '#fdebd3',
+                400: '#d97706',
+                500: '#b45309',
+                700: '#92400e',
+              },
+            },
+            boxShadow: {
+              mellow: '0 20px 60px rgba(15, 23, 42, 0.08)',
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.45s ease forwards',
+              'rise-in': 'riseIn 0.5s ease forwards',
+            },
+            keyframes: {
+              fadeIn: {
+                from: { opacity: '0' },
+                to: { opacity: '1' },
+              },
+              riseIn: {
+                from: { opacity: '0', transform: 'translateY(8px)' },
+                to: { opacity: '1', transform: 'translateY(0)' },
+              },
+            },
+          },
+        },
+      }
+    </script>
+    <style>
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 999px;
+      }
+      .dark ::-webkit-scrollbar-thumb {
+        background: #334155;
+      }
+
+      ::selection {
+        background: #fdebd3;
+        color: #92400e;
+      }
+      .dark ::selection {
+        background: #92400e;
+        color: #fdebd3;
+      }
+
+      .grid-bg {
+        background-image:
+          linear-gradient(to right, rgba(148, 163, 184, 0.12) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(148, 163, 184, 0.12) 1px, transparent 1px);
+        background-size: 28px 28px;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+    </style>
+  </head>
+  <body class="bg-stone-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen">
+    <div id="app"></div>
+
+    <script type="module">
+      import { h, render } from 'https://esm.sh/preact@10'
+      import { useMemo, useState } from 'https://esm.sh/preact@10/hooks'
+      import htm from 'https://esm.sh/htm@3'
+
+      const html = htm.bind(h)
+
+      const BOARD_COLUMNS = ['recurring', 'backlog', 'in-progress', 'review', 'done']
+
+      const STEPS = [
+        {
+          id: 'setup',
+          title: 'Set up the board',
+          eyebrow: 'Foundation',
+          activeColumn: 'recurring',
+          summary:
+            'Initialize a local board once or point the CLI at a Linear team before doing any planning.',
+          outcome: 'You end with a board that is ready for real work instead of placeholder data.',
+          note: 'In Linear mode, skip local board init and let Linear remain the source of truth.',
+          commands: [
+            'kanban board init',
+            'kanban config set-member Alex --role human',
+            'kanban config set-member BuildBot --role agent',
+            'kanban config add-project website-redesign',
+          ],
+        },
+        {
+          id: 'capture',
+          title: 'Capture incoming work',
+          eyebrow: 'Structured intake',
+          activeColumn: 'backlog',
+          summary:
+            'Create tasks with title, description, owner, project, and metadata so agents can act without guessing.',
+          outcome: 'The backlog becomes executable, not just descriptive.',
+          note: 'If another tool will chain follow-up actions, capture the task ID from the default JSON envelope.',
+          commands: [
+            'kanban task add "Ship landing page hero" -d "Finalize layout, copy, and CTA behavior" -c backlog -p high -a BuildBot --project website-redesign -m \'{"area":"marketing","estimate":"medium"}\'',
+            'task_id=$(kanban task add "Audit signup funnel" --project website-redesign | jq -r \'.data.id\')',
+            'kanban task view "$task_id"',
+          ],
+        },
+        {
+          id: 'plan',
+          title: 'Plan the next slice',
+          eyebrow: 'Pull planning',
+          activeColumn: 'backlog',
+          summary:
+            'Review the board, sort by priority, and choose only a small set of tasks worth pulling forward.',
+          outcome: 'You avoid flooding `in-progress` and preserve clear handoffs.',
+          note: 'A small active set makes the board readable for both humans and automation.',
+          commands: [
+            'kanban board view --pretty',
+            'kanban task list -c backlog --sort priority -l 10',
+            'kanban task list -a BuildBot --project website-redesign',
+          ],
+        },
+        {
+          id: 'move',
+          title: 'Move work through the board',
+          eyebrow: 'Execution loop',
+          activeColumn: 'in-progress',
+          summary:
+            'Update the task in place as work advances instead of creating separate status artifacts.',
+          outcome: 'The task itself becomes the single timeline of ownership, priority, and state.',
+          note: 'Use shortcuts like `assign` and `prioritize` when only one field changes.',
+          commands: [
+            'kanban task move "$task_id" in-progress',
+            'kanban task update "$task_id" -a Alex -p urgent',
+            'kanban task move "$task_id" review',
+            'kanban task move "$task_id" done',
+          ],
+        },
+        {
+          id: 'review',
+          title: 'Review and clean up',
+          eyebrow: 'Closure',
+          activeColumn: 'review',
+          summary:
+            'Verify what is waiting in review, check what is done, and clear finished work when the provider supports it.',
+          outcome: 'The board stays current instead of collecting stale finished tasks.',
+          note: 'Bulk cleanup is local-only. In Linear mode, let workflow state stay in Linear.',
+          commands: [
+            'kanban task list -c review',
+            'kanban task list -c done',
+            'kanban bulk clear-done',
+          ],
+        },
+        {
+          id: 'dashboard',
+          title: 'Open the dashboard when needed',
+          eyebrow: 'Visual scan',
+          activeColumn: 'done',
+          summary:
+            'Use the web UI when you want a broader view of board state or need to watch refreshes while commands are running.',
+          outcome: 'The CLI remains primary, while the dashboard becomes a lightweight observer.',
+          note: 'The same server also exposes `/api/*`, `/ws`, and `/api/health`.',
+          commands: ['kanban serve', 'open http://localhost:3000'],
+        },
+      ]
+
+      const RHYTHM = [
+        'Keep backlog for unscheduled work.',
+        'Move only a small number of tasks into in-progress.',
+        'Use review as the handoff from implementation to verification.',
+        'Move tasks to done only when the work is actually complete.',
+      ]
+
+      const TIPS = [
+        'Prefer default JSON output when another tool or agent will parse the result.',
+        'Use --pretty only when a human is reading the terminal output directly.',
+        'In Linear mode, task commands can use either the internal ID or the issue ref, such as TEAM-123.',
+        'For local mode, mount the database directory rather than a single file because SQLite WAL creates sibling files.',
+      ]
+
+      function ThemeToggle() {
+        const [dark, setDark] = useState(document.documentElement.classList.contains('dark'))
+
+        const onToggle = () => {
+          const next = !dark
+          document.documentElement.classList.toggle('dark', next)
+          localStorage.setItem('theme', next ? 'dark' : 'light')
+          setDark(next)
+        }
+
+        return html`
+          <button
+            onClick=${onToggle}
+            aria-label=${dark ? 'Switch to light mode' : 'Switch to dark mode'}
+            class="inline-flex items-center gap-2 rounded-full border border-slate-200 dark:border-slate-700 px-3 py-2 text-xs font-semibold tracking-wide text-slate-500 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900 transition-colors"
+          >
+            <span
+              class="inline-block h-2 w-2 rounded-full ${dark ? 'bg-amber-300' : 'bg-slate-400'}"
+            ></span>
+            ${dark ? 'Light' : 'Dark'}
+          </button>
+        `
+      }
+
+      function StepRail({ current, onSelect }) {
+        return html`
+          <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            ${STEPS.map(
+              (step, index) => html`
+                <button
+                  key=${step.id}
+                  onClick=${() => onSelect(index)}
+                  class=${`rounded-2xl border px-4 py-3 text-left transition-all ${
+                    index === current
+                      ? 'border-bronze-400 bg-bronze-50 text-bronze-700 dark:border-bronze-400 dark:bg-slate-900 dark:text-amber-200'
+                      : 'border-slate-200 bg-white/80 text-slate-600 hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:border-slate-700'
+                  }`}
+                >
+                  <div class="mb-1 font-mono text-[10px] uppercase tracking-[0.22em] opacity-70">
+                    0${index + 1}
+                  </div>
+                  <div class="text-sm font-semibold">${step.title}</div>
+                </button>
+              `,
+            )}
+          </div>
+        `
+      }
+
+      function BoardVisual({ current }) {
+        return html`
+          <div class="grid grid-cols-2 gap-3 lg:grid-cols-5">
+            ${BOARD_COLUMNS.map((column, index) => {
+              const active = column === current.activeColumn
+              const complete =
+                BOARD_COLUMNS.indexOf(column) < BOARD_COLUMNS.indexOf(current.activeColumn)
+              return html`
+                <div
+                  key=${column}
+                  class=${`rounded-2xl border p-4 transition-all ${
+                    active
+                      ? 'border-bronze-400 bg-white shadow-mellow dark:border-bronze-400 dark:bg-slate-900'
+                      : complete
+                        ? 'border-emerald-200 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20'
+                        : 'border-slate-200 bg-stone-50/80 dark:border-slate-800 dark:bg-slate-900/60'
+                  }`}
+                >
+                  <div class="mb-3 flex items-center justify-between">
+                    <span class="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400"
+                      >${index + 1}</span
+                    >
+                    <span
+                      class=${`h-2.5 w-2.5 rounded-full ${
+                        active
+                          ? 'bg-bronze-500'
+                          : complete
+                            ? 'bg-emerald-500'
+                            : 'bg-slate-300 dark:bg-slate-700'
+                      }`}
+                    ></span>
+                  </div>
+                  <div class="mb-4 text-sm font-semibold capitalize">
+                    ${column.replace('-', ' ')}
+                  </div>
+                  <div class="space-y-2">
+                    <div
+                      class=${`rounded-xl px-3 py-2 text-xs ${
+                        active
+                          ? 'bg-bronze-100 text-bronze-700 dark:bg-amber-950/50 dark:text-amber-200'
+                          : complete
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200'
+                            : 'bg-white text-slate-400 dark:bg-slate-800 dark:text-slate-500'
+                      }`}
+                    >
+                      ${active ? current.title : complete ? 'Completed phase' : 'Waiting'}
+                    </div>
+                    <div
+                      class="rounded-xl border border-dashed border-slate-200 dark:border-slate-700 px-3 py-2 text-[11px] text-slate-400 dark:text-slate-500"
+                    >
+                      ${column === 'backlog'
+                        ? 'Prioritized task pool'
+                        : column === 'in-progress'
+                          ? 'Small active set'
+                          : column === 'review'
+                            ? 'Verification handoff'
+                            : column === 'done'
+                              ? 'Clear when complete'
+                              : 'Long-running or recurring work'}
+                    </div>
+                  </div>
+                </div>
+              `
+            })}
+          </div>
+        `
+      }
+
+      function CommandList({ commands }) {
+        return html`
+          <div class="space-y-3">
+            ${commands.map(
+              (command) => html`
+                <pre
+                  key=${command}
+                  class="overflow-x-auto rounded-2xl bg-slate-950 px-4 py-3 text-[12px] leading-6 text-slate-100"
+                ><code>${command}</code></pre>
+              `,
+            )}
+          </div>
+        `
+      }
+
+      function App() {
+        const [stepIndex, setStepIndex] = useState(0)
+        const current = STEPS[stepIndex]
+        const progress = useMemo(
+          () => Math.round(((stepIndex + 1) / STEPS.length) * 100),
+          [stepIndex],
+        )
+
+        const next = () => setStepIndex((value) => Math.min(value + 1, STEPS.length - 1))
+        const prev = () => setStepIndex((value) => Math.max(value - 1, 0))
+
+        return html`
+          <div class="grid-bg min-h-screen">
+            <div class="mx-auto max-w-6xl px-6 py-10 sm:px-8 lg:px-10">
+              <div class="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <div class="mb-3 font-mono text-xs uppercase tracking-[0.32em] text-slate-400">
+                    docs / workflow
+                  </div>
+                  <h1
+                    class="max-w-3xl font-serif text-4xl font-bold leading-tight text-slate-900 dark:text-white sm:text-5xl"
+                  >
+                    The common agent-kanban workflow, shown as a live operating loop.
+                  </h1>
+                  <p class="mt-4 max-w-2xl text-base leading-8 text-slate-600 dark:text-slate-300">
+                    Start with structure, keep the backlog executable, move only a small active
+                    slice, and use the dashboard as a visual companion instead of the primary source
+                    of truth.
+                  </p>
+                </div>
+                <div class="flex items-center gap-3">
+                  <div
+                    class="rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-right dark:border-slate-800 dark:bg-slate-900/80"
+                  >
+                    <div class="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-400">
+                      Progress
+                    </div>
+                    <div class="mt-1 text-lg font-semibold">${progress}%</div>
+                  </div>
+                  <${ThemeToggle} />
+                </div>
+              </div>
+
+              <div
+                class="mb-8 rounded-[28px] border border-slate-200 bg-white/70 p-5 shadow-mellow backdrop-blur dark:border-slate-800 dark:bg-slate-950/75"
+              >
+                <${StepRail} current=${stepIndex} onSelect=${setStepIndex} />
+              </div>
+
+              <div class="grid gap-8 lg:grid-cols-[1.45fr_0.95fr]">
+                <section
+                  class="rounded-[32px] border border-slate-200 bg-white p-6 shadow-mellow dark:border-slate-800 dark:bg-slate-950 sm:p-8"
+                >
+                  <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                      <div
+                        class="mb-2 font-mono text-[10px] uppercase tracking-[0.28em] text-bronze-500"
+                      >
+                        ${current.eyebrow}
+                      </div>
+                      <h2 class="font-serif text-3xl font-bold">${current.title}</h2>
+                    </div>
+                    <div class="flex gap-2">
+                      <button
+                        id="workflow-prev"
+                        onClick=${prev}
+                        disabled=${stepIndex === 0}
+                        class="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition-colors disabled:opacity-30 dark:border-slate-700 dark:text-slate-200"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        id="workflow-next"
+                        onClick=${next}
+                        disabled=${stepIndex === STEPS.length - 1}
+                        class="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition-colors disabled:opacity-30 dark:bg-slate-100 dark:text-slate-900"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+
+                  <div
+                    class="mb-8 rounded-[28px] border border-slate-200 bg-stone-50 p-5 dark:border-slate-800 dark:bg-slate-900/60"
+                  >
+                    <${BoardVisual} current=${current} />
+                  </div>
+
+                  <div class="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+                    <div class="animate-rise-in">
+                      <p class="text-lg leading-8 text-slate-700 dark:text-slate-300">
+                        ${current.summary}
+                      </p>
+                      <div
+                        class="mt-5 rounded-2xl bg-bronze-50 px-5 py-4 text-sm leading-7 text-bronze-700 dark:bg-amber-950/30 dark:text-amber-200"
+                      >
+                        <div class="mb-1 font-semibold">Why this phase matters</div>
+                        <div>${current.outcome}</div>
+                      </div>
+                      <div
+                        class="mt-4 rounded-2xl border border-dashed border-slate-200 px-5 py-4 text-sm leading-7 text-slate-500 dark:border-slate-700 dark:text-slate-400"
+                      >
+                        ${current.note}
+                      </div>
+                    </div>
+
+                    <div class="animate-rise-in">
+                      <div
+                        class="mb-3 font-mono text-[10px] uppercase tracking-[0.28em] text-slate-400"
+                      >
+                        Command shape
+                      </div>
+                      <${CommandList} commands=${current.commands} />
+                    </div>
+                  </div>
+                </section>
+
+                <aside class="space-y-8">
+                  <section
+                    class="rounded-[28px] border border-slate-200 bg-white p-6 shadow-mellow dark:border-slate-800 dark:bg-slate-950"
+                  >
+                    <div
+                      class="mb-4 font-mono text-[10px] uppercase tracking-[0.28em] text-slate-400"
+                    >
+                      Operating rhythm
+                    </div>
+                    <div class="space-y-3">
+                      ${RHYTHM.map(
+                        (item, index) => html`
+                          <div
+                            key=${item}
+                            class="flex gap-3 rounded-2xl border border-slate-200 p-4 dark:border-slate-800"
+                          >
+                            <div
+                              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white dark:bg-slate-100 dark:text-slate-900"
+                            >
+                              ${index + 1}
+                            </div>
+                            <div class="text-sm leading-7 text-slate-600 dark:text-slate-300">
+                              ${item}
+                            </div>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  </section>
+
+                  <section
+                    class="rounded-[28px] border border-slate-200 bg-white p-6 shadow-mellow dark:border-slate-800 dark:bg-slate-950"
+                  >
+                    <div
+                      class="mb-4 font-mono text-[10px] uppercase tracking-[0.28em] text-slate-400"
+                    >
+                      Quick tips
+                    </div>
+                    <div class="space-y-3">
+                      ${TIPS.map(
+                        (tip) => html`
+                          <div
+                            key=${tip}
+                            class="rounded-2xl bg-stone-50 px-4 py-3 text-sm leading-7 text-slate-600 dark:bg-slate-900/70 dark:text-slate-300"
+                          >
+                            ${tip}
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  </section>
+
+                  <section
+                    class="rounded-[28px] border border-slate-200 bg-gradient-to-br from-bronze-50 to-white p-6 shadow-mellow dark:border-slate-800 dark:from-amber-950/20 dark:to-slate-950"
+                  >
+                    <div
+                      class="mb-3 font-mono text-[10px] uppercase tracking-[0.28em] text-bronze-500"
+                    >
+                      Dashboard role
+                    </div>
+                    <h3 class="font-serif text-2xl font-bold">CLI first, dashboard second.</h3>
+                    <p class="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300">
+                      <code class="rounded bg-white/80 px-1.5 py-0.5 text-[0.9em] dark:bg-slate-900"
+                        >kanban serve</code
+                      >
+                      adds a visual scan layer and exposes
+                      <code class="rounded bg-white/80 px-1.5 py-0.5 text-[0.9em] dark:bg-slate-900"
+                        >/api/*</code
+                      >,
+                      <code class="rounded bg-white/80 px-1.5 py-0.5 text-[0.9em] dark:bg-slate-900"
+                        >/ws</code
+                      >, and
+                      <code class="rounded bg-white/80 px-1.5 py-0.5 text-[0.9em] dark:bg-slate-900"
+                        >/api/health</code
+                      >, but the structured CLI output remains the safest automation surface.
+                    </p>
+                  </section>
+                </aside>
+              </div>
+            </div>
+          </div>
+        `
+      }
+
+      document.addEventListener('keydown', (event) => {
+        if (event.metaKey || event.ctrlKey || event.altKey) return
+        const tag = (event.target.tagName || '').toLowerCase()
+        if (
+          tag === 'input' ||
+          tag === 'textarea' ||
+          tag === 'select' ||
+          event.target.isContentEditable
+        )
+          return
+
+        if (event.key === 'ArrowRight') {
+          document.getElementById('workflow-next')?.click()
+        }
+        if (event.key === 'ArrowLeft') {
+          document.getElementById('workflow-prev')?.click()
+        }
+      })
+
+      render(html`<${App} />`, document.getElementById('app'))
+    </script>
+  </body>
+</html>
