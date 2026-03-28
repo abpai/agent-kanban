@@ -26,6 +26,7 @@
 - For `.env.example` updates, derive variables from actual `process.env` reads and then cross-check docs so the example only includes live config keys.
 - When renaming Bun package scripts, cross-check script-to-script callers (`bun run ...`) and README commands together; tests may still pass while the dev workflow is broken.
 - For Bun CLIs that also serve a static UI, ship `ui/dist` in the published package and build it in `prepack`; otherwise `serve` works locally but breaks for installed users.
+- For docs cleanup in this repo, keep the root `README.md` as the quick-start front door and move longer operational or integration writeups under `docs/`.
 
 ## Patterns That Don't Work
 
