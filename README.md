@@ -18,7 +18,7 @@ Most project-management tools are built for humans clicking through UIs. `agent-
 ## Install
 
 ```bash
-bun install -g agent-kanban
+bun install -g @andypai/agent-kanban
 ```
 
 `agent-kanban` targets the Bun runtime. Install Bun first if it is not already available on your machine.
