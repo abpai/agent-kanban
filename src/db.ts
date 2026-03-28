@@ -1,5 +1,7 @@
 import { Database } from 'bun:sqlite'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { generateId } from './id.ts'
 import { ErrorCode, KanbanError } from './errors.ts'
 import type { Column, Task, TaskWithColumn, Priority, BoardView } from './types.ts'
@@ -14,7 +16,17 @@ const DEFAULT_COLUMNS = [
 ]
 
 export function getDbPath(): string {
-  return process.env['KANBAN_DB_PATH'] || '.kanban/board.db'
+  const envPath = process.env['KANBAN_DB_PATH']
+  if (envPath) return envPath
+
+  const localPath = '.kanban/board.db'
+  if (existsSync(localPath)) return localPath
+
+  const homePath = process.env['HOME'] || homedir()
+  const globalPath = join(homePath, '.kanban', 'board.db')
+  if (existsSync(globalPath)) return globalPath
+
+  return localPath
 }
 
 export function openDb(path?: string): Database {

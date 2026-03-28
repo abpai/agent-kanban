@@ -1,6 +1,10 @@
-import { describe, expect, test, beforeEach } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
+  getDbPath,
   initSchema,
   seedDefaultColumns,
   isInitialized,
@@ -25,12 +29,35 @@ import {
 import { KanbanError } from '../errors.ts'
 
 let db: Database
+let originalCwd: string
+let originalHome: string | undefined
+let tempDirsToRemove: string[]
+
+beforeEach(() => {
+  originalCwd = process.cwd()
+  originalHome = process.env['HOME']
+  tempDirsToRemove = []
+})
 
 beforeEach(() => {
   db = new Database(':memory:')
   db.run('PRAGMA foreign_keys = ON')
   initSchema(db)
   seedDefaultColumns(db)
+})
+
+afterEach(() => {
+  process.chdir(originalCwd)
+
+  if (originalHome === undefined) {
+    delete process.env['HOME']
+  } else {
+    process.env['HOME'] = originalHome
+  }
+
+  for (const dir of tempDirsToRemove) {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 describe('schema', () => {
@@ -76,6 +103,42 @@ describe('schema', () => {
 
     expect(columns.some((c) => c.name === 'project')).toBe(true)
     expect(indexes.some((i) => i.name === 'idx_tasks_project')).toBe(true)
+  })
+
+  test('getDbPath prefers local board when present', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'agent-kanban-local-'))
+    tempDirsToRemove.push(tempRoot)
+    const projectDir = join(tempRoot, 'project')
+    mkdirSync(join(projectDir, '.kanban'), { recursive: true })
+    writeFileSync(join(projectDir, '.kanban', 'board.db'), '')
+
+    const fakeHome = join(tempRoot, 'home')
+    mkdirSync(join(fakeHome, '.kanban'), { recursive: true })
+    writeFileSync(join(fakeHome, '.kanban', 'board.db'), '')
+
+    process.chdir(projectDir)
+    process.env['HOME'] = fakeHome
+    delete process.env['KANBAN_DB_PATH']
+
+    expect(getDbPath()).toBe('.kanban/board.db')
+  })
+
+  test('getDbPath falls back to global board when local board is absent', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'agent-kanban-global-'))
+    tempDirsToRemove.push(tempRoot)
+    const projectDir = join(tempRoot, 'project')
+    mkdirSync(projectDir, { recursive: true })
+
+    const fakeHome = join(tempRoot, 'home')
+    mkdirSync(join(fakeHome, '.kanban'), { recursive: true })
+    const globalBoard = join(fakeHome, '.kanban', 'board.db')
+    writeFileSync(globalBoard, '')
+
+    process.chdir(projectDir)
+    process.env['HOME'] = fakeHome
+    delete process.env['KANBAN_DB_PATH']
+
+    expect(getDbPath()).toBe(globalBoard)
   })
 })
 

@@ -8,6 +8,13 @@ Agent-friendly kanban board CLI. Manage tasks via bash commands, parse structure
 
 Most project-management tools are built for humans clicking through UIs. `agent-kanban` is built for **CLI-first workflows** — AI agents and scripts get deterministic JSON they can parse, humans get a pretty-printed view and a web dashboard. Runs against a local SQLite file or a Linear backend.
 
+## Documentation
+
+- [`docs/README.md`](docs/README.md) for the documentation index
+- [`docs/WORKFLOW.md`](docs/WORKFLOW.md) for a common day-to-day workflow
+- [`docs/providers/linear.md`](docs/providers/linear.md) for Linear provider details
+- [`SKILL.md`](SKILL.md) for agent-specific repo usage instructions
+
 ## Install
 
 ```bash
@@ -43,12 +50,18 @@ Running `kanban` with no arguments is equivalent to `kanban board view`.
 
 All operations route through a provider backend. Set `KANBAN_PROVIDER` to choose one.
 
-| Variable          | Default            | Description                            |
-| ----------------- | ------------------ | -------------------------------------- |
-| `KANBAN_PROVIDER` | `local`            | `local` or `linear`                    |
-| `KANBAN_DB_PATH`  | `.kanban/board.db` | SQLite database path                   |
-| `LINEAR_API_KEY`  | —                  | Required when `KANBAN_PROVIDER=linear` |
-| `LINEAR_TEAM_ID`  | —                  | Required when `KANBAN_PROVIDER=linear` |
+| Variable          | Default       | Description                            |
+| ----------------- | ------------- | -------------------------------------- |
+| `KANBAN_PROVIDER` | `local`       | `local` or `linear`                    |
+| `KANBAN_DB_PATH`  | auto-resolved | SQLite database path                   |
+| `LINEAR_API_KEY`  | —             | Required when `KANBAN_PROVIDER=linear` |
+| `LINEAR_TEAM_ID`  | —             | Required when `KANBAN_PROVIDER=linear` |
+
+Without `KANBAN_DB_PATH`, the local provider resolves the database in this order:
+
+1. `./.kanban/board.db` if it exists in the current working directory
+2. `~/.kanban/board.db` if it exists
+3. `./.kanban/board.db` as the path to create
 
 ### Linear quick start
 
@@ -182,12 +195,12 @@ kanban serve --port 8080
 
 ## Global flags
 
-| Flag               | Description                                                        |
-| ------------------ | ------------------------------------------------------------------ |
-| `--pretty`         | Human-readable output instead of JSON                              |
-| `--db <path>`      | Database path (default: `.kanban/board.db`, env: `KANBAN_DB_PATH`) |
-| `--project <name>` | Filter or set project context                                      |
-| `-h`, `--help`     | Show help text                                                     |
+| Flag               | Description                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| `--pretty`         | Human-readable output instead of JSON                                                            |
+| `--db <path>`      | Database path (default: local first, then `~/.kanban`, else create local; env: `KANBAN_DB_PATH`) |
+| `--project <name>` | Filter or set project context                                                                    |
+| `-h`, `--help`     | Show help text                                                                                   |
 
 ## Output format
 
@@ -278,10 +291,6 @@ docker run -d \
 
 Set the port via `PORT` env var (defaults to `3000`). Port resolution order: `--port` flag → `PORT` env → `3000`. Add provider env vars through Dokploy's environment configuration.
 
-## Agent skill
-
-This repo includes an agent usage skill at `SKILL.md` — a practical workflow for operating the board entirely via `kanban` commands.
-
 ## Community
 
 If you want to contribute or report an issue, start with these guides:
@@ -289,6 +298,8 @@ If you want to contribute or report an issue, start with these guides:
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - [SECURITY.md](SECURITY.md)
+
+Longer product and workflow docs live under [`docs/`](docs/README.md).
 
 ## License
 

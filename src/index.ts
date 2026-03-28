@@ -360,7 +360,7 @@ Commands:
 
 Options:
   --pretty      Human-readable output (default: JSON)
-  --db <path>   Database path (default: .kanban/board.db)
+  --db <path>   Database path (default: local ./.kanban if present, else ~/.kanban if present, else create ./.kanban)
   --project <n> Filter/set project
   -h, --help    Show this help`
 
