@@ -17,6 +17,8 @@
 
 ## Patterns That Work
 
+- For mobile kanban layouts in this repo, use a phone-native single-column flow with explicit column tabs/stepper navigation and swipe gestures, instead of relying on the desktop board's horizontal scroll lane.
+- Safe-area-aware root, overlay, and drawer padding is required for iPhone Safari; sticky mobile chrome should also account for the top inset.
 - Start review tasks by comparing requested plan scope against actual implementation across backend and frontend.
 - For UI smoke checks with duplicate visible text, use stable locators (`title`, `nth`, `role+name`) rather than plain text locators.
 - For Bun CLIs, adding `#!/usr/bin/env bun` to the bin entrypoint plus `bun link` gives a reliable global command workflow (`kanban ...`) for local agent usage.

@@ -8,11 +8,14 @@ interface TaskCardProps {
 
 export function TaskCard({ task }: TaskCardProps) {
   const { selectedTaskId, selectTask } = useStore()
+  const isSelected = selectedTaskId === task.id
 
   return (
-    <div
-      className={`taskCard${selectedTaskId === task.id ? ' selected' : ''}`}
-      onClick={() => selectTask(selectedTaskId === task.id ? null : task.id)}
+    <button
+      type="button"
+      className={`taskCard${isSelected ? ' selected' : ''}`}
+      onClick={() => selectTask(isSelected ? null : task.id)}
+      aria-pressed={isSelected}
     >
       <div className="taskCardHeader">
         <div className={`priorityDot ${task.priority}`} title={task.priority} />
@@ -40,6 +43,6 @@ export function TaskCard({ task }: TaskCardProps) {
         </div>
         <span className="timestamp">{relativeTime(task.updated_at)}</span>
       </div>
-    </div>
+    </button>
   )
 }

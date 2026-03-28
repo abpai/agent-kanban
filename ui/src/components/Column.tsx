@@ -26,20 +26,25 @@ export function Column({ column }: ColumnProps) {
   const dotColor = COLUMN_COLORS[column.name.toLowerCase()] ?? 'var(--text-muted)'
 
   return (
-    <div className="column">
+    <section className="column" aria-label={`${column.name} column`}>
       <div className="columnHeader">
-        <div className="columnDot" style={{ background: dotColor }} />
-        <span className="columnName">{column.name}</span>
-        <span className="columnCount">{filteredTasks.length}</span>
-        {capabilities.taskCreate && (
-          <button
-            className="columnAddBtn"
-            title="Add task to this column"
-            onClick={() => setShowNewTaskModal(true, column.name)}
-          >
-            +
-          </button>
-        )}
+        <div className="columnHeaderMain">
+          <div className="columnDot" style={{ background: dotColor }} />
+          <span className="columnName">{column.name}</span>
+        </div>
+        <div className="columnHeaderActions">
+          <span className="columnCount">{filteredTasks.length}</span>
+          {capabilities.taskCreate && (
+            <button
+              className="columnAddBtn"
+              title={`Add task to ${column.name}`}
+              aria-label={`Add task to ${column.name}`}
+              onClick={() => setShowNewTaskModal(true, column.name)}
+            >
+              +
+            </button>
+          )}
+        </div>
       </div>
       <div className="columnBody">
         {filteredTasks.length === 0 ? (
@@ -48,6 +53,6 @@ export function Column({ column }: ColumnProps) {
           filteredTasks.map((task) => <TaskCard key={task.id} task={task} />)
         )}
       </div>
-    </div>
+    </section>
   )
 }
