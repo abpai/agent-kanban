@@ -1,6 +1,6 @@
 import { useStore } from '../store'
 import type { Task } from '../types'
-import { relativeTime, getAvatarColor } from '../utils'
+import { relativeTime } from '../utils'
 
 interface TaskCardProps {
   task: Task
@@ -29,11 +29,7 @@ export function TaskCard({ task }: TaskCardProps) {
         <div className="taskFooterLeft">
           {task.assignee && (
             <>
-              <div
-                className="assigneeAvatar"
-                style={{ background: getAvatarColor(task.assignee) }}
-                title={task.assignee}
-              >
+              <div className="assigneeAvatar" title={task.assignee}>
                 {task.assignee[0]!.toUpperCase()}
               </div>
               <span className="assigneeName">{task.assignee}</span>

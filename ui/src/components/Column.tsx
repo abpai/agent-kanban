@@ -1,29 +1,17 @@
 import type { Column as ColumnType, Task } from '../types'
-import { TaskCard } from './TaskCard'
 import { useStore } from '../store'
+import { TaskCard } from './TaskCard'
+import { filterVisibleTasks, getColumnColor } from './boardUtils'
 
 interface ColumnProps {
   column: ColumnType & { tasks: Task[] }
 }
 
-const COLUMN_COLORS: Record<string, string> = {
-  recurring: 'var(--col-recurring)',
-  backlog: 'var(--col-backlog)',
-  'in-progress': 'var(--col-in-progress)',
-  review: 'var(--col-review)',
-  done: 'var(--col-done)',
-}
-
 export function Column({ column }: ColumnProps) {
   const { filterAssignee, filterProject, setShowNewTaskModal, capabilities } = useStore()
 
-  const filteredTasks = column.tasks.filter((task) => {
-    if (filterAssignee && task.assignee !== filterAssignee) return false
-    if (filterProject && task.project !== filterProject) return false
-    return true
-  })
-
-  const dotColor = COLUMN_COLORS[column.name.toLowerCase()] ?? 'var(--text-muted)'
+  const filteredTasks = filterVisibleTasks(column.tasks, filterAssignee, filterProject)
+  const dotColor = getColumnColor(column.name)
 
   return (
     <section className="column" aria-label={`${column.name} column`}>
