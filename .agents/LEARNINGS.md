@@ -18,6 +18,7 @@
 ## Patterns That Work
 
 - For mobile kanban layouts in this repo, use a phone-native single-column flow with explicit column tabs/stepper navigation and swipe gestures, instead of relying on the desktop board's horizontal scroll lane.
+- For mobile grouped-list headers in the UI, keep the expand/collapse control and the add-task action as separate sibling buttons; nesting one interactive control inside another causes invalid markup and flaky behavior.
 - Safe-area-aware root, overlay, and drawer padding is required for iPhone Safari; sticky mobile chrome should also account for the top inset.
 - Start review tasks by comparing requested plan scope against actual implementation across backend and frontend.
 - For UI smoke checks with duplicate visible text, use stable locators (`title`, `nth`, `role+name`) rather than plain text locators.
