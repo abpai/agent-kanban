@@ -162,3 +162,5 @@ dist
 .npm-cache/
 .env.*
 !.env.example
+.agents/skills
+.claude/
