@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useStore } from '../store'
-import { relativeTime, getAvatarColor } from '../utils'
+import { relativeTime } from '../utils'
 import type { Priority } from '../types'
 
 export function TaskDetail() {
@@ -226,7 +226,6 @@ export function TaskDetail() {
                   <div
                     className="assigneeAvatar"
                     style={{
-                      background: getAvatarColor(task.assignee),
                       width: 24,
                       height: 24,
                       fontSize: 12,

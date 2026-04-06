@@ -1,6 +1,6 @@
 import { useStore } from '../store'
 import type { Task } from '../types'
-import { relativeTime, getAvatarColor } from '../utils'
+import { relativeTime } from '../utils'
 
 interface TaskCardProps {
   task: Task
@@ -8,11 +8,14 @@ interface TaskCardProps {
 
 export function TaskCard({ task }: TaskCardProps) {
   const { selectedTaskId, selectTask } = useStore()
+  const isSelected = selectedTaskId === task.id
 
   return (
-    <div
-      className={`taskCard${selectedTaskId === task.id ? ' selected' : ''}`}
-      onClick={() => selectTask(selectedTaskId === task.id ? null : task.id)}
+    <button
+      type="button"
+      className={`taskCard${isSelected ? ' selected' : ''}`}
+      onClick={() => selectTask(isSelected ? null : task.id)}
+      aria-pressed={isSelected}
     >
       <div className="taskCardHeader">
         <div className={`priorityDot ${task.priority}`} title={task.priority} />
@@ -26,11 +29,7 @@ export function TaskCard({ task }: TaskCardProps) {
         <div className="taskFooterLeft">
           {task.assignee && (
             <>
-              <div
-                className="assigneeAvatar"
-                style={{ background: getAvatarColor(task.assignee) }}
-                title={task.assignee}
-              >
+              <div className="assigneeAvatar" title={task.assignee}>
                 {task.assignee[0]!.toUpperCase()}
               </div>
               <span className="assigneeName">{task.assignee}</span>
@@ -40,6 +39,6 @@ export function TaskCard({ task }: TaskCardProps) {
         </div>
         <span className="timestamp">{relativeTime(task.updated_at)}</span>
       </div>
-    </div>
+    </button>
   )
 }

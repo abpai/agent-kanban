@@ -25,28 +25,32 @@ export function Header() {
   const configProjects = config?.projects ?? []
   const allProjects = [...new Set([...metricProjects, ...configProjects])].sort()
 
+  const providerLabel = provider === 'linear' && team ? `${team.name} (${team.key})` : provider
+
   return (
     <div className="header">
       <div className="headerTop">
-        <h1>
-          <span>agent</span>-kanban
-          <span style={{ marginLeft: 8 }}>
-            <span
-              className={`wsIndicator ${wsConnected ? 'connected' : 'disconnected'}`}
-              title={wsConnected ? 'Live' : 'Polling'}
-            />
-          </span>
-        </h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            {provider === 'linear' && team ? `${team.name} (${team.key})` : provider}
+        <div className="headerIdentity">
+          <div className="headerTitleRow">
+            <h1>
+              <span>agent</span>-kanban
+            </h1>
+            <div
+              className="liveStatus"
+              title={wsConnected ? 'Live updates enabled' : 'Polling for updates'}
+            >
+              <span className={`wsIndicator ${wsConnected ? 'connected' : 'disconnected'}`} />
+              <span>{wsConnected ? 'Live' : 'Polling'}</span>
+            </div>
           </div>
-          {capabilities.taskCreate && (
-            <button className="newTaskBtn" onClick={() => setShowNewTaskModal(true)}>
-              + New Task
-            </button>
-          )}
+          <div className="providerBadge">{providerLabel}</div>
         </div>
+
+        {capabilities.taskCreate && (
+          <button className="newTaskBtn" onClick={() => setShowNewTaskModal(true)}>
+            + New Task
+          </button>
+        )}
       </div>
 
       {metrics && (
@@ -71,36 +75,42 @@ export function Header() {
       )}
 
       <div className="filterBar">
-        <div className="filterGroup">
-          <button
-            className={`filterBtn${filterAssignee === null ? ' active' : ''}`}
-            onClick={() => setFilterAssignee(null)}
-          >
-            All
-          </button>
-          {allAssignees.map((name) => (
+        <div className="filterSection">
+          <div className="filterLabel">Assignees</div>
+          <div className="filterGroup filterScroller">
             <button
-              key={name}
-              className={`filterBtn${filterAssignee === name ? ' active' : ''}`}
-              onClick={() => setFilterAssignee(filterAssignee === name ? null : name)}
+              className={`filterBtn${filterAssignee === null ? ' active' : ''}`}
+              onClick={() => setFilterAssignee(null)}
             >
-              {name}
+              All
             </button>
-          ))}
-        </div>
-        <div className="filterGroup">
-          <select
-            className="projectDropdown"
-            value={filterProject ?? ''}
-            onChange={(e) => setFilterProject(e.target.value || null)}
-          >
-            <option value="">All Projects</option>
-            {allProjects.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
+            {allAssignees.map((name) => (
+              <button
+                key={name}
+                className={`filterBtn${filterAssignee === name ? ' active' : ''}`}
+                onClick={() => setFilterAssignee(filterAssignee === name ? null : name)}
+              >
+                {name}
+              </button>
             ))}
-          </select>
+          </div>
+        </div>
+        <div className="filterSection filterSectionCompact">
+          <div className="filterLabel">Project</div>
+          <div className="filterGroup">
+            <select
+              className="projectDropdown"
+              value={filterProject ?? ''}
+              onChange={(e) => setFilterProject(e.target.value || null)}
+            >
+              <option value="">All Projects</option>
+              {allProjects.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
     </div>
