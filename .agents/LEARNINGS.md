@@ -9,6 +9,7 @@
 | 2026-03-04 | self                     | `claude -p` can occasionally exit `0` with empty stdout on long prompts                                          | Treat empty output as soft failure; rerun once using temp-file prompt pattern and stricter output contract  |
 | 2026-03-08 | shell review             | Used `local path=...` in a zsh function, which clobbered the special `path`/`PATH` lookup                        | Never use `path` as a local variable name in zsh; prefer `worktree_path`, `found_path`, etc.                |
 | 2026-03-26 | open-source prep         | `bun build` defaulted to the browser target and broke the CLI bundle because the entrypoint imports `bun:sqlite` | Set `--target bun` when bundling Bun-native entrypoints, especially before wiring builds into CI            |
+| 2026-04-06 | release prep             | Assumed npm publish would be available locally during release prep                                               | Check `npm whoami` before the final publish step so release work can be staged without blocking on auth     |
 
 ## User Preferences
 
@@ -25,11 +26,13 @@
 - For Bun CLIs, adding `#!/usr/bin/env bun` to the bin entrypoint plus `bun link` gives a reliable global command workflow (`kanban ...`) for local agent usage.
 - For readability-only refactors, extract tiny helpers for repeated response/header/error logic to reduce duplication while keeping behavior identical.
 - For readability-only refactors in SQLite-heavy files, alias repeated scalar queries behind tiny `count`/`value` helpers to remove cast noise without changing SQL behavior.
+- For static marketing pages in this repo, avoid nested interactive controls; keep one real button per action and read copyable command text from the rendered `<code>` element so markup and JS stay in sync.
 - For mixed local/remote backends, a single bootstrap endpoint (`provider + capabilities + board + config`) keeps the UI simpler than parallel feature-specific fetches and makes unsupported-provider behavior much easier to gate.
 - For `.env.example` updates, derive variables from actual `process.env` reads and then cross-check docs so the example only includes live config keys.
 - When renaming Bun package scripts, cross-check script-to-script callers (`bun run ...`) and README commands together; tests may still pass while the dev workflow is broken.
 - For Bun CLIs that also serve a static UI, ship `ui/dist` in the published package and build it in `prepack`; otherwise `serve` works locally but breaks for installed users.
 - For docs cleanup in this repo, keep the root `README.md` as the quick-start front door and move longer operational or integration writeups under `docs/`.
+- For releases in this repo, a lightweight `CHANGELOG.md` tied to the npm version makes GitHub/npm release notes easier to assemble than reconstructing changes from merges later.
 
 ## Patterns That Don't Work
 
