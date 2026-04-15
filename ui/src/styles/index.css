@@ -241,6 +241,10 @@ textarea {
   gap: 6px;
 }
 
+.filterGroupWrap {
+  flex-wrap: wrap;
+}
+
 .filterBtn {
   min-height: 36px;
   background: transparent;
@@ -290,6 +294,38 @@ textarea {
 .projectDropdown:focus {
   outline: none;
   border-color: var(--text-primary);
+}
+
+.projectDropdown.active {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  box-shadow: 0 0 0 1px var(--accent-subtle);
+}
+
+.filterStatusChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  background: transparent;
+  border: 1px dashed var(--border-visible);
+  color: var(--text-disabled);
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.filterStatusChip.active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--text-display);
+}
+
+.filterSelect {
+  flex: 1 1 180px;
 }
 
 /* ─── Board layout ─── */

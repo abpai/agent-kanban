@@ -10,6 +10,7 @@ export function Board() {
   const board = useStore((s) => s.board)
   const filterAssignee = useStore((s) => s.filterAssignee)
   const filterProject = useStore((s) => s.filterProject)
+  const filterActivityDays = useStore((s) => s.filterActivityDays)
   const { selectedTaskId, selectTask, setShowNewTaskModal, capabilities } = useStore()
 
   const [isMobile, setIsMobile] = useState(() => {
@@ -31,9 +32,14 @@ export function Board() {
     if (!board) return []
     return board.columns.map((column) => ({
       ...column,
-      filteredTasks: filterVisibleTasks(column.tasks, filterAssignee, filterProject),
+      filteredTasks: filterVisibleTasks(
+        column.tasks,
+        filterAssignee,
+        filterProject,
+        filterActivityDays,
+      ),
     }))
-  }, [board, filterAssignee, filterProject])
+  }, [board, filterActivityDays, filterAssignee, filterProject])
 
   if (!board) return null
 

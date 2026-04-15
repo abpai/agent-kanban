@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { api } from './api'
 import { withBasePath } from './base'
+import { safeLocalStorageGet, safeLocalStorageSet } from './utils'
 import type {
   BoardConfig,
   BoardMetrics,
@@ -27,6 +28,22 @@ const defaultCapabilities: ProviderCapabilities = {
   configEdit: true,
 }
 
+export type ActivityWindowDays = 7 | 14 | 28 | 70 | null
+
+const STORAGE_KEYS = {
+  assignee: 'agent-kanban:filter:assignee',
+  project: 'agent-kanban:filter:project',
+  activityDays: 'agent-kanban:filter:activity-days',
+} as const
+
+function loadStoredActivityDays(): ActivityWindowDays {
+  const value = safeLocalStorageGet(STORAGE_KEYS.activityDays)
+  if (value === '7' || value === '14' || value === '28' || value === '70') {
+    return Number(value) as 7 | 14 | 28 | 70
+  }
+  return null
+}
+
 interface AppState {
   board: BoardView | null
   activity: ActivityEntry[]
@@ -42,6 +59,7 @@ interface AppState {
   pollingEnabled: boolean
   filterAssignee: string | null
   filterProject: string | null
+  filterActivityDays: ActivityWindowDays
   showNewTaskModal: boolean
   newTaskDefaultColumn: string | null
   wsConnected: boolean
@@ -53,6 +71,7 @@ interface AppState {
   selectTask: (id: string | null) => void
   setFilterAssignee: (assignee: string | null) => void
   setFilterProject: (project: string | null) => void
+  setFilterActivityDays: (days: ActivityWindowDays) => void
   setShowNewTaskModal: (show: boolean, defaultColumn?: string) => void
   createTask: (data: {
     title: string
@@ -93,8 +112,9 @@ export const useStore = create<AppState>((set, get) => ({
   error: null,
   pollInterval: null,
   pollingEnabled: false,
-  filterAssignee: null,
-  filterProject: null,
+  filterAssignee: safeLocalStorageGet(STORAGE_KEYS.assignee),
+  filterProject: safeLocalStorageGet(STORAGE_KEYS.project),
+  filterActivityDays: loadStoredActivityDays(),
   showNewTaskModal: false,
   newTaskDefaultColumn: null,
   wsConnected: false,
@@ -126,8 +146,30 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   selectTask: (id) => set({ selectedTaskId: id }),
-  setFilterAssignee: (assignee) => set({ filterAssignee: assignee }),
-  setFilterProject: (project) => set({ filterProject: project }),
+  setFilterAssignee: (assignee) => {
+    if (assignee) {
+      safeLocalStorageSet(STORAGE_KEYS.assignee, assignee)
+    } else {
+      safeLocalStorageSet(STORAGE_KEYS.assignee, '')
+    }
+    set({ filterAssignee: assignee })
+  },
+  setFilterProject: (project) => {
+    if (project) {
+      safeLocalStorageSet(STORAGE_KEYS.project, project)
+    } else {
+      safeLocalStorageSet(STORAGE_KEYS.project, '')
+    }
+    set({ filterProject: project })
+  },
+  setFilterActivityDays: (days) => {
+    if (days) {
+      safeLocalStorageSet(STORAGE_KEYS.activityDays, String(days))
+    } else {
+      safeLocalStorageSet(STORAGE_KEYS.activityDays, '')
+    }
+    set({ filterActivityDays: days })
+  },
   setShowNewTaskModal: (show, defaultColumn) =>
     set({ showNewTaskModal: show, newTaskDefaultColumn: defaultColumn ?? null }),
 
