@@ -70,7 +70,7 @@ export function startServer(provider: KanbanProvider, port: number): void {
       if (pathname.startsWith('/api/')) {
         const forwardedUrl = new URL(req.url)
         forwardedUrl.pathname = pathname
-        const forwardedReq = new Request(forwardedUrl, req)
+        const forwardedReq = new Request(forwardedUrl.toString(), req)
         const result = await handleRequest(provider, forwardedReq)
         applyCorsHeaders(result.response)
         if (result.mutated && result.response.ok) {
