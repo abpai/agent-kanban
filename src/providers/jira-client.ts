@@ -60,6 +60,10 @@ export interface JiraUpdatePayload {
   update?: Record<string, unknown>
 }
 
+export interface JiraCommentPayload {
+  body: unknown
+}
+
 export interface JiraCreatedIssueRef {
   id: string
   key: string
@@ -220,7 +224,7 @@ export class JiraClient {
     if (params.fields && params.fields.length > 0) {
       query.fields = params.fields.join(',')
     }
-    return this.request<never, JiraSearchPage>('GET', '/rest/api/3/search', undefined, query)
+    return this.request<never, JiraSearchPage>('GET', '/rest/api/3/search/jql', undefined, query)
   }
 
   getIssue(idOrKey: string): Promise<JiraIssue> {
@@ -239,6 +243,14 @@ export class JiraClient {
     return this.request<JiraUpdatePayload, void>(
       'PUT',
       `/rest/api/3/issue/${encodeURIComponent(idOrKey)}`,
+      payload,
+    )
+  }
+
+  addComment(idOrKey: string, payload: JiraCommentPayload): Promise<void> {
+    return this.request<JiraCommentPayload, void>(
+      'POST',
+      `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment`,
       payload,
     )
   }

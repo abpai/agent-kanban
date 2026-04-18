@@ -35,6 +35,8 @@
 - For docs cleanup in this repo, keep the root `README.md` as the quick-start front door and move longer operational or integration writeups under `docs/`.
 - For releases in this repo, a lightweight `CHANGELOG.md` tied to the npm version makes GitHub/npm release notes easier to assemble than reconstructing changes from merges later.
 - When triaging repo health after large agent-generated changes, run `bunx tsc --noEmit` separately from `bun run check`; lint/prettier can fail while the TypeScript build is still clean.
+- For task-level WebSocket patches in the UI, dedupe optimistic temp rows against the server-issued task id before replacing optimistic state, or self-originated create events can render duplicate cards.
+- For task-level WebSocket patches in the UI, preserve server ordering/position when reinserting a task; remove-and-append helpers make unchanged tasks jump to the bottom of their column.
 
 ## Patterns That Don't Work
 
@@ -49,3 +51,4 @@
 - CLI code paths that do not call `initSchema()` (for example `task add/list/update`) can bypass migrations; schema changes must be invoked right after `openDb()` or before any CRUD command.
 - API mutation signaling should be based on successful response status, not just HTTP verb, to avoid false WebSocket refresh broadcasts.
 - Adaptive polling tied to a one-time `setInterval` delay can silently ignore WebSocket state changes; use recursive `setTimeout` with per-tick delay selection.
+- Jira webhook handlers must re-check the configured project key before caching issue payloads; otherwise a broadly scoped webhook can leak other Jira projects into the current board cache.

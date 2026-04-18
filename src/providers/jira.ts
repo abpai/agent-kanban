@@ -532,6 +532,14 @@ export class JiraProvider implements KanbanProvider {
     unsupportedOperation('Task deletion is not supported in Jira mode')
   }
 
+  async comment(idOrRef: string, body: string): Promise<void> {
+    await this.sync()
+    const task = this.resolveTaskByIdOrKey(idOrRef)
+    const issueKey = task.externalRef ?? task.providerId ?? task.id.replace(/^jira:/, '')
+    // Comment counts stay eventually consistent through the normal sync interval.
+    await this.client.addComment(issueKey, { body: plainTextToAdf(body) })
+  }
+
   async getActivity(_limit?: number, _taskId?: string): Promise<ActivityEntry[]> {
     unsupportedOperation('Activity is not available in Jira mode')
   }
@@ -574,6 +582,13 @@ export class JiraProvider implements KanbanProvider {
     }
 
     if (event === 'jira:issue_created' || event === 'jira:issue_updated') {
+      const projectKey = issue.fields.project?.key
+      if (projectKey !== this.config.projectKey) {
+        return {
+          handled: false,
+          message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
+        }
+      }
       upsertJiraIssues(this.db, [
         {
           id: issue.id,
@@ -589,7 +604,7 @@ export class JiraProvider implements KanbanProvider {
           assigneeName: issue.fields.assignee?.displayName ?? null,
           labels: issue.fields.labels ?? [],
           commentCount: issue.fields.comment?.total ?? 0,
-          projectKey: issue.fields.project?.key ?? this.config.projectKey,
+          projectKey,
           url: `${this.config.baseUrl}/browse/${issue.key}`,
           createdAt: issue.fields.created,
           updatedAt: issue.fields.updated,

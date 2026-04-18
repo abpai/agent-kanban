@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import { listActivity } from '../activity.ts'
+import { listActivity, logActivity } from '../activity.ts'
 import { getConfigPath, loadConfig, saveConfig } from '../config.ts'
 import {
   addTask,
@@ -131,6 +131,14 @@ export class LocalProvider implements KanbanProvider {
 
   async deleteTask(idOrRef: string) {
     return enrichTask(deleteTask(this.db, idOrRef))
+  }
+
+  async comment(idOrRef: string, body: string): Promise<void> {
+    const task = getTask(this.db, idOrRef)
+    logActivity(this.db, task.id, 'updated', {
+      field: 'comment',
+      new_value: body,
+    })
   }
 
   async getActivity(limit?: number, taskId?: string) {

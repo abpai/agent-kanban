@@ -81,6 +81,10 @@ export class LinearProvider implements KanbanProvider {
     this.client = new LinearClient(apiKey)
   }
 
+  private resolvedTeamId(): string {
+    return loadSyncMeta(this.db).team?.id ?? this.teamId
+  }
+
   private async sync(force = false): Promise<void> {
     const meta = loadSyncMeta(this.db)
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
@@ -88,14 +92,11 @@ export class LinearProvider implements KanbanProvider {
     const interval = effectiveSyncInterval(meta.lastWebhookAt, now)
     if (!force && lastSyncAtMs && now - lastSyncAtMs < interval) return
 
-    const [team, users, projects, issues] = await Promise.all([
-      this.client.getTeam(this.teamId),
+    const team = await this.client.getTeam(this.teamId)
+    const [users, projects, issues] = await Promise.all([
       this.client.listUsers(),
       this.client.listProjects(),
-      this.client.listIssues(
-        this.teamId,
-        force ? undefined : (meta.lastIssueUpdatedAt ?? undefined),
-      ),
+      this.client.listIssues(team.id, force ? undefined : (meta.lastIssueUpdatedAt ?? undefined)),
     ])
 
     replaceStates(this.db, team.states)
@@ -236,7 +237,7 @@ export class LinearProvider implements KanbanProvider {
     await this.sync()
     const state = input.column ? this.resolveState(input.column) : undefined
     const result = await this.client.createIssue({
-      teamId: this.teamId,
+      teamId: this.resolvedTeamId(),
       stateId: state?.id,
       title: input.title,
       description: input.description,
@@ -314,6 +315,16 @@ export class LinearProvider implements KanbanProvider {
 
   async deleteTask(_idOrRef: string): Promise<Task> {
     unsupportedOperation('Task deletion is not supported in Linear mode')
+  }
+
+  async comment(idOrRef: string, body: string): Promise<void> {
+    await this.sync()
+    const task = this.resolveTask(idOrRef)
+    // Comment counts stay eventually consistent through the normal sync interval.
+    const result = await this.client.commentCreate(task.providerId || task.id, body)
+    if (!result.success) {
+      throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear comment creation failed')
+    }
   }
 
   async getActivity(_limit?: number, _taskId?: string): Promise<ActivityEntry[]> {

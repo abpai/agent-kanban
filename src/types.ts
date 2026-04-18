@@ -105,6 +105,7 @@ export interface ProviderCapabilities {
   taskUpdate: boolean
   taskMove: boolean
   taskDelete: boolean
+  comment: boolean
   activity: boolean
   metrics: boolean
   columnCrud: boolean

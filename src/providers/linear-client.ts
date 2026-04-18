@@ -350,4 +350,25 @@ export class LinearClient {
     )
     return data.issueUpdate
   }
+
+  async commentCreate(issueId: string, body: string): Promise<{ success: boolean }> {
+    const data = await this.query<{
+      commentCreate: { success: boolean }
+    }>(
+      `
+        mutation CommentCreate($input: CommentCreateInput!) {
+          commentCreate(input: $input) {
+            success
+          }
+        }
+      `,
+      {
+        input: {
+          issueId,
+          body,
+        },
+      },
+    )
+    return data.commentCreate
+  }
 }
