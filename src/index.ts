@@ -364,29 +364,60 @@ Options:
   --project <n> Filter/set project
   -h, --help    Show this help`
 
+export interface ServeOptions {
+  db?: string
+  port: number
+  tunnel: boolean
+}
+
+export function parseServeArgs(argv: string[]): ServeOptions {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      db: { type: 'string' },
+      port: { type: 'string' },
+      tunnel: { type: 'boolean', default: false },
+    },
+    strict: false,
+    allowPositionals: true,
+  })
+  const port = values.port
+    ? parseInt(values.port as string, 10)
+    : parseInt(process.env['PORT'] || '3000', 10)
+  return {
+    db: values.db as string | undefined,
+    port,
+    tunnel: Boolean(values.tunnel),
+  }
+}
+
 if (import.meta.main) {
   const argv = process.argv.slice(2)
 
   if (argv[0] === 'serve') {
-    const portIdx = argv.indexOf('--port')
-    const port =
-      portIdx !== -1
-        ? parseInt(argv[portIdx + 1]!, 10)
-        : parseInt(process.env['PORT'] || '3000', 10)
+    const opts = parseServeArgs(argv)
 
-    const { values } = parseArgs({
-      args: argv,
-      options: { db: { type: 'string' }, port: { type: 'string' } },
-      strict: false,
-      allowPositionals: true,
-    })
-
-    const dbPath = (values.db as string | undefined) ?? getDbPath()
+    const dbPath = opts.db ?? getDbPath()
     const db = openDb(dbPath)
     migrateSchema(db)
     const provider = createProvider(db, dbPath)
     const { startServer } = await import('./server.ts')
-    startServer(provider, port)
+    startServer(provider, opts.port)
+
+    if (opts.tunnel) {
+      const { startCloudflareTunnel } = await import('./tunnel.ts')
+      try {
+        const handle = startCloudflareTunnel(opts.port)
+        const shutdown = (): void => {
+          handle.stop()
+          process.exit(0)
+        }
+        process.on('SIGINT', shutdown)
+        process.on('SIGTERM', shutdown)
+      } catch {
+        // startCloudflareTunnel already logged a friendly message
+      }
+    }
   } else {
     let exitCode = 0
     const pretty = argv.includes('--pretty')

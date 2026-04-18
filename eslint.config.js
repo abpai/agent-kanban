@@ -12,6 +12,8 @@ const bunGlobals = {
   WebSocket: 'readonly',
   URL: 'readonly',
   URLSearchParams: 'readonly',
+  ReadableStream: 'readonly',
+  TextDecoder: 'readonly',
   console: 'readonly',
   process: 'readonly',
   setTimeout: 'readonly',

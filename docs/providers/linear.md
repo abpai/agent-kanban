@@ -107,9 +107,19 @@ endpoint is open — put it behind a trusted network boundary.
 
 ### Public URL
 
-Webhooks require a public URL. For local development, tunnel
-`http://localhost:3000/api/webhooks/linear` with `bun x cloudflared` or
-similar, then register the tunnel URL from the Linear settings UI.
+Webhooks require a public URL. For local development, run the server with
+the built-in `--tunnel` flag:
+
+```sh
+kanban serve --tunnel
+```
+
+This spawns `bunx cloudflared tunnel --url http://localhost:<port>` and
+prints the public `https://*.trycloudflare.com` URL to stdout. Append
+`/api/webhooks/linear` and register the result in Linear's webhook settings.
+Install cloudflared first with `brew install cloudflared` or
+`npm i -g cloudflared`; the server keeps running if it's missing, just
+without the tunnel.
 
 ## Future work
 

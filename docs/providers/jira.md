@@ -170,10 +170,19 @@ trusted network boundary.
 
 ### Public URL
 
-Webhooks require a public URL. For local development, tunnel
-`http://localhost:3000/api/webhooks/jira` with a service like
-`bun x cloudflared` or `ngrok`, then register the tunnel URL in Jira's
-webhook settings.
+Webhooks require a public URL. For local development, run the server with
+the built-in `--tunnel` flag:
+
+```sh
+kanban serve --tunnel
+```
+
+This spawns `bunx cloudflared tunnel --url http://localhost:<port>` and
+prints the public `https://*.trycloudflare.com` URL to stdout. Append
+`/api/webhooks/jira` and register the result in Jira's webhook settings.
+Install cloudflared first with `brew install cloudflared` or
+`npm i -g cloudflared`; the server keeps running if it's missing, just
+without the tunnel.
 
 ## Troubleshooting
 
