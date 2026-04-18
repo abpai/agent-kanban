@@ -198,6 +198,7 @@ describe('Jira webhook', () => {
           summary: 'Signed',
           status: { id: '1', name: 'To Do' },
           issuetype: { id: 't', name: 'Task' },
+          project: { id: '1', key: 'ENG' },
           created: '2025-02-01',
           updated: '2025-02-01',
         },
@@ -209,6 +210,41 @@ describe('Jira webhook', () => {
       rawBody: body,
     })
     expect(result.handled).toBe(true)
+  })
+
+  test('ignores issue updates from other projects', async () => {
+    const db = new Database(':memory:')
+    seedJira(db)
+    delete process.env['JIRA_WEBHOOK_SECRET']
+    const client = new JiraClient({
+      baseUrl: jiraConfig.baseUrl,
+      email: jiraConfig.email,
+      apiToken: jiraConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, jiraConfig, client)
+    const body = JSON.stringify({
+      webhookEvent: 'jira:issue_updated',
+      issue: {
+        id: '500',
+        key: 'OPS-500',
+        fields: {
+          summary: 'Wrong project',
+          status: { id: '1', name: 'To Do' },
+          issuetype: { id: 't', name: 'Task' },
+          labels: [],
+          comment: { total: 0 },
+          created: '2025-02-01',
+          updated: '2025-02-01',
+          project: { id: '2', key: 'OPS' },
+        },
+      },
+    })
+
+    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+
+    expect(result.handled).toBe(false)
+    expect(result.message).toContain('Ignoring issue from project')
+    expect(getCachedJiraTasks(db).find((task) => task.externalRef === 'OPS-500')).toBeUndefined()
   })
 })
 

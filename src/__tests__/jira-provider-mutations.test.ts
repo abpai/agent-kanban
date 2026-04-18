@@ -195,7 +195,7 @@ function standardSyncRoutes(opts: SyncRoutesOpts): StubRoute[] {
       handler: () => jsonResponse(opts.issueTypes ?? []),
     },
     {
-      match: (u) => u.includes('/rest/api/3/search'),
+      match: (u) => u.includes('/rest/api/3/search/jql'),
       handler: () =>
         jsonResponse({
           startAt: 0,
@@ -321,10 +321,10 @@ describe('JiraProvider mutations', () => {
     })
     // Replace the /search route to include createdIssues dynamically.
     const searchRouteIndex = syncRoutes.findIndex((r) =>
-      r.match('https://example.atlassian.net/rest/api/3/search'),
+      r.match('https://example.atlassian.net/rest/api/3/search/jql'),
     )
     syncRoutes[searchRouteIndex] = {
-      match: (u) => u.includes('/rest/api/3/search'),
+      match: (u) => u.includes('/rest/api/3/search/jql'),
       handler: () => {
         const all = [makeJiraIssueFixture(seedIssues[0]!), ...createdIssues]
         return jsonResponse({
@@ -669,10 +669,10 @@ describe('JiraProvider mutations', () => {
       issues: [makeJiraIssueFixture(seedIssues[0]!)],
     })
     const searchIdx = syncRoutes.findIndex((r) =>
-      r.match('https://example.atlassian.net/rest/api/3/search'),
+      r.match('https://example.atlassian.net/rest/api/3/search/jql'),
     )
     syncRoutes[searchIdx] = {
-      match: (u) => u.includes('/rest/api/3/search'),
+      match: (u) => u.includes('/rest/api/3/search/jql'),
       handler: () => {
         const all = [makeJiraIssueFixture(seedIssues[0]!), ...createdIssues]
         return jsonResponse({
@@ -723,10 +723,10 @@ describe('JiraProvider mutations', () => {
       issues: [makeJiraIssueFixture(seedIssues[0]!)],
     })
     const searchIdx = syncRoutes.findIndex((r) =>
-      r.match('https://example.atlassian.net/rest/api/3/search'),
+      r.match('https://example.atlassian.net/rest/api/3/search/jql'),
     )
     syncRoutes[searchIdx] = {
-      match: (u) => u.includes('/rest/api/3/search'),
+      match: (u) => u.includes('/rest/api/3/search/jql'),
       handler: () => {
         const all = [makeJiraIssueFixture(seedIssues[0]!), ...createdIssues]
         return jsonResponse({

@@ -141,6 +141,7 @@ describe('JiraClient', () => {
     })
     expect(lastRequest).not.toBeNull()
     const url = lastRequest!.url
+    expect(url).toContain('/rest/api/3/search/jql')
     expect(url).toContain('startAt=50')
     expect(url).toContain('maxResults=100')
     // URLSearchParams canonical form uses '+' for spaces and %3D for '='

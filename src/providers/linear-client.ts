@@ -48,7 +48,6 @@ interface LinearIssueNode {
   project?: { id: string; name: string; url?: string | null; state?: string | null } | null
   state: { id: string; name: string; position: number }
   labels?: { nodes: Array<{ id: string; name: string }> }
-  comments?: { totalCount?: number } | null
 }
 
 export class LinearClient {
@@ -241,9 +240,6 @@ export class LinearClient {
                 labels {
                   nodes { id name }
                 }
-                comments {
-                  totalCount
-                }
               }
               pageInfo {
                 hasNextPage
@@ -264,7 +260,7 @@ export class LinearClient {
               }
             : null,
           labels: issue.labels?.nodes.map((l) => l.name) ?? [],
-          commentCount: issue.comments?.totalCount ?? 0,
+          commentCount: 0,
         })),
       )
       after = data.issues.pageInfo.hasNextPage ? data.issues.pageInfo.endCursor : null
@@ -302,7 +298,6 @@ export class LinearClient {
               project { id name url state }
               state { id name position }
               labels { nodes { id name } }
-              comments { totalCount }
             }
           }
         }
@@ -326,7 +321,7 @@ export class LinearClient {
         ? {
             ...node,
             labels: node.labels?.nodes.map((l) => l.name) ?? [],
-            commentCount: node.comments?.totalCount ?? 0,
+            commentCount: 0,
           }
         : null,
     }

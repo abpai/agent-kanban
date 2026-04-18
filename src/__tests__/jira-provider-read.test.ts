@@ -138,7 +138,7 @@ function standardRoutes(opts: {
       handler: () => jsonResponse(opts.issueTypes ?? issueTypesFixture),
     },
     {
-      match: (u) => u.includes('/rest/api/3/search'),
+      match: (u) => u.includes('/rest/api/3/search/jql'),
       handler:
         opts.searchHandler ??
         (() =>
