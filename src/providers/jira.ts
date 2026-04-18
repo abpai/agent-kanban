@@ -48,6 +48,17 @@ import type {
 } from './types.ts'
 
 const SYNC_INTERVAL_MS = 30_000
+const WEBHOOK_STRETCH_WINDOW_MS = 5 * 60_000
+const WEBHOOK_STRETCHED_INTERVAL_MS = 5 * 60_000
+
+function effectiveSyncInterval(lastWebhookAt: string | null, now: number): number {
+  if (!lastWebhookAt) return SYNC_INTERVAL_MS
+  const lastWebhookMs = Date.parse(lastWebhookAt)
+  if (!Number.isFinite(lastWebhookMs)) return SYNC_INTERVAL_MS
+  return now - lastWebhookMs < WEBHOOK_STRETCH_WINDOW_MS
+    ? WEBHOOK_STRETCHED_INTERVAL_MS
+    : SYNC_INTERVAL_MS
+}
 
 // Default canonical->Jira priority name mapping. A Jira admin may rename
 // priorities; the write path looks up the resolved name (case-insensitive)
@@ -92,7 +103,9 @@ export class JiraProvider implements KanbanProvider {
   private async sync(force = false): Promise<void> {
     const meta = loadJiraSyncMeta(this.db)
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
-    if (!force && lastSyncAtMs && Date.now() - lastSyncAtMs < SYNC_INTERVAL_MS) return
+    const now = Date.now()
+    const interval = effectiveSyncInterval(meta.lastWebhookAt, now)
+    if (!force && lastSyncAtMs && now - lastSyncAtMs < interval) return
 
     // 1. Resolve project.
     const project = await this.client.getProject(this.config.projectKey)
@@ -556,7 +569,7 @@ export class JiraProvider implements KanbanProvider {
 
     if (event === 'jira:issue_deleted') {
       deleteJiraIssue(this.db, issue.id)
-      saveJiraSyncMeta(this.db, { lastSyncAt: new Date().toISOString() })
+      saveJiraSyncMeta(this.db, { lastWebhookAt: new Date().toISOString() })
       return { handled: true }
     }
 
@@ -582,7 +595,7 @@ export class JiraProvider implements KanbanProvider {
           updatedAt: issue.fields.updated,
         },
       ])
-      saveJiraSyncMeta(this.db, { lastSyncAt: new Date().toISOString() })
+      saveJiraSyncMeta(this.db, { lastWebhookAt: new Date().toISOString() })
       return { handled: true }
     }
 

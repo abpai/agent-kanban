@@ -19,6 +19,7 @@ export interface JiraSyncMeta {
   boardId: number | null
   lastSyncAt: string | null
   lastIssueUpdatedAt: string | null
+  lastWebhookAt: string | null
 }
 
 export interface JiraCacheConfig {
@@ -134,7 +135,13 @@ function getMeta(db: Database, key: string): string | null {
   return row?.value ?? null
 }
 
-const META_KEYS = ['projectKey', 'boardId', 'lastSyncAt', 'lastIssueUpdatedAt'] as const
+const META_KEYS = [
+  'projectKey',
+  'boardId',
+  'lastSyncAt',
+  'lastIssueUpdatedAt',
+  'lastWebhookAt',
+] as const
 type MetaKey = (typeof META_KEYS)[number]
 
 export function saveJiraSyncMeta(db: Database, meta: Partial<JiraSyncMeta>): void {
@@ -197,6 +204,7 @@ export function loadJiraSyncMeta(db: Database): JiraSyncMeta {
     boardId: boardId === null || Number.isNaN(boardId) ? null : boardId,
     lastSyncAt: getMeta(db, 'lastSyncAt'),
     lastIssueUpdatedAt: getMeta(db, 'lastIssueUpdatedAt'),
+    lastWebhookAt: getMeta(db, 'lastWebhookAt'),
   }
 }
 

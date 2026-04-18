@@ -16,6 +16,7 @@ import {
 import {
   getCachedTasks as getCachedLinearTasks,
   initLinearCacheSchema,
+  loadSyncMeta,
   replaceStates,
   saveSyncMeta,
   upsertIssues,
@@ -293,6 +294,51 @@ describe('Linear webhook', () => {
     const result = await provider.handleWebhook({ headers: {}, rawBody: body })
     expect(result.handled).toBe(true)
     expect(getCachedLinearTasks(db).find((t) => t.externalRef === 'DX-9')).toBeUndefined()
+  })
+
+  test('create event stamps lastWebhookAt without clobbering team/lastSyncAt', async () => {
+    const db = new Database(':memory:')
+    seedLinear(db)
+    delete process.env['LINEAR_WEBHOOK_SECRET']
+    const provider = new LinearProvider(db, 'tid', 'key')
+    const body = JSON.stringify({
+      action: 'create',
+      type: 'Issue',
+      data: {
+        id: 'i2',
+        identifier: 'DX-2',
+        title: 'Webhook-driven',
+        createdAt: '2025-02-01T00:00:00.000Z',
+        updatedAt: '2025-02-01T00:00:00.000Z',
+        state: { id: 's1', name: 'Todo', position: 0 },
+      },
+    })
+    const before = Date.now()
+    await provider.handleWebhook({ headers: {}, rawBody: body })
+    const meta = loadSyncMeta(db)
+    expect(meta.lastWebhookAt).not.toBeNull()
+    expect(new Date(meta.lastWebhookAt!).getTime()).toBeGreaterThanOrEqual(before)
+    expect(meta.team?.id).toBe('tid')
+    expect(meta.lastSyncAt).toBe('2025-01-01T00:00:00.000Z')
+  })
+
+  test('linear partial saveSyncMeta preserves omitted keys; null clears', () => {
+    const db = new Database(':memory:')
+    initLinearCacheSchema(db)
+    saveSyncMeta(db, {
+      team: { id: 't', key: 'K', name: 'N' },
+      lastSyncAt: '2025-01-01T00:00:00.000Z',
+    })
+    saveSyncMeta(db, { lastWebhookAt: '2025-01-02T00:00:00.000Z' })
+    let meta = loadSyncMeta(db)
+    expect(meta.team?.id).toBe('t')
+    expect(meta.lastSyncAt).toBe('2025-01-01T00:00:00.000Z')
+    expect(meta.lastWebhookAt).toBe('2025-01-02T00:00:00.000Z')
+
+    saveSyncMeta(db, { team: null })
+    meta = loadSyncMeta(db)
+    expect(meta.team).toBeNull()
+    expect(meta.lastSyncAt).toBe('2025-01-01T00:00:00.000Z')
   })
 
   test('rejects invalid linear-signature', async () => {

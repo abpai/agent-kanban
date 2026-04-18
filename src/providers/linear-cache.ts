@@ -15,6 +15,7 @@ export interface LinearSyncMeta {
   team: ProviderTeamInfo | null
   lastSyncAt: string | null
   lastIssueUpdatedAt: string | null
+  lastWebhookAt: string | null
 }
 
 export function initLinearCacheSchema(db: Database): void {
@@ -95,6 +96,10 @@ function setMeta(db: Database, key: string, value: string): void {
   ).run({ $key: key, $value: value })
 }
 
+function deleteMeta(db: Database, key: string): void {
+  db.query('DELETE FROM linear_sync_meta WHERE key = $key').run({ $key: key })
+}
+
 function getMeta(db: Database, key: string): string | null {
   const row = db.query('SELECT value FROM linear_sync_meta WHERE key = $key').get({
     $key: key,
@@ -102,10 +107,25 @@ function getMeta(db: Database, key: string): string | null {
   return row?.value ?? null
 }
 
-export function saveSyncMeta(db: Database, meta: LinearSyncMeta): void {
-  if (meta.team) setMeta(db, 'team', JSON.stringify(meta.team))
-  if (meta.lastSyncAt) setMeta(db, 'lastSyncAt', meta.lastSyncAt)
-  if (meta.lastIssueUpdatedAt) setMeta(db, 'lastIssueUpdatedAt', meta.lastIssueUpdatedAt)
+const META_KEYS = ['team', 'lastSyncAt', 'lastIssueUpdatedAt', 'lastWebhookAt'] as const
+type MetaKey = (typeof META_KEYS)[number]
+
+export function saveSyncMeta(db: Database, meta: Partial<LinearSyncMeta>): void {
+  for (const key of META_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
+    const value = (meta as Record<MetaKey, unknown>)[key]
+    if (value === null) {
+      deleteMeta(db, key)
+      continue
+    }
+    if (key === 'team') {
+      setMeta(db, key, JSON.stringify(value))
+      continue
+    }
+    if (typeof value === 'string') {
+      setMeta(db, key, value)
+    }
+  }
 }
 
 export function loadSyncMeta(db: Database): LinearSyncMeta {
@@ -114,6 +134,7 @@ export function loadSyncMeta(db: Database): LinearSyncMeta {
     team: teamRaw ? (JSON.parse(teamRaw) as ProviderTeamInfo) : null,
     lastSyncAt: getMeta(db, 'lastSyncAt'),
     lastIssueUpdatedAt: getMeta(db, 'lastIssueUpdatedAt'),
+    lastWebhookAt: getMeta(db, 'lastWebhookAt'),
   }
 }
 

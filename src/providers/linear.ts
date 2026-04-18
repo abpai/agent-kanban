@@ -41,6 +41,17 @@ import type {
 } from './types.ts'
 
 const SYNC_INTERVAL_MS = 30_000
+const WEBHOOK_STRETCH_WINDOW_MS = 5 * 60_000
+const WEBHOOK_STRETCHED_INTERVAL_MS = 5 * 60_000
+
+function effectiveSyncInterval(lastWebhookAt: string | null, now: number): number {
+  if (!lastWebhookAt) return SYNC_INTERVAL_MS
+  const lastWebhookMs = Date.parse(lastWebhookAt)
+  if (!Number.isFinite(lastWebhookMs)) return SYNC_INTERVAL_MS
+  return now - lastWebhookMs < WEBHOOK_STRETCH_WINDOW_MS
+    ? WEBHOOK_STRETCHED_INTERVAL_MS
+    : SYNC_INTERVAL_MS
+}
 
 function toLinearPriority(priority: Task['priority'] | undefined): number | undefined {
   switch (priority) {
@@ -73,7 +84,9 @@ export class LinearProvider implements KanbanProvider {
   private async sync(force = false): Promise<void> {
     const meta = loadSyncMeta(this.db)
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
-    if (!force && lastSyncAtMs && Date.now() - lastSyncAtMs < SYNC_INTERVAL_MS) return
+    const now = Date.now()
+    const interval = effectiveSyncInterval(meta.lastWebhookAt, now)
+    if (!force && lastSyncAtMs && now - lastSyncAtMs < interval) return
 
     const [team, users, projects, issues] = await Promise.all([
       this.client.getTeam(this.teamId),
@@ -363,11 +376,7 @@ export class LinearProvider implements KanbanProvider {
 
     if (body.action === 'remove') {
       deleteLinearIssue(this.db, data.id)
-      saveSyncMeta(this.db, {
-        team: null,
-        lastSyncAt: new Date().toISOString(),
-        lastIssueUpdatedAt: null,
-      })
+      saveSyncMeta(this.db, { lastWebhookAt: new Date().toISOString() })
       return { handled: true }
     }
 
@@ -395,6 +404,7 @@ export class LinearProvider implements KanbanProvider {
           updatedAt: data.updatedAt,
         },
       ])
+      saveSyncMeta(this.db, { lastWebhookAt: new Date().toISOString() })
       return { handled: true }
     }
 
