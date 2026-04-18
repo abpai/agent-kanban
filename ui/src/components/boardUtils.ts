@@ -97,6 +97,11 @@ export function removeTaskById(board: BoardView, id: string): BoardView {
   }
 }
 
+export function upsertTaskInColumn(board: BoardView, task: Task, columnName: string): BoardView {
+  const withoutTask = removeTaskById(board, task.id)
+  return insertTask(withoutTask, task, columnName)
+}
+
 export function makeTempId(): string {
   return `tmp_${Math.random().toString(36).slice(2, 10)}`
 }

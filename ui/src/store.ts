@@ -10,6 +10,7 @@ import {
   patchTask,
   removeTaskById,
   replaceTask,
+  upsertTaskInColumn,
 } from './components/boardUtils'
 import type {
   BoardConfig,
@@ -329,9 +330,17 @@ export const useStore = create<AppState>((set, get) => ({
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
-        if (data.type === 'refresh') {
-          get().fetchAll()
+        if (data.type === 'task:upsert' && data.task && data.columnName) {
+          const current = get().board
+          if (current) set({ board: upsertTaskInColumn(current, data.task, data.columnName) })
+          return
         }
+        if (data.type === 'task:delete' && data.id) {
+          const current = get().board
+          if (current) set({ board: removeTaskById(current, data.id) })
+          return
+        }
+        get().fetchAll()
       } catch {
         // ignore malformed messages
       }

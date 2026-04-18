@@ -58,6 +58,46 @@ describe('handleRequest', () => {
     expect(result.mutated).toBe(true)
   })
 
+  test('emits task:upsert event on create', async () => {
+    const req = new Request('http://localhost/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Optimistic', column: 'backlog' }),
+    })
+    const result = await handleRequest(provider, req)
+
+    expect(result.mutated).toBe(true)
+    expect(result.event?.type).toBe('task:upsert')
+    if (result.event?.type !== 'task:upsert') throw new Error('unreachable')
+    expect(result.event.task.title).toBe('Optimistic')
+    expect(result.event.columnName.toLowerCase()).toBe('backlog')
+  })
+
+  test('emits task:upsert event on move across columns', async () => {
+    const task = addTask(db, 'Movable')
+    const req = new Request(`http://localhost/api/tasks/${task.id}/move`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ column: 'in-progress' }),
+    })
+    const result = await handleRequest(provider, req)
+
+    expect(result.mutated).toBe(true)
+    expect(result.event?.type).toBe('task:upsert')
+    if (result.event?.type !== 'task:upsert') throw new Error('unreachable')
+    expect(result.event.task.id).toBe(task.id)
+    expect(result.event.columnName.toLowerCase()).toBe('in-progress')
+  })
+
+  test('emits task:delete event on delete', async () => {
+    const task = addTask(db, 'Goodbye')
+    const req = new Request(`http://localhost/api/tasks/${task.id}`, { method: 'DELETE' })
+    const result = await handleRequest(provider, req)
+
+    expect(result.mutated).toBe(true)
+    expect(result.event).toEqual({ type: 'task:delete', id: task.id })
+  })
+
   test('returns bootstrap payload', async () => {
     const req = new Request('http://localhost/api/bootstrap', { method: 'GET' })
     const result = await handleRequest(provider, req)
