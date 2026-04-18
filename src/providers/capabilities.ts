@@ -23,3 +23,15 @@ export const LINEAR_CAPABILITIES: ProviderCapabilities = {
   bulk: false,
   configEdit: false,
 }
+
+export const JIRA_CAPABILITIES: ProviderCapabilities = {
+  taskCreate: true,
+  taskUpdate: true,
+  taskMove: true,
+  taskDelete: false,
+  activity: false,
+  metrics: false,
+  columnCrud: false,
+  bulk: false,
+  configEdit: false,
+}

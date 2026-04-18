@@ -50,7 +50,7 @@ function parseCliArgs(argv: string[]): ParsedArgs {
 }
 
 function requireLocalProvider(providerType: string, feature: string): void {
-  if (providerType === 'linear') unsupportedOperation(`${feature} is only available in local mode`)
+  if (providerType !== 'local') unsupportedOperation(`${feature} is only available in local mode`)
 }
 
 async function routeTask(
@@ -197,7 +197,7 @@ async function routeConfig(
   positionals: string[],
   values: Record<string, unknown>,
 ): Promise<CliOutput> {
-  if (provider.type === 'linear') {
+  if (provider.type !== 'local') {
     if (action === 'show' || action === undefined) {
       return success(await provider.getConfig())
     }
