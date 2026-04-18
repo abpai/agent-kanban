@@ -4,6 +4,7 @@ import { Header } from './components/Header'
 import { Board } from './components/Board'
 import { TaskDetail } from './components/TaskDetail'
 import { NewTaskModal } from './components/NewTaskModal'
+import { ConflictModal } from './components/ConflictModal'
 
 export function App() {
   const { startPolling, stopPolling, disconnectWebSocket, error, selectedTaskId, board, loading } =
@@ -24,6 +25,7 @@ export function App() {
       {loading && !board ? <div className="loading">Loading board...</div> : <Board />}
       <NewTaskModal />
       {selectedTaskId && <TaskDetail />}
+      <ConflictModal />
     </div>
   )
 }

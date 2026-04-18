@@ -51,6 +51,9 @@ Provider support lives in `src/providers/`:
 | column CRUD             | yes   | no     |
 | bulk operations         | yes   | no     |
 | config edit             | yes   | no     |
+| webhooks                | no    | yes    |
+| labels (read)           | no    | yes    |
+| conflict detection      | yes   | yes    |
 
 The CLI, API server, and web UI check capabilities before calling the provider.
 Unsupported operations return `UNSUPPORTED_OPERATION` with exit code `1`. The UI
@@ -83,12 +86,33 @@ The shipped work includes:
 
 1. Single Linear team per instance
 2. API key auth only, with no OAuth flow
-3. No webhook sync yet, so refresh is polling- or user-driven
+3. Webhook sync is optional; see [Webhooks](#webhooks). Polling remains the
+   fallback.
 4. Some local-only operations intentionally remain unsupported
+
+## Webhooks
+
+`agent-kanban` accepts Linear webhooks at `POST /api/webhooks/linear`. The
+handler mirrors Linear's standard payload (`{ action, type, data }`) and
+upserts or deletes the cached issue without waiting for the next poll.
+
+Supported events: `Issue.create`, `Issue.update`, `Issue.remove`.
+
+### Signature verification
+
+If `LINEAR_WEBHOOK_SECRET` is set, the handler verifies HMAC-SHA256 of the
+raw body against the `Linear-Signature` header (hex digest). Requests with a
+missing or mismatched signature return HTTP 401. If the env var is unset the
+endpoint is open — put it behind a trusted network boundary.
+
+### Public URL
+
+Webhooks require a public URL. For local development, tunnel
+`http://localhost:3000/api/webhooks/linear` with `bun x cloudflared` or
+similar, then register the tunnel URL from the Linear settings UI.
 
 ## Future work
 
-- Labels and comments synced across both providers
+- Label writes synced from the UI back to Linear
 - Delete-as-archive behavior in Linear mode
-- Webhook-based real-time sync
 - Multi-team support

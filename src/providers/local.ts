@@ -14,6 +14,7 @@ import {
 } from '../db.ts'
 import { getBoardMetrics, getDiscoveredAssignees, getDiscoveredProjects } from '../metrics.ts'
 import type { BoardBootstrap, BoardConfig, Task } from '../types.ts'
+import { ErrorCode, KanbanError } from '../errors.ts'
 import { LOCAL_CAPABILITIES } from './capabilities.ts'
 import type {
   CreateTaskInput,
@@ -38,11 +39,18 @@ function buildLocalConfig(
 }
 
 function enrichTask(task: Task): Task {
+  const revision = task.revision ?? 0
+  const assignees = task.assignee ? [task.assignee] : []
   return {
     ...task,
     providerId: task.id,
     externalRef: task.id,
     url: null,
+    assignees,
+    labels: [],
+    comment_count: 0,
+    version: String(revision),
+    source_updated_at: null,
   }
 }
 
@@ -102,7 +110,19 @@ export class LocalProvider implements KanbanProvider {
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput) {
-    return enrichTask(updateTask(this.db, idOrRef, input))
+    if (input.expectedVersion !== undefined) {
+      const current = getTask(this.db, idOrRef)
+      const currentVersion = String(current.revision ?? 0)
+      if (currentVersion !== input.expectedVersion) {
+        throw new KanbanError(
+          ErrorCode.CONFLICT,
+          `Task ${idOrRef} was modified since you loaded it (expected version ${input.expectedVersion}, current ${currentVersion})`,
+        )
+      }
+    }
+    const updates: Omit<UpdateTaskInput, 'expectedVersion'> = { ...input }
+    delete (updates as UpdateTaskInput).expectedVersion
+    return enrichTask(updateTask(this.db, idOrRef, updates))
   }
 
   async moveTask(idOrRef: string, column: string) {

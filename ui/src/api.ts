@@ -11,10 +11,22 @@ import { withBasePath } from './base'
 
 const BASE = withBasePath('/api')
 
+export class ApiError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init)
   const body = await res.json()
-  if (!body.ok) throw new Error(body.error?.message ?? 'Unknown error')
+  if (!body.ok) {
+    throw new ApiError(body.error?.code ?? 'UNKNOWN', body.error?.message ?? 'Unknown error')
+  }
   return body.data as T
 }
 
@@ -46,6 +58,7 @@ export const api = {
       priority?: Priority
       assignee?: string
       project?: string
+      expectedVersion?: string
     },
   ) =>
     fetchJson<Task>(`/tasks/${id}`, {

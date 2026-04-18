@@ -25,6 +25,7 @@ function statusForCode(code: string): number {
   if (code === ErrorCode.TASK_NOT_FOUND || code === ErrorCode.COLUMN_NOT_FOUND) return 404
   if (code === ErrorCode.PROVIDER_AUTH_FAILED) return 401
   if (code === ErrorCode.PROVIDER_RATE_LIMITED) return 429
+  if (code === ErrorCode.CONFLICT) return 409
   if (code === ErrorCode.UNSUPPORTED_OPERATION) return 400
   if (code === ErrorCode.PROVIDER_NOT_CONFIGURED) return 500
   return 400
@@ -197,6 +198,66 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
       data: await provider.patchConfig(body),
     }))
     return { response, mutated: response.ok }
+  }
+
+  const webhookMatch = path.match(/^\/api\/webhooks\/([^/]+)$/)
+  if (webhookMatch && method === 'POST') {
+    const target = decodeURIComponent(webhookMatch[1]!)
+    if (target !== provider.type) {
+      return {
+        response: json(
+          {
+            ok: false,
+            error: {
+              code: 'UNSUPPORTED_OPERATION',
+              message: `Webhook target '${target}' does not match active provider '${provider.type}'`,
+            },
+          },
+          400,
+        ),
+        mutated: false,
+      }
+    }
+    if (!provider.handleWebhook) {
+      return {
+        response: json(
+          {
+            ok: false,
+            error: {
+              code: 'UNSUPPORTED_OPERATION',
+              message: `Provider '${provider.type}' does not accept webhooks`,
+            },
+          },
+          400,
+        ),
+        mutated: false,
+      }
+    }
+    const rawBody = await req.text()
+    const headers: Record<string, string> = {}
+    req.headers.forEach((value, key) => {
+      headers[key] = value
+    })
+    const result = await provider.handleWebhook({ headers, rawBody })
+    if (result.unauthorized) {
+      return {
+        response: json(
+          {
+            ok: false,
+            error: { code: 'PROVIDER_AUTH_FAILED', message: result.message ?? 'Unauthorized' },
+          },
+          401,
+        ),
+        mutated: false,
+      }
+    }
+    return {
+      response: json({
+        ok: true,
+        data: { handled: result.handled, message: result.message ?? null },
+      }),
+      mutated: result.handled,
+    }
   }
 
   return {

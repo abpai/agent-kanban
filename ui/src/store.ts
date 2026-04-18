@@ -1,7 +1,16 @@
 import { create } from 'zustand'
-import { api } from './api'
+import { api, ApiError } from './api'
 import { withBasePath } from './base'
 import { safeLocalStorageGet, safeLocalStorageSet } from './utils'
+import {
+  findTask,
+  insertTask,
+  makeTempId,
+  moveTaskInBoard,
+  patchTask,
+  removeTaskById,
+  replaceTask,
+} from './components/boardUtils'
 import type {
   BoardConfig,
   BoardMetrics,
@@ -10,10 +19,23 @@ import type {
   ProviderCapabilities,
   ProviderTeamInfo,
   ActivityEntry,
+  Task,
 } from './types'
 
 function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
+}
+
+export interface PendingConflict {
+  taskId: string
+  attemptedUpdates: {
+    title?: string
+    description?: string
+    priority?: Priority
+    assignee?: string
+    project?: string
+  }
+  message: string
 }
 
 const defaultCapabilities: ProviderCapabilities = {
@@ -49,7 +71,7 @@ interface AppState {
   activity: ActivityEntry[]
   metrics: BoardMetrics | null
   config: BoardConfig | null
-  provider: 'local' | 'linear'
+  provider: 'local' | 'linear' | 'jira'
   capabilities: ProviderCapabilities
   team: ProviderTeamInfo | null
   selectedTaskId: string | null
@@ -90,9 +112,13 @@ interface AppState {
       assignee?: string
       project?: string
     },
+    opts?: { expectedVersion?: string | null },
   ) => Promise<void>
   moveTask: (id: string, column: string) => Promise<void>
   removeTask: (id: string) => Promise<void>
+  pendingConflict: PendingConflict | null
+  resolveConflictKeepLocal: () => Promise<void>
+  resolveConflictDiscardLocal: () => Promise<void>
   connectWebSocket: () => void
   disconnectWebSocket: () => void
   startPolling: (intervalMs?: number) => void
@@ -120,6 +146,7 @@ export const useStore = create<AppState>((set, get) => ({
   wsConnected: false,
   ws: null,
   wsReconnectTimer: null,
+  pendingConflict: null,
 
   fetchBootstrap: async () => {
     try {
@@ -174,20 +201,105 @@ export const useStore = create<AppState>((set, get) => ({
     set({ showNewTaskModal: show, newTaskDefaultColumn: defaultColumn ?? null }),
 
   createTask: async (data) => {
-    await api.createTask(data)
+    const board = get().board
+    if (!board) {
+      await api.createTask(data)
+      return
+    }
+    const columnName = data.column ?? 'backlog'
+    const tempId = makeTempId()
+    const now = new Date().toISOString()
+    const optimistic: Task = {
+      id: tempId,
+      providerId: tempId,
+      externalRef: tempId,
+      url: null,
+      title: data.title,
+      description: data.description ?? '',
+      column_id: '',
+      position: 0,
+      priority: data.priority ?? 'medium',
+      assignee: data.assignee ?? '',
+      assignees: data.assignee ? [data.assignee] : [],
+      labels: [],
+      comment_count: 0,
+      project: data.project ?? '',
+      metadata: '{}',
+      created_at: now,
+      updated_at: now,
+      version: '0',
+      source_updated_at: null,
+    }
+    const snapshot = board
+    set({ board: insertTask(board, optimistic, columnName) })
+    try {
+      const created = await api.createTask(data)
+      const current = get().board
+      if (current) set({ board: replaceTask(current, tempId, created) })
+    } catch (err) {
+      set({ board: snapshot })
+      throw err
+    }
   },
 
-  updateTask: async (id, data) => {
-    await api.updateTask(id, data)
+  updateTask: async (id, data, opts) => {
+    const board = get().board
+    const snapshot = board
+    if (board) set({ board: patchTask(board, id, data) })
+    const payload: Parameters<typeof api.updateTask>[1] = { ...data }
+    if (opts?.expectedVersion) payload.expectedVersion = opts.expectedVersion
+    try {
+      const updated = await api.updateTask(id, payload)
+      const current = get().board
+      if (current) set({ board: replaceTask(current, id, updated) })
+    } catch (err) {
+      if (snapshot) set({ board: snapshot })
+      if (err instanceof ApiError && err.code === 'CONFLICT') {
+        set({ pendingConflict: { taskId: id, attemptedUpdates: data, message: err.message } })
+        return
+      }
+      throw err
+    }
   },
 
   moveTask: async (id, column) => {
-    await api.moveTask(id, column)
+    const board = get().board
+    const snapshot = board
+    if (board) set({ board: moveTaskInBoard(board, id, column) })
+    try {
+      const moved = await api.moveTask(id, column)
+      const current = get().board
+      if (current) set({ board: replaceTask(current, id, moved) })
+    } catch (err) {
+      if (snapshot) set({ board: snapshot })
+      throw err
+    }
   },
 
   removeTask: async (id) => {
-    await api.deleteTask(id)
-    set({ selectedTaskId: null })
+    const board = get().board
+    const snapshot = board
+    const found = board ? findTask(board, id) : null
+    if (board) set({ board: removeTaskById(board, id), selectedTaskId: null })
+    try {
+      await api.deleteTask(id)
+    } catch (err) {
+      if (snapshot) set({ board: snapshot, selectedTaskId: found ? id : null })
+      throw err
+    }
+  },
+
+  resolveConflictKeepLocal: async () => {
+    const conflict = get().pendingConflict
+    if (!conflict) return
+    set({ pendingConflict: null })
+    await api.updateTask(conflict.taskId, conflict.attemptedUpdates)
+    await get().fetchAll()
+  },
+
+  resolveConflictDiscardLocal: async () => {
+    set({ pendingConflict: null })
+    await get().fetchAll()
   },
 
   connectWebSocket: () => {

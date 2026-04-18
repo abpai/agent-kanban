@@ -75,7 +75,7 @@ export function TaskDetail() {
     if (editingField === 'priority') updates.priority = editValue as Priority
     if (editingField === 'assignee') updates.assignee = editValue
     if (editingField === 'project') updates.project = editValue
-    await updateTask(task!.id, updates)
+    await updateTask(task!.id, updates, { expectedVersion: task!.version })
     setEditingField(null)
     setEditValue('')
   }
@@ -296,6 +296,26 @@ export function TaskDetail() {
             </div>
           )}
         </div>
+
+        {task.labels.length > 0 && (
+          <div className="detailField">
+            <div className="detailLabel">Labels</div>
+            <div className="detailValue" style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {task.labels.map((label) => (
+                <span key={label} className="taskLabel">
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {task.comment_count > 0 && (
+          <div className="detailField">
+            <div className="detailLabel">Comments</div>
+            <div className="detailValue">{task.comment_count}</div>
+          </div>
+        )}
 
         {task.metadata && task.metadata !== '{}' && (
           <div className="detailField">

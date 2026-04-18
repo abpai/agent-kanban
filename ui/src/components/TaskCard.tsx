@@ -25,6 +25,16 @@ export function TaskCard({ task }: TaskCardProps) {
         </div>
       </div>
       {task.description && <div className="taskDescription">{task.description}</div>}
+      {task.labels.length > 0 && (
+        <div className="taskLabels">
+          {task.labels.slice(0, 3).map((label) => (
+            <span key={label} className="taskLabel">
+              {label}
+            </span>
+          ))}
+          {task.labels.length > 3 && <span className="taskLabel">+{task.labels.length - 3}</span>}
+        </div>
+      )}
       <div className="taskFooter">
         <div className="taskFooterLeft">
           {task.assignee && (
@@ -36,6 +46,11 @@ export function TaskCard({ task }: TaskCardProps) {
             </>
           )}
           {task.project && <span className="projectTag">{task.project}</span>}
+          {task.comment_count > 0 && (
+            <span className="commentCount" title={`${task.comment_count} comments`}>
+              💬 {task.comment_count}
+            </span>
+          )}
         </div>
         <span className="timestamp">{relativeTime(task.updated_at)}</span>
       </div>
