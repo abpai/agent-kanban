@@ -76,7 +76,71 @@ export function initLinearCacheSchema(db: Database): void {
   `)
   db.run('CREATE INDEX IF NOT EXISTS idx_linear_issues_state_id ON linear_issues(state_id)')
   db.run('CREATE INDEX IF NOT EXISTS idx_linear_issues_updated_at ON linear_issues(updated_at)')
+  db.run(`
+    CREATE TABLE IF NOT EXISTS linear_activity (
+      issue_id TEXT NOT NULL,
+      history_id TEXT NOT NULL,
+      item_field TEXT NOT NULL,
+      from_value TEXT,
+      to_value TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (issue_id, history_id, item_field)
+    )
+  `)
+  db.run(
+    'CREATE INDEX IF NOT EXISTS linear_activity_created_at_idx ON linear_activity(created_at DESC)',
+  )
   migrateLinearCacheSchema(db)
+}
+
+export interface LinearActivityRow {
+  issue_id: string
+  history_id: string
+  item_field: string
+  from_value: string | null
+  to_value: string | null
+  created_at: string
+}
+
+export function saveLinearActivity(db: Database, rows: LinearActivityRow[]): void {
+  if (rows.length === 0) return
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO linear_activity
+     (issue_id, history_id, item_field, from_value, to_value, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  )
+  const tx = db.transaction((items: LinearActivityRow[]) => {
+    for (const r of items) {
+      stmt.run(r.issue_id, r.history_id, r.item_field, r.from_value, r.to_value, r.created_at)
+    }
+  })
+  tx(rows)
+}
+
+export function getCachedLinearActivity(
+  db: Database,
+  params: { issueId?: string; limit?: number } = {},
+): LinearActivityRow[] {
+  const limit = params.limit ?? 100
+  if (params.issueId) {
+    return db
+      .query(
+        `SELECT issue_id, history_id, item_field, from_value, to_value, created_at
+         FROM linear_activity
+         WHERE issue_id = $issueId
+         ORDER BY created_at DESC
+         LIMIT $limit`,
+      )
+      .all({ $issueId: params.issueId, $limit: limit }) as LinearActivityRow[]
+  }
+  return db
+    .query(
+      `SELECT issue_id, history_id, item_field, from_value, to_value, created_at
+       FROM linear_activity
+       ORDER BY created_at DESC
+       LIMIT $limit`,
+    )
+    .all({ $limit: limit }) as LinearActivityRow[]
 }
 
 export function migrateLinearCacheSchema(db: Database): void {
