@@ -92,6 +92,30 @@ export interface JiraIssueType {
   name: string
 }
 
+export interface JiraChangelogItem {
+  field: string
+  fieldtype?: string
+  fromString?: string | null
+  toString?: string | null
+  from?: string | null
+  to?: string | null
+}
+
+export interface JiraChangelogEntry {
+  id: string
+  author?: { accountId?: string; displayName?: string }
+  created: string
+  items: JiraChangelogItem[]
+}
+
+export interface JiraChangelogPage {
+  startAt: number
+  maxResults: number
+  total: number
+  isLast?: boolean
+  values: JiraChangelogEntry[]
+}
+
 interface JiraErrorBody {
   errorMessages?: string[]
   errors?: Record<string, string>
@@ -252,6 +276,21 @@ export class JiraClient {
       'POST',
       `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment`,
       payload,
+    )
+  }
+
+  getChangelog(
+    idOrKey: string,
+    params: { startAt?: number; maxResults?: number } = {},
+  ): Promise<JiraChangelogPage> {
+    const query: QueryParams = {}
+    if (params.startAt !== undefined) query.startAt = params.startAt
+    if (params.maxResults !== undefined) query.maxResults = params.maxResults
+    return this.request<never, JiraChangelogPage>(
+      'GET',
+      `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/changelog`,
+      undefined,
+      query,
     )
   }
 
