@@ -54,7 +54,9 @@
     "prepare": "if [ \"${HUSKY:-1}\" != \"0\" ] && command -v husky >/dev/null 2>&1; then husky install; fi",
     "prepack": "cd ui && bun install --frozen-lockfile && bun run build"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
