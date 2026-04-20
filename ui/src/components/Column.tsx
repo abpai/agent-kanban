@@ -8,9 +8,15 @@ interface ColumnProps {
 }
 
 export function Column({ column }: ColumnProps) {
-  const { filterAssignee, filterProject, setShowNewTaskModal, capabilities } = useStore()
+  const { filterAssignee, filterProject, filterActivityDays, setShowNewTaskModal, capabilities } =
+    useStore()
 
-  const filteredTasks = filterVisibleTasks(column.tasks, filterAssignee, filterProject)
+  const filteredTasks = filterVisibleTasks(
+    column.tasks,
+    filterAssignee,
+    filterProject,
+    filterActivityDays,
+  )
   const dotColor = getColumnColor(column.name)
 
   return (

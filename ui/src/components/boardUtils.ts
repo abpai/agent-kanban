@@ -10,12 +10,20 @@ export const COLUMN_COLORS: Record<string, string> = {
 
 export function filterVisibleTasks(
   tasks: Task[],
-  filterAssignee: string,
-  filterProject: string,
+  filterAssignee: string | null,
+  filterProject: string | null,
+  filterActivityDays: number | null = null,
 ): Task[] {
   return tasks.filter((task) => {
     if (filterAssignee && task.assignee !== filterAssignee) return false
     if (filterProject && task.project !== filterProject) return false
+    if (filterActivityDays !== null) {
+      const updatedAtMs = Date.parse(task.updated_at)
+      if (!Number.isNaN(updatedAtMs)) {
+        const cutoffMs = Date.now() - filterActivityDays * 24 * 60 * 60 * 1000
+        if (updatedAtMs < cutoffMs) return false
+      }
+    }
     return true
   })
 }

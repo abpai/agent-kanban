@@ -9,8 +9,10 @@ export function Header() {
     capabilities,
     filterAssignee,
     filterProject,
+    filterActivityDays,
     setFilterAssignee,
     setFilterProject,
+    setFilterActivityDays,
     setShowNewTaskModal,
     wsConnected,
   } = useStore()
@@ -26,6 +28,8 @@ export function Header() {
   const allProjects = [...new Set([...metricProjects, ...configProjects])].sort()
 
   const providerLabel = provider === 'linear' && team ? `${team.name} (${team.key})` : provider
+  const hasActiveFilters =
+    filterAssignee !== null || filterProject !== null || filterActivityDays !== null
 
   return (
     <div className="header">
@@ -79,6 +83,7 @@ export function Header() {
           <div className="filterLabel">Assignees</div>
           <div className="filterGroup filterScroller">
             <button
+              key="all-assignees"
               className={`filterBtn${filterAssignee === null ? ' active' : ''}`}
               onClick={() => setFilterAssignee(null)}
             >
@@ -96,10 +101,27 @@ export function Header() {
           </div>
         </div>
         <div className="filterSection filterSectionCompact">
-          <div className="filterLabel">Project</div>
-          <div className="filterGroup">
+          <div className="filterLabel">Filters</div>
+          <div className="filterGroup filterGroupWrap">
+            <div className={`filterStatusChip${hasActiveFilters ? ' active' : ''}`}>
+              {hasActiveFilters ? 'Filters active' : 'No filters'}
+            </div>
             <select
-              className="projectDropdown"
+              className={`projectDropdown filterSelect${filterActivityDays !== null ? ' active' : ''}`}
+              value={filterActivityDays ?? ''}
+              onChange={(e) => {
+                const value = e.target.value
+                setFilterActivityDays(value ? (Number(value) as 7 | 14 | 28 | 70) : null)
+              }}
+            >
+              <option value="">Any activity</option>
+              <option value="7">Active in 7d</option>
+              <option value="14">Active in 14d</option>
+              <option value="28">Active in 28d</option>
+              <option value="70">Active in 70d</option>
+            </select>
+            <select
+              className={`projectDropdown filterSelect${filterProject !== null ? ' active' : ''}`}
               value={filterProject ?? ''}
               onChange={(e) => setFilterProject(e.target.value || null)}
             >

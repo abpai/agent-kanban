@@ -15,3 +15,19 @@ export function relativeTime(iso: string): string {
   if (diffMonth < 12) return `${diffMonth}mo ago`
   return `${Math.floor(diffMonth / 12)}y ago`
 }
+
+export function safeLocalStorageGet(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+export function safeLocalStorageSet(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // ignore storage failures
+  }
+}
