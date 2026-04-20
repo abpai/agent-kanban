@@ -5,6 +5,7 @@ export const LOCAL_CAPABILITIES: ProviderCapabilities = {
   taskUpdate: true,
   taskMove: true,
   taskDelete: true,
+  comment: true,
   activity: true,
   metrics: true,
   columnCrud: true,
@@ -17,6 +18,20 @@ export const LINEAR_CAPABILITIES: ProviderCapabilities = {
   taskUpdate: true,
   taskMove: true,
   taskDelete: false,
+  comment: true,
+  activity: false,
+  metrics: false,
+  columnCrud: false,
+  bulk: false,
+  configEdit: false,
+}
+
+export const JIRA_CAPABILITIES: ProviderCapabilities = {
+  taskCreate: true,
+  taskUpdate: true,
+  taskMove: true,
+  taskDelete: false,
+  comment: true,
   activity: false,
   metrics: false,
   columnCrud: false,

@@ -27,7 +27,12 @@ export function Header() {
   const configProjects = config?.projects ?? []
   const allProjects = [...new Set([...metricProjects, ...configProjects])].sort()
 
-  const providerLabel = provider === 'linear' && team ? `${team.name} (${team.key})` : provider
+  const providerLabel =
+    team && (provider === 'linear' || provider === 'jira')
+      ? `${team.name} (${team.key})`
+      : provider === 'jira'
+        ? 'Jira'
+        : provider
   const hasActiveFilters =
     filterAssignee !== null || filterProject !== null || filterActivityDays !== null
 

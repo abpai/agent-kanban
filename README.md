@@ -6,13 +6,14 @@ Agent-friendly kanban board CLI. Manage tasks via bash commands, parse structure
 
 ## Why
 
-Most project-management tools are built for humans clicking through UIs. `agent-kanban` is built for **CLI-first workflows** — AI agents and scripts get deterministic JSON they can parse, humans get a pretty-printed view and a web dashboard. Runs against a local SQLite file or a Linear backend.
+Most project-management tools are built for humans clicking through UIs. `agent-kanban` is built for **CLI-first workflows** — AI agents and scripts get deterministic JSON they can parse, humans get a pretty-printed view and a web dashboard. Runs against a local SQLite file, a Linear backend, or a Jira Cloud project.
 
 ## Documentation
 
 - [`docs/README.md`](docs/README.md) for the documentation index
 - [`docs/WORKFLOW.md`](docs/WORKFLOW.md) for a common day-to-day workflow
 - [`docs/providers/linear.md`](docs/providers/linear.md) for Linear provider details
+- [`docs/providers/jira.md`](docs/providers/jira.md) for Jira provider details
 - [`SKILL.md`](SKILL.md) for agent-specific repo usage instructions
 
 ## Install
@@ -50,12 +51,18 @@ Running `kanban` with no arguments is equivalent to `kanban board view`.
 
 All operations route through a provider backend. Set `KANBAN_PROVIDER` to choose one.
 
-| Variable          | Default       | Description                            |
-| ----------------- | ------------- | -------------------------------------- |
-| `KANBAN_PROVIDER` | `local`       | `local` or `linear`                    |
-| `KANBAN_DB_PATH`  | auto-resolved | SQLite database path                   |
-| `LINEAR_API_KEY`  | —             | Required when `KANBAN_PROVIDER=linear` |
-| `LINEAR_TEAM_ID`  | —             | Required when `KANBAN_PROVIDER=linear` |
+| Variable           | Default       | Description                                                              |
+| ------------------ | ------------- | ------------------------------------------------------------------------ |
+| `KANBAN_PROVIDER`  | `local`       | `local`, `linear`, or `jira`                                             |
+| `KANBAN_DB_PATH`   | auto-resolved | SQLite database path                                                     |
+| `LINEAR_API_KEY`   | —             | Required when `KANBAN_PROVIDER=linear`                                   |
+| `LINEAR_TEAM_ID`   | —             | Required when `KANBAN_PROVIDER=linear`                                   |
+| `JIRA_BASE_URL`    | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `https://acme.atlassian.net`) |
+| `JIRA_EMAIL`       | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian account email)           |
+| `JIRA_API_TOKEN`   | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian API token)               |
+| `JIRA_PROJECT_KEY` | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `ENG`)                        |
+| `JIRA_BOARD_ID`    | —             | Optional when `KANBAN_PROVIDER=jira` (Agile board id for column order)   |
+| `JIRA_ISSUE_TYPE`  | `Task`        | Optional when `KANBAN_PROVIDER=jira` (default issue type for new tasks)  |
 
 Without `KANBAN_DB_PATH`, the local provider resolves the database in this order:
 
@@ -72,17 +79,29 @@ export LINEAR_TEAM_ID=<team-id>
 kanban board view
 ```
 
+### Jira quick start
+
+```bash
+export KANBAN_PROVIDER=jira
+export JIRA_BASE_URL=https://your-domain.atlassian.net
+export JIRA_EMAIL=you@example.com
+export JIRA_API_TOKEN=...
+export JIRA_PROJECT_KEY=ENG
+export JIRA_BOARD_ID=123  # optional
+kanban board view
+```
+
 ### Capability matrix
 
-| Capability              | Local | Linear |
-| ----------------------- | ----- | ------ |
-| task create/update/move | yes   | yes    |
-| task delete             | yes   | no     |
-| activity log            | yes   | no     |
-| metrics                 | yes   | no     |
-| column CRUD             | yes   | no     |
-| bulk operations         | yes   | no     |
-| config edit             | yes   | no     |
+| Capability              | Local | Linear | Jira |
+| ----------------------- | ----- | ------ | ---- |
+| task create/update/move | yes   | yes    | yes  |
+| task delete             | yes   | no     | no   |
+| activity log            | yes   | no     | no   |
+| metrics                 | yes   | no     | no   |
+| column CRUD             | yes   | no     | no   |
+| bulk operations         | yes   | no     | no   |
+| config edit             | yes   | no     | no   |
 
 Linear tasks carry an `externalRef` (e.g. `TEAM-123`) and a `url`. Commands accept either the internal ID or the external ref.
 
@@ -284,6 +303,22 @@ docker run -d \
   -e KANBAN_PROVIDER=linear \
   -e LINEAR_API_KEY=lin_api_... \
   -e LINEAR_TEAM_ID=team-id \
+  agent-kanban
+```
+
+### Jira mode
+
+No volume needed — all state lives in Jira Cloud.
+
+```bash
+docker run -d \
+  -p 3000:3000 \
+  -e KANBAN_PROVIDER=jira \
+  -e JIRA_BASE_URL=https://your-domain.atlassian.net \
+  -e JIRA_EMAIL=you@example.com \
+  -e JIRA_API_TOKEN=... \
+  -e JIRA_PROJECT_KEY=ENG \
+  -e JIRA_BOARD_ID=123 \
   agent-kanban
 ```
 

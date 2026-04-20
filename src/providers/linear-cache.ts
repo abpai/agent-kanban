@@ -15,6 +15,7 @@ export interface LinearSyncMeta {
   team: ProviderTeamInfo | null
   lastSyncAt: string | null
   lastIssueUpdatedAt: string | null
+  lastWebhookAt: string | null
 }
 
 export function initLinearCacheSchema(db: Database): void {
@@ -66,6 +67,8 @@ export function initLinearCacheSchema(db: Database): void {
       state_id TEXT NOT NULL,
       state_name TEXT NOT NULL,
       state_position INTEGER NOT NULL DEFAULT 0,
+      labels TEXT NOT NULL DEFAULT '[]',
+      comment_count INTEGER NOT NULL DEFAULT 0,
       url TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -73,6 +76,17 @@ export function initLinearCacheSchema(db: Database): void {
   `)
   db.run('CREATE INDEX IF NOT EXISTS idx_linear_issues_state_id ON linear_issues(state_id)')
   db.run('CREATE INDEX IF NOT EXISTS idx_linear_issues_updated_at ON linear_issues(updated_at)')
+  migrateLinearCacheSchema(db)
+}
+
+export function migrateLinearCacheSchema(db: Database): void {
+  const cols = db.query('PRAGMA table_info(linear_issues)').all() as { name: string }[]
+  if (!cols.some((c) => c.name === 'labels')) {
+    db.run("ALTER TABLE linear_issues ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
+  }
+  if (!cols.some((c) => c.name === 'comment_count')) {
+    db.run('ALTER TABLE linear_issues ADD COLUMN comment_count INTEGER NOT NULL DEFAULT 0')
+  }
 }
 
 function setMeta(db: Database, key: string, value: string): void {
@@ -82,6 +96,10 @@ function setMeta(db: Database, key: string, value: string): void {
   ).run({ $key: key, $value: value })
 }
 
+function deleteMeta(db: Database, key: string): void {
+  db.query('DELETE FROM linear_sync_meta WHERE key = $key').run({ $key: key })
+}
+
 function getMeta(db: Database, key: string): string | null {
   const row = db.query('SELECT value FROM linear_sync_meta WHERE key = $key').get({
     $key: key,
@@ -89,10 +107,25 @@ function getMeta(db: Database, key: string): string | null {
   return row?.value ?? null
 }
 
-export function saveSyncMeta(db: Database, meta: LinearSyncMeta): void {
-  if (meta.team) setMeta(db, 'team', JSON.stringify(meta.team))
-  if (meta.lastSyncAt) setMeta(db, 'lastSyncAt', meta.lastSyncAt)
-  if (meta.lastIssueUpdatedAt) setMeta(db, 'lastIssueUpdatedAt', meta.lastIssueUpdatedAt)
+const META_KEYS = ['team', 'lastSyncAt', 'lastIssueUpdatedAt', 'lastWebhookAt'] as const
+type MetaKey = (typeof META_KEYS)[number]
+
+export function saveSyncMeta(db: Database, meta: Partial<LinearSyncMeta>): void {
+  for (const key of META_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
+    const value = (meta as Record<MetaKey, unknown>)[key]
+    if (value === null) {
+      deleteMeta(db, key)
+      continue
+    }
+    if (key === 'team') {
+      setMeta(db, key, JSON.stringify(value))
+      continue
+    }
+    if (typeof value === 'string') {
+      setMeta(db, key, value)
+    }
+  }
 }
 
 export function loadSyncMeta(db: Database): LinearSyncMeta {
@@ -101,6 +134,7 @@ export function loadSyncMeta(db: Database): LinearSyncMeta {
     team: teamRaw ? (JSON.parse(teamRaw) as ProviderTeamInfo) : null,
     lastSyncAt: getMeta(db, 'lastSyncAt'),
     lastIssueUpdatedAt: getMeta(db, 'lastIssueUpdatedAt'),
+    lastWebhookAt: getMeta(db, 'lastWebhookAt'),
   }
 }
 
@@ -188,6 +222,8 @@ export function upsertIssues(
     stateId: string
     stateName: string
     statePosition: number
+    labels?: string[] | null
+    commentCount?: number | null
     url?: string | null
     createdAt: string
     updatedAt: string
@@ -196,10 +232,12 @@ export function upsertIssues(
   const stmt = db.prepare(
     `INSERT INTO linear_issues (
       id, identifier, title, description, priority, assignee_id, assignee_name,
-      project_id, project_name, state_id, state_name, state_position, url, created_at, updated_at
+      project_id, project_name, state_id, state_name, state_position, labels, comment_count,
+      url, created_at, updated_at
     ) VALUES (
       $id, $identifier, $title, $description, $priority, $assignee_id, $assignee_name,
-      $project_id, $project_name, $state_id, $state_name, $state_position, $url, $created_at, $updated_at
+      $project_id, $project_name, $state_id, $state_name, $state_position, $labels, $comment_count,
+      $url, $created_at, $updated_at
     )
     ON CONFLICT(id) DO UPDATE SET
       identifier = excluded.identifier,
@@ -213,6 +251,8 @@ export function upsertIssues(
       state_id = excluded.state_id,
       state_name = excluded.state_name,
       state_position = excluded.state_position,
+      labels = excluded.labels,
+      comment_count = excluded.comment_count,
       url = excluded.url,
       created_at = excluded.created_at,
       updated_at = excluded.updated_at`,
@@ -231,11 +271,19 @@ export function upsertIssues(
       $state_id: issue.stateId,
       $state_name: issue.stateName,
       $state_position: issue.statePosition,
+      $labels: JSON.stringify(issue.labels ?? []),
+      $comment_count: issue.commentCount ?? 0,
       $url: issue.url ?? null,
       $created_at: issue.createdAt,
       $updated_at: issue.updatedAt,
     })
   }
+}
+
+export function deleteLinearIssue(db: Database, idOrIdentifier: string): void {
+  db.query('DELETE FROM linear_issues WHERE id = $v OR identifier = $v').run({
+    $v: idOrIdentifier,
+  })
 }
 
 export function getCachedColumns(db: Database): LinearStateRow[] {
@@ -257,7 +305,7 @@ function mapPriority(priority: number): Task['priority'] {
   }
 }
 
-function taskFromRow(row: {
+interface LinearIssueRow {
   id: string
   identifier: string
   title: string
@@ -267,10 +315,23 @@ function taskFromRow(row: {
   priority: number
   assignee_name: string
   project_name: string
+  labels: string
+  comment_count: number
   url: string | null
   created_at: string
   updated_at: string
-}): Task {
+}
+
+function parseLabels(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function taskFromRow(row: LinearIssueRow): Task {
   return {
     id: `linear:${row.id}`,
     providerId: row.id,
@@ -282,10 +343,15 @@ function taskFromRow(row: {
     position: row.state_position,
     priority: mapPriority(row.priority),
     assignee: row.assignee_name,
+    assignees: row.assignee_name ? [row.assignee_name] : [],
+    labels: parseLabels(row.labels),
+    comment_count: row.comment_count,
     project: row.project_name,
     metadata: '{}',
     created_at: row.created_at,
     updated_at: row.updated_at,
+    version: row.updated_at,
+    source_updated_at: row.updated_at,
   }
 }
 
@@ -301,20 +367,7 @@ export function getCachedBoard(db: Database): BoardView {
              WHERE state_id = $state_id
              ORDER BY updated_at DESC, title ASC`,
           )
-          .all({ $state_id: column.id }) as Array<{
-          id: string
-          identifier: string
-          title: string
-          description: string
-          state_id: string
-          state_position: number
-          priority: number
-          assignee_name: string
-          project_name: string
-          url: string | null
-          created_at: string
-          updated_at: string
-        }>
+          .all({ $state_id: column.id }) as LinearIssueRow[]
       ).map(taskFromRow),
     })),
   }
@@ -328,39 +381,15 @@ export function getCachedTask(db: Database, lookup: string): Task | null {
        WHERE id = $lookup OR identifier = $lookup
        LIMIT 1`,
     )
-    .get({ $lookup: normalized }) as {
-    id: string
-    identifier: string
-    title: string
-    description: string
-    state_id: string
-    state_position: number
-    priority: number
-    assignee_name: string
-    project_name: string
-    url: string | null
-    created_at: string
-    updated_at: string
-  } | null
+    .get({ $lookup: normalized }) as LinearIssueRow | null
   return row ? taskFromRow(row) : null
 }
 
 export function getCachedTasks(db: Database): Task[] {
   return (
-    db.query('SELECT * FROM linear_issues ORDER BY updated_at DESC, title ASC').all() as Array<{
-      id: string
-      identifier: string
-      title: string
-      description: string
-      state_id: string
-      state_position: number
-      priority: number
-      assignee_name: string
-      project_name: string
-      url: string | null
-      created_at: string
-      updated_at: string
-    }>
+    db
+      .query('SELECT * FROM linear_issues ORDER BY updated_at DESC, title ASC')
+      .all() as LinearIssueRow[]
   ).map(taskFromRow)
 }
 

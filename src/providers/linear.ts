@@ -8,8 +8,15 @@ import type {
   Column,
   Task,
 } from '../types.ts'
+import {
+  headerLower,
+  verifyHmacSha256,
+  type WebhookRequest,
+  type WebhookResult,
+} from '../webhooks.ts'
 import { LINEAR_CAPABILITIES } from './capabilities.ts'
 import {
+  deleteLinearIssue,
   getCachedBoard,
   getCachedColumns,
   getCachedConfig,
@@ -34,6 +41,17 @@ import type {
 } from './types.ts'
 
 const SYNC_INTERVAL_MS = 30_000
+const WEBHOOK_STRETCH_WINDOW_MS = 5 * 60_000
+const WEBHOOK_STRETCHED_INTERVAL_MS = 5 * 60_000
+
+function effectiveSyncInterval(lastWebhookAt: string | null, now: number): number {
+  if (!lastWebhookAt) return SYNC_INTERVAL_MS
+  const lastWebhookMs = Date.parse(lastWebhookAt)
+  if (!Number.isFinite(lastWebhookMs)) return SYNC_INTERVAL_MS
+  return now - lastWebhookMs < WEBHOOK_STRETCH_WINDOW_MS
+    ? WEBHOOK_STRETCHED_INTERVAL_MS
+    : SYNC_INTERVAL_MS
+}
 
 function toLinearPriority(priority: Task['priority'] | undefined): number | undefined {
   switch (priority) {
@@ -63,19 +81,22 @@ export class LinearProvider implements KanbanProvider {
     this.client = new LinearClient(apiKey)
   }
 
+  private resolvedTeamId(): string {
+    return loadSyncMeta(this.db).team?.id ?? this.teamId
+  }
+
   private async sync(force = false): Promise<void> {
     const meta = loadSyncMeta(this.db)
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
-    if (!force && lastSyncAtMs && Date.now() - lastSyncAtMs < SYNC_INTERVAL_MS) return
+    const now = Date.now()
+    const interval = effectiveSyncInterval(meta.lastWebhookAt, now)
+    if (!force && lastSyncAtMs && now - lastSyncAtMs < interval) return
 
-    const [team, users, projects, issues] = await Promise.all([
-      this.client.getTeam(this.teamId),
+    const team = await this.client.getTeam(this.teamId)
+    const [users, projects, issues] = await Promise.all([
       this.client.listUsers(),
       this.client.listProjects(),
-      this.client.listIssues(
-        this.teamId,
-        force ? undefined : (meta.lastIssueUpdatedAt ?? undefined),
-      ),
+      this.client.listIssues(team.id, force ? undefined : (meta.lastIssueUpdatedAt ?? undefined)),
     ])
 
     replaceStates(this.db, team.states)
@@ -96,6 +117,8 @@ export class LinearProvider implements KanbanProvider {
         stateId: issue.state.id,
         stateName: issue.state.name,
         statePosition: issue.state.position,
+        labels: issue.labels ?? [],
+        commentCount: issue.commentCount ?? 0,
         url: issue.url ?? null,
         createdAt: issue.createdAt,
         updatedAt: issue.updatedAt,
@@ -214,7 +237,7 @@ export class LinearProvider implements KanbanProvider {
     await this.sync()
     const state = input.column ? this.resolveState(input.column) : undefined
     const result = await this.client.createIssue({
-      teamId: this.teamId,
+      teamId: this.resolvedTeamId(),
       stateId: state?.id,
       title: input.title,
       description: input.description,
@@ -240,6 +263,8 @@ export class LinearProvider implements KanbanProvider {
         stateId: issue.state.id,
         stateName: issue.state.name,
         statePosition: issue.state.position,
+        labels: issue.labels ?? [],
+        commentCount: issue.commentCount ?? 0,
         url: issue.url ?? null,
         createdAt: issue.createdAt,
         updatedAt: issue.updatedAt,
@@ -251,6 +276,12 @@ export class LinearProvider implements KanbanProvider {
   async updateTask(idOrRef: string, input: UpdateTaskInput) {
     await this.sync()
     const task = this.resolveTask(idOrRef)
+    if (input.expectedVersion !== undefined && task.version !== input.expectedVersion) {
+      throw new KanbanError(
+        ErrorCode.CONFLICT,
+        `Linear issue ${task.externalRef ?? idOrRef} was updated remotely (expected version ${input.expectedVersion}, current ${task.version ?? 'unknown'})`,
+      )
+    }
     const updateInput: Record<string, unknown> = {}
     if (input.title !== undefined) updateInput['title'] = input.title
     if (input.description !== undefined) updateInput['description'] = input.description
@@ -286,6 +317,16 @@ export class LinearProvider implements KanbanProvider {
     unsupportedOperation('Task deletion is not supported in Linear mode')
   }
 
+  async comment(idOrRef: string, body: string): Promise<void> {
+    await this.sync()
+    const task = this.resolveTask(idOrRef)
+    // Comment counts stay eventually consistent through the normal sync interval.
+    const result = await this.client.commentCreate(task.providerId || task.id, body)
+    if (!result.success) {
+      throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear comment creation failed')
+    }
+  }
+
   async getActivity(_limit?: number, _taskId?: string): Promise<ActivityEntry[]> {
     unsupportedOperation('Activity is not available in Linear mode')
   }
@@ -301,5 +342,83 @@ export class LinearProvider implements KanbanProvider {
 
   async patchConfig(_input: Partial<BoardConfig>): Promise<BoardConfig> {
     unsupportedOperation('Config mutation is not supported in Linear mode')
+  }
+
+  async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
+    const secret = process.env['LINEAR_WEBHOOK_SECRET']
+    if (secret) {
+      const sig = headerLower(payload.headers, 'linear-signature')
+      if (!verifyHmacSha256(secret, payload.rawBody, sig)) {
+        return { handled: false, unauthorized: true, message: 'Invalid signature' }
+      }
+    }
+    let body: {
+      action?: 'create' | 'update' | 'remove'
+      type?: string
+      data?: {
+        id: string
+        identifier: string
+        title: string
+        description?: string | null
+        priority?: number | null
+        url?: string | null
+        createdAt: string
+        updatedAt: string
+        assignee?: { id: string; name?: string | null } | null
+        assigneeId?: string | null
+        project?: { id: string; name: string } | null
+        projectId?: string | null
+        state?: { id: string; name: string; position?: number } | null
+        stateId?: string | null
+        labels?: Array<{ id: string; name: string }> | null
+        commentCount?: number | null
+      }
+    } = {}
+    try {
+      body = JSON.parse(payload.rawBody) as typeof body
+    } catch {
+      return { handled: false, message: 'Invalid JSON body' }
+    }
+    if (body.type !== 'Issue') {
+      return { handled: false, message: `Ignoring ${body.type ?? 'unknown'} event` }
+    }
+    const data = body.data
+    if (!data) return { handled: false, message: 'No data in payload' }
+
+    if (body.action === 'remove') {
+      deleteLinearIssue(this.db, data.id)
+      saveSyncMeta(this.db, { lastWebhookAt: new Date().toISOString() })
+      return { handled: true }
+    }
+
+    if (body.action === 'create' || body.action === 'update') {
+      const stateId = data.state?.id ?? data.stateId ?? null
+      if (!stateId) return { handled: false, message: 'Missing state id' }
+      upsertIssues(this.db, [
+        {
+          id: data.id,
+          identifier: data.identifier,
+          title: data.title,
+          description: data.description ?? '',
+          priority: data.priority ?? 0,
+          assigneeId: data.assignee?.id ?? data.assigneeId ?? null,
+          assigneeName: data.assignee?.name ?? null,
+          projectId: data.project?.id ?? data.projectId ?? null,
+          projectName: data.project?.name ?? null,
+          stateId,
+          stateName: data.state?.name ?? '',
+          statePosition: data.state?.position ?? 0,
+          labels: (data.labels ?? []).map((l) => l.name),
+          commentCount: data.commentCount ?? 0,
+          url: data.url ?? null,
+          createdAt: data.createdAt,
+          updatedAt: data.updatedAt,
+        },
+      ])
+      saveSyncMeta(this.db, { lastWebhookAt: new Date().toISOString() })
+      return { handled: true }
+    }
+
+    return { handled: false, message: `Unsupported action: ${body.action}` }
   }
 }

@@ -1,6 +1,10 @@
 import { KanbanError, ErrorCode } from './errors.ts'
-import type { BoardConfig, CliOutput } from './types.ts'
+import type { BoardConfig, CliOutput, Task } from './types.ts'
 import type { CreateTaskInput, UpdateTaskInput, KanbanProvider } from './providers/types.ts'
+
+export type WsEvent =
+  | { type: 'task:upsert'; task: Task; columnName: string }
+  | { type: 'task:delete'; id: string }
 
 interface MoveTaskBody {
   column?: string
@@ -25,6 +29,7 @@ function statusForCode(code: string): number {
   if (code === ErrorCode.TASK_NOT_FOUND || code === ErrorCode.COLUMN_NOT_FOUND) return 404
   if (code === ErrorCode.PROVIDER_AUTH_FAILED) return 401
   if (code === ErrorCode.PROVIDER_RATE_LIMITED) return 429
+  if (code === ErrorCode.CONFLICT) return 409
   if (code === ErrorCode.UNSUPPORTED_OPERATION) return 400
   if (code === ErrorCode.PROVIDER_NOT_CONFIGURED) return 500
   return 400
@@ -53,6 +58,20 @@ async function wrapHandler(fn: () => Promise<CliOutput> | CliOutput): Promise<Re
 export interface ApiResult {
   response: Response
   mutated: boolean
+  event?: WsEvent
+}
+
+async function resolveColumnName(
+  provider: KanbanProvider,
+  columnId: string,
+): Promise<string | null> {
+  const columns = await provider.listColumns()
+  return columns.find((column) => column.id === columnId)?.name ?? null
+}
+
+async function upsertEvent(provider: KanbanProvider, task: Task): Promise<WsEvent | undefined> {
+  const columnName = await resolveColumnName(provider, task.column_id)
+  return columnName ? { type: 'task:upsert', task, columnName } : undefined
 }
 
 export async function handleRequest(provider: KanbanProvider, req: Request): Promise<ApiResult> {
@@ -109,9 +128,9 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
   if (path === '/api/tasks' && method === 'POST') {
     const body = (await req.json()) as Partial<CreateTaskInput>
     if (!body.title) return { response: missingArgument('title'), mutated: false }
-    const response = await wrapHandler(async () => ({
-      ok: true,
-      data: await provider.createTask({
+    let created: Task | null = null
+    const response = await wrapHandler(async () => {
+      created = await provider.createTask({
         title: body.title!,
         description: body.description,
         column: body.column,
@@ -119,9 +138,11 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
         assignee: body.assignee,
         project: body.project,
         metadata: body.metadata,
-      }),
-    }))
-    return { response, mutated: response.ok }
+      })
+      return { ok: true, data: created }
+    })
+    const event = response.ok && created ? await upsertEvent(provider, created) : undefined
+    return { response, mutated: response.ok, event }
   }
 
   const taskMatch = path.match(/^\/api\/tasks\/([^/]+)$/)
@@ -137,11 +158,13 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
     if (method === 'PATCH') {
       const body = (await req.json()) as UpdateTaskInput
-      const response = await wrapHandler(async () => ({
-        ok: true,
-        data: await provider.updateTask(id, body),
-      }))
-      return { response, mutated: response.ok }
+      let updated: Task | null = null
+      const response = await wrapHandler(async () => {
+        updated = await provider.updateTask(id, body)
+        return { ok: true, data: updated }
+      })
+      const event = response.ok && updated ? await upsertEvent(provider, updated) : undefined
+      return { response, mutated: response.ok, event }
     }
 
     if (method === 'DELETE') {
@@ -149,7 +172,8 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
         ok: true,
         data: await provider.deleteTask(id),
       }))
-      return { response, mutated: response.ok }
+      const event: WsEvent | undefined = response.ok ? { type: 'task:delete', id } : undefined
+      return { response, mutated: response.ok, event }
     }
   }
 
@@ -158,11 +182,13 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     const id = decodeURIComponent(moveMatch[1]!)
     const body = (await req.json()) as MoveTaskBody
     if (!body.column) return { response: missingArgument('column'), mutated: false }
-    const response = await wrapHandler(async () => ({
-      ok: true,
-      data: await provider.moveTask(id, body.column!),
-    }))
-    return { response, mutated: response.ok }
+    let moved: Task | null = null
+    const response = await wrapHandler(async () => {
+      moved = await provider.moveTask(id, body.column!)
+      return { ok: true, data: moved }
+    })
+    const event = response.ok && moved ? await upsertEvent(provider, moved) : undefined
+    return { response, mutated: response.ok, event }
   }
 
   if (path === '/api/activity' && method === 'GET') {
@@ -197,6 +223,66 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
       data: await provider.patchConfig(body),
     }))
     return { response, mutated: response.ok }
+  }
+
+  const webhookMatch = path.match(/^\/api\/webhooks\/([^/]+)$/)
+  if (webhookMatch && method === 'POST') {
+    const target = decodeURIComponent(webhookMatch[1]!)
+    if (target !== provider.type) {
+      return {
+        response: json(
+          {
+            ok: false,
+            error: {
+              code: 'UNSUPPORTED_OPERATION',
+              message: `Webhook target '${target}' does not match active provider '${provider.type}'`,
+            },
+          },
+          400,
+        ),
+        mutated: false,
+      }
+    }
+    if (!provider.handleWebhook) {
+      return {
+        response: json(
+          {
+            ok: false,
+            error: {
+              code: 'UNSUPPORTED_OPERATION',
+              message: `Provider '${provider.type}' does not accept webhooks`,
+            },
+          },
+          400,
+        ),
+        mutated: false,
+      }
+    }
+    const rawBody = await req.text()
+    const headers: Record<string, string> = {}
+    req.headers.forEach((value, key) => {
+      headers[key] = value
+    })
+    const result = await provider.handleWebhook({ headers, rawBody })
+    if (result.unauthorized) {
+      return {
+        response: json(
+          {
+            ok: false,
+            error: { code: 'PROVIDER_AUTH_FAILED', message: result.message ?? 'Unauthorized' },
+          },
+          401,
+        ),
+        mutated: false,
+      }
+    }
+    return {
+      response: json({
+        ok: true,
+        data: { handled: result.handled, message: result.message ?? null },
+      }),
+      mutated: result.handled,
+    }
   }
 
   return {

@@ -1,6 +1,6 @@
 ---
 name: agent-kanban
-description: Operate the agent-kanban board through the `kanban` CLI — supports local (SQLite) and Linear providers.
+description: Operate the agent-kanban board through the `kanban` CLI — supports local (SQLite), Linear, and Jira providers.
 ---
 
 # agent-kanban Usage Skill
@@ -15,12 +15,18 @@ Use this skill when working inside the `agent-kanban` repository and you need to
 
 ## Provider configuration
 
-| Variable          | Default            | Description                            |
-| ----------------- | ------------------ | -------------------------------------- |
-| `KANBAN_PROVIDER` | `local`            | `local` or `linear`                    |
-| `KANBAN_DB_PATH`  | `.kanban/board.db` | SQLite database path                   |
-| `LINEAR_API_KEY`  | —                  | Required when `KANBAN_PROVIDER=linear` |
-| `LINEAR_TEAM_ID`  | —                  | Required when `KANBAN_PROVIDER=linear` |
+| Variable           | Default            | Description                                                              |
+| ------------------ | ------------------ | ------------------------------------------------------------------------ |
+| `KANBAN_PROVIDER`  | `local`            | `local`, `linear`, or `jira`                                             |
+| `KANBAN_DB_PATH`   | `.kanban/board.db` | SQLite database path                                                     |
+| `LINEAR_API_KEY`   | —                  | Required when `KANBAN_PROVIDER=linear`                                   |
+| `LINEAR_TEAM_ID`   | —                  | Required when `KANBAN_PROVIDER=linear`                                   |
+| `JIRA_BASE_URL`    | —                  | Required when `KANBAN_PROVIDER=jira` (e.g. `https://acme.atlassian.net`) |
+| `JIRA_EMAIL`       | —                  | Required when `KANBAN_PROVIDER=jira` (Atlassian account email)           |
+| `JIRA_API_TOKEN`   | —                  | Required when `KANBAN_PROVIDER=jira` (Atlassian API token)               |
+| `JIRA_PROJECT_KEY` | —                  | Required when `KANBAN_PROVIDER=jira` (e.g. `ENG`)                        |
+| `JIRA_BOARD_ID`    | —                  | Optional when `KANBAN_PROVIDER=jira` (Agile board id)                    |
+| `JIRA_ISSUE_TYPE`  | `Task`             | Optional when `KANBAN_PROVIDER=jira` (default issue type)                |
 
 In Linear mode, tasks have an `externalRef` (e.g. `TEAM-123`). Use it interchangeably with UUIDs:
 
@@ -28,16 +34,16 @@ In Linear mode, tasks have an `externalRef` (e.g. `TEAM-123`). Use it interchang
 kanban task view TEAM-123
 ```
 
-## Linear mode limits
+## Non-local mode limits
 
-These commands return `UNSUPPORTED_OPERATION` in Linear mode:
+These commands return `UNSUPPORTED_OPERATION` in both Linear mode and Jira mode:
 
 - `task delete`
 - `column add/rename/reorder/delete`
 - `bulk move-all`, `bulk clear-done`
 - `config set-member/remove-member/add-project/remove-project`
 
-Works in both modes: `task add/list/view/update/move`, `board view`, `column list`, `config show`, `serve`.
+Works in all three modes (local, Linear, Jira): `task add/list/view/update/move`, `board view`, `column list`, `config show`, `serve`.
 
 ## Output format
 
@@ -88,6 +94,17 @@ kanban config show
 export KANBAN_PROVIDER=linear
 export LINEAR_API_KEY=lin_api_...
 export LINEAR_TEAM_ID=<team-id>
+kanban board view
+```
+
+### Jira mode — no board init needed
+
+```bash
+export KANBAN_PROVIDER=jira
+export JIRA_BASE_URL=https://your-domain.atlassian.net
+export JIRA_EMAIL=you@example.com
+export JIRA_API_TOKEN=...
+export JIRA_PROJECT_KEY=ENG
 kanban board view
 ```
 

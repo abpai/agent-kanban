@@ -22,6 +22,7 @@
 - For mobile grouped-list headers in the UI, keep the expand/collapse control and the add-task action as separate sibling buttons; nesting one interactive control inside another causes invalid markup and flaky behavior.
 - Safe-area-aware root, overlay, and drawer padding is required for iPhone Safari; sticky mobile chrome should also account for the top inset.
 - Start review tasks by comparing requested plan scope against actual implementation across backend and frontend.
+- For session/work review in this repo, separate committed git history from the current dirty worktree; substantial agent work may be present, testable, and still not landed in a commit.
 - For UI smoke checks with duplicate visible text, use stable locators (`title`, `nth`, `role+name`) rather than plain text locators.
 - For Bun CLIs, adding `#!/usr/bin/env bun` to the bin entrypoint plus `bun link` gives a reliable global command workflow (`kanban ...`) for local agent usage.
 - For readability-only refactors, extract tiny helpers for repeated response/header/error logic to reduce duplication while keeping behavior identical.
@@ -33,6 +34,9 @@
 - For Bun CLIs that also serve a static UI, ship `ui/dist` in the published package and build it in `prepack`; otherwise `serve` works locally but breaks for installed users.
 - For docs cleanup in this repo, keep the root `README.md` as the quick-start front door and move longer operational or integration writeups under `docs/`.
 - For releases in this repo, a lightweight `CHANGELOG.md` tied to the npm version makes GitHub/npm release notes easier to assemble than reconstructing changes from merges later.
+- When triaging repo health after large agent-generated changes, run `bunx tsc --noEmit` separately from `bun run check`; lint/prettier can fail while the TypeScript build is still clean.
+- For task-level WebSocket patches in the UI, dedupe optimistic temp rows against the server-issued task id before replacing optimistic state, or self-originated create events can render duplicate cards.
+- For task-level WebSocket patches in the UI, preserve server ordering/position when reinserting a task; remove-and-append helpers make unchanged tasks jump to the bottom of their column.
 
 ## Patterns That Don't Work
 
@@ -47,3 +51,4 @@
 - CLI code paths that do not call `initSchema()` (for example `task add/list/update`) can bypass migrations; schema changes must be invoked right after `openDb()` or before any CRUD command.
 - API mutation signaling should be based on successful response status, not just HTTP verb, to avoid false WebSocket refresh broadcasts.
 - Adaptive polling tied to a one-time `setInterval` delay can silently ignore WebSocket state changes; use recursive `setTimeout` with per-tick delay selection.
+- Jira webhook handlers must re-check the configured project key before caching issue payloads; otherwise a broadly scoped webhook can leak other Jira projects into the current board cache.

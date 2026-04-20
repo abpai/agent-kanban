@@ -31,6 +31,8 @@ export interface LinearIssue {
   assignee?: { id: string; name?: string | null; displayName?: string | null } | null
   project?: { id: string; name: string; url?: string | null; state?: string | null } | null
   state: { id: string; name: string; position: number }
+  labels?: string[]
+  commentCount?: number
 }
 
 interface LinearIssueNode {
@@ -45,6 +47,7 @@ interface LinearIssueNode {
   assignee?: { id: string; name?: string | null; displayName?: string | null } | null
   project?: { id: string; name: string; url?: string | null; state?: string | null } | null
   state: { id: string; name: string; position: number }
+  labels?: { nodes: Array<{ id: string; name: string }> }
 }
 
 export class LinearClient {
@@ -234,6 +237,9 @@ export class LinearClient {
                   name
                   position
                 }
+                labels {
+                  nodes { id name }
+                }
               }
               pageInfo {
                 hasNextPage
@@ -253,6 +259,8 @@ export class LinearClient {
                 name: issue.assignee.displayName || issue.assignee.name,
               }
             : null,
+          labels: issue.labels?.nodes.map((l) => l.name) ?? [],
+          commentCount: 0,
         })),
       )
       after = data.issues.pageInfo.hasNextPage ? data.issues.pageInfo.endCursor : null
@@ -271,7 +279,7 @@ export class LinearClient {
     projectId?: string
   }): Promise<{ success: boolean; issue: LinearIssue | null }> {
     const data = await this.query<{
-      issueCreate: { success: boolean; issue: LinearIssue | null }
+      issueCreate: { success: boolean; issue: LinearIssueNode | null }
     }>(
       `
         mutation CreateIssue($input: IssueCreateInput!) {
@@ -289,6 +297,7 @@ export class LinearClient {
               assignee { id name displayName }
               project { id name url state }
               state { id name position }
+              labels { nodes { id name } }
             }
           }
         }
@@ -305,7 +314,17 @@ export class LinearClient {
         },
       },
     )
-    return data.issueCreate
+    const node = data.issueCreate.issue
+    return {
+      success: data.issueCreate.success,
+      issue: node
+        ? {
+            ...node,
+            labels: node.labels?.nodes.map((l) => l.name) ?? [],
+            commentCount: 0,
+          }
+        : null,
+    }
   }
 
   async updateIssue(
@@ -325,5 +344,26 @@ export class LinearClient {
       { id: issueId, input },
     )
     return data.issueUpdate
+  }
+
+  async commentCreate(issueId: string, body: string): Promise<{ success: boolean }> {
+    const data = await this.query<{
+      commentCreate: { success: boolean }
+    }>(
+      `
+        mutation CommentCreate($input: CommentCreateInput!) {
+          commentCreate(input: $input) {
+            success
+          }
+        }
+      `,
+      {
+        input: {
+          issueId,
+          body,
+        },
+      },
+    )
+    return data.commentCreate
   }
 }

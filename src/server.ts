@@ -74,7 +74,7 @@ export function startServer(provider: KanbanProvider, port: number): void {
         const result = await handleRequest(provider, forwardedReq)
         applyCorsHeaders(result.response)
         if (result.mutated && result.response.ok) {
-          broadcast({ type: 'refresh' })
+          broadcast(result.event ?? { type: 'refresh' })
         }
         return result.response
       }

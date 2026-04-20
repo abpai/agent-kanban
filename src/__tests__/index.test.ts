@@ -3,7 +3,27 @@ import { Database } from 'bun:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { run } from '../index.ts'
+import { parseServeArgs, run } from '../index.ts'
+
+describe('parseServeArgs', () => {
+  test('defaults: no tunnel, port from PORT env or 3000', () => {
+    const prev = process.env['PORT']
+    delete process.env['PORT']
+    try {
+      expect(parseServeArgs(['serve'])).toEqual({ db: undefined, port: 3000, tunnel: false })
+      process.env['PORT'] = '4001'
+      expect(parseServeArgs(['serve'])).toEqual({ db: undefined, port: 4001, tunnel: false })
+    } finally {
+      if (prev === undefined) delete process.env['PORT']
+      else process.env['PORT'] = prev
+    }
+  })
+
+  test('--tunnel opts in; --port and --db override', () => {
+    const opts = parseServeArgs(['serve', '--tunnel', '--port', '5050', '--db', '/tmp/b.db'])
+    expect(opts).toEqual({ db: '/tmp/b.db', port: 5050, tunnel: true })
+  })
+})
 
 describe('run', () => {
   test('applies schema migration before task commands', async () => {

@@ -64,6 +64,7 @@ export function initSchema(db: Database): void {
       assignee TEXT NOT NULL DEFAULT '',
       project TEXT NOT NULL DEFAULT '',
       metadata TEXT NOT NULL DEFAULT '{}',
+      revision INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
@@ -111,6 +112,10 @@ export function migrateSchema(db: Database): void {
   const hasProject = columns.some((c) => c.name === 'project')
   if (!hasProject) {
     db.run("ALTER TABLE tasks ADD COLUMN project TEXT NOT NULL DEFAULT ''")
+  }
+  const hasRevision = columns.some((c) => c.name === 'revision')
+  if (!hasRevision) {
+    db.run('ALTER TABLE tasks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0')
   }
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project)')
 }
@@ -399,7 +404,7 @@ export function updateTask(
     }
   }
 
-  const sets: string[] = ["updated_at = datetime('now')"]
+  const sets: string[] = ["updated_at = datetime('now')", 'revision = revision + 1']
   const params: Record<string, string> = { $id: id }
 
   if (updates.title !== undefined) {
@@ -487,7 +492,7 @@ export function moveTask(db: Database, id: string, columnIdOrName: string): Task
 
   const oldColumnId = task.column_id
   db.query(
-    "UPDATE tasks SET column_id = $col, position = $pos, updated_at = datetime('now') WHERE id = $id",
+    "UPDATE tasks SET column_id = $col, position = $pos, updated_at = datetime('now'), revision = revision + 1 WHERE id = $id",
   ).run({ $col: column.id, $pos: maxPos.next, $id: id })
   renumberTasksInColumn(db, oldColumnId)
 

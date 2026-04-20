@@ -20,10 +20,16 @@ export interface Task {
   position: number
   priority: Priority
   assignee: string
+  assignees: string[]
+  labels: string[]
+  comment_count: number
   project: string
   metadata: string
+  revision?: number
   created_at: string
   updated_at: string
+  version: string | null
+  source_updated_at: string | null
 }
 
 export interface TaskWithColumn extends Task {
@@ -75,7 +81,7 @@ export interface ColumnTimeEntry {
 export interface BoardConfig {
   members: { name: string; role: 'human' | 'agent' }[]
   projects: string[]
-  provider?: 'local' | 'linear'
+  provider?: 'local' | 'linear' | 'jira'
   discoveredAssignees?: string[]
   discoveredProjects?: string[]
 }
@@ -99,6 +105,7 @@ export interface ProviderCapabilities {
   taskUpdate: boolean
   taskMove: boolean
   taskDelete: boolean
+  comment: boolean
   activity: boolean
   metrics: boolean
   columnCrud: boolean
@@ -113,7 +120,7 @@ export interface ProviderTeamInfo {
 }
 
 export interface BoardBootstrap {
-  provider: 'local' | 'linear'
+  provider: 'local' | 'linear' | 'jira'
   capabilities: ProviderCapabilities
   board: BoardView
   config: BoardConfig

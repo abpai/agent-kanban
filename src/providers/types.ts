@@ -1,3 +1,4 @@
+import type { WebhookRequest, WebhookResult } from '../webhooks.ts'
 import type {
   ActivityEntry,
   BoardBootstrap,
@@ -37,16 +38,17 @@ export interface UpdateTaskInput {
   assignee?: string
   project?: string
   metadata?: string
+  expectedVersion?: string
 }
 
 export interface ProviderContext {
-  provider: 'local' | 'linear'
+  provider: 'local' | 'linear' | 'jira'
   capabilities: ProviderCapabilities
   team: ProviderTeamInfo | null
 }
 
 export interface KanbanProvider {
-  readonly type: 'local' | 'linear'
+  readonly type: 'local' | 'linear' | 'jira'
 
   getContext(): Promise<ProviderContext>
   getBootstrap(): Promise<BoardBootstrap>
@@ -58,8 +60,10 @@ export interface KanbanProvider {
   updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task>
   moveTask(idOrRef: string, column: string): Promise<Task>
   deleteTask(idOrRef: string): Promise<Task>
+  comment(idOrRef: string, body: string): Promise<void>
   getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]>
   getMetrics(): Promise<BoardMetrics>
   getConfig(): Promise<BoardConfig>
   patchConfig(input: Partial<BoardConfig>): Promise<BoardConfig>
+  handleWebhook?(payload: WebhookRequest): Promise<WebhookResult>
 }
