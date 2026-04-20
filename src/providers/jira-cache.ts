@@ -369,6 +369,17 @@ export function deleteJiraIssue(db: Database, idOrKey: string): void {
   db.query('DELETE FROM jira_issues WHERE id = $v OR key = $v').run({ $v: idOrKey })
 }
 
+export function adjustJiraIssueCommentCount(db: Database, idOrKey: string, delta: number): void {
+  db.query(
+    `UPDATE jira_issues
+        SET comment_count = MAX(0, comment_count + $delta)
+      WHERE id = $value OR key = $value`,
+  ).run({
+    $delta: delta,
+    $value: idOrKey,
+  })
+}
+
 export function decodeColumnStatusIds(row: Pick<JiraColumnRow, 'status_ids'>): string[] {
   try {
     const parsed: unknown = JSON.parse(row.status_ids)

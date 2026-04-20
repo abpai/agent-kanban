@@ -15,11 +15,14 @@ beforeEach(() => {
 })
 
 describe('LocalProvider.comment', () => {
-  test('records a comment activity entry and advertises comment capability', async () => {
+  test('creates a stored comment, updates task counts, and advertises comment capability', async () => {
     const task = addTask(db, 'Comment me')
 
-    await provider.comment(task.id, 'hello from local')
+    const comment = await provider.comment(task.id, 'hello from local')
 
+    expect(comment.task_id).toBe(task.id)
+    expect(comment.body).toBe('hello from local')
+    expect((await provider.getTask(task.id)).comment_count).toBe(1)
     const activity = await provider.getActivity(10, task.id)
     expect(activity[0]?.action).toBe('updated')
     expect(activity[0]?.field_changed).toBe('comment')
@@ -27,5 +30,33 @@ describe('LocalProvider.comment', () => {
 
     const context = await provider.getContext()
     expect(context.capabilities.comment).toBe(true)
+  })
+
+  test('updates a stored comment body', async () => {
+    const task = addTask(db, 'Comment me')
+    const comment = await provider.comment(task.id, 'hello from local')
+
+    const updated = await provider.updateComment(task.id, comment.id, 'edited local comment')
+
+    expect(updated.id).toBe(comment.id)
+    expect(updated.body).toBe('edited local comment')
+    const activity = await provider.getActivity(10, task.id)
+    expect(activity[0]?.action).toBe('updated')
+    expect(activity[0]?.field_changed).toBe('comment')
+    expect(activity[0]?.old_value).toBe('hello from local')
+    expect(activity[0]?.new_value).toBe('edited local comment')
+  })
+
+  test('deletes a stored comment and decrements the task comment count', async () => {
+    const task = addTask(db, 'Comment me')
+    const comment = await provider.comment(task.id, 'hello from local')
+
+    await provider.deleteComment(task.id, comment.id)
+
+    expect((await provider.getTask(task.id)).comment_count).toBe(0)
+    const activity = await provider.getActivity(10, task.id)
+    expect(activity[0]?.action).toBe('deleted')
+    expect(activity[0]?.field_changed).toBe('comment')
+    expect(activity[0]?.old_value).toBe('hello from local')
   })
 })

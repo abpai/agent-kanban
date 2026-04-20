@@ -350,6 +350,21 @@ export function deleteLinearIssue(db: Database, idOrIdentifier: string): void {
   })
 }
 
+export function adjustLinearIssueCommentCount(
+  db: Database,
+  idOrIdentifier: string,
+  delta: number,
+): void {
+  db.query(
+    `UPDATE linear_issues
+        SET comment_count = MAX(0, comment_count + $delta)
+      WHERE id = $value OR identifier = $value`,
+  ).run({
+    $delta: delta,
+    $value: idOrIdentifier,
+  })
+}
+
 export function getCachedColumns(db: Database): LinearStateRow[] {
   return db.query('SELECT * FROM linear_states ORDER BY position, name').all() as LinearStateRow[]
 }

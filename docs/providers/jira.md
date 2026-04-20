@@ -57,19 +57,20 @@ base64 encoded in the `Authorization` header on every request.
 
 ## Capabilities
 
-| Capability              | Local | Linear | Jira |
-| ----------------------- | ----- | ------ | ---- |
-| task create/update/move | yes   | yes    | yes  |
-| task delete             | yes   | no     | no   |
-| activity log            | yes   | no     | no   |
-| metrics                 | yes   | no     | no   |
-| column CRUD             | yes   | no     | no   |
-| bulk operations         | yes   | no     | no   |
-| config edit             | yes   | no     | no   |
-| webhooks                | no    | yes    | yes  |
-| labels (read)           | no    | yes    | yes  |
-| comment count (read)    | no    | yes    | yes  |
-| conflict detection      | yes   | yes    | yes  |
+| Capability                   | Local | Linear | Jira |
+| ---------------------------- | ----- | ------ | ---- |
+| task create/update/move      | yes   | yes    | yes  |
+| task delete                  | yes   | no     | no   |
+| activity log                 | yes   | no     | no   |
+| metrics                      | yes   | no     | no   |
+| column CRUD                  | yes   | no     | no   |
+| bulk operations              | yes   | no     | no   |
+| config edit                  | yes   | no     | no   |
+| webhooks                     | no    | yes    | yes  |
+| comment create/update/delete | yes   | yes    | yes  |
+| labels (read)                | no    | yes    | yes  |
+| comment count (read)         | no    | yes    | yes  |
+| conflict detection           | yes   | yes    | yes  |
 
 The CLI, API server, and web UI check capabilities before calling the provider.
 Unsupported operations return `UNSUPPORTED_OPERATION` with exit code `1`. The UI
@@ -137,9 +138,11 @@ to lose those nodes if you round-trip through `agent-kanban`.
 4. **Webhook sync is optional.** The provider accepts Jira webhooks at
    `POST /api/webhooks/jira` and upserts the cache without waiting for the
    next poll. Polling stays enabled as a fallback. See [Webhooks](#webhooks).
-5. **Comment and label read-only sync.** Jira labels and a lightweight
-   comment count are mirrored into the local cache and shown on the card and
-   detail view. Full comment bodies and label writes are not supported.
+5. **Comment writes are live, comment-body sync is not.** Jira labels and a
+   lightweight comment count are mirrored into the local cache and shown on the
+   card and detail view. Comment create/update/delete calls go straight
+   upstream, but full comment bodies are not mirrored into the cached board
+   view. Label writes are still unsupported.
 6. **Board column -> status mapping is many-to-one on read, one-of-many on
    write.** Moves always pick the first mapped status; if you need a different
    target status you must either reorder the board config or edit the issue

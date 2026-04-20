@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { generateId } from './id.ts'
 import { ErrorCode, KanbanError } from './errors.ts'
-import type { Column, Task, TaskWithColumn, Priority, BoardView } from './types.ts'
+import type { BoardView, Column, Priority, Task, TaskComment, TaskWithColumn } from './types.ts'
 import { logActivity, enterColumn, exitColumn } from './activity.ts'
 
 const DEFAULT_COLUMNS = [
@@ -81,6 +81,16 @@ export function initSchema(db: Database): void {
     )
   `)
   db.run(`
+    CREATE TABLE IF NOT EXISTS comments (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      author TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `)
+  db.run(`
     CREATE TABLE IF NOT EXISTS column_time_tracking (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
@@ -98,6 +108,7 @@ export function initSchema(db: Database): void {
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project)')
   db.run('CREATE INDEX IF NOT EXISTS idx_activity_task_id ON activity_log(task_id)')
   db.run('CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity_log(timestamp)')
+  db.run('CREATE INDEX IF NOT EXISTS idx_comments_task_id ON comments(task_id)')
   db.run('CREATE INDEX IF NOT EXISTS idx_column_time_task_id ON column_time_tracking(task_id)')
 }
 
@@ -482,6 +493,102 @@ export function deleteTask(db: Database, id: string): TaskWithColumn {
   return task
 }
 
+function getComment(db: Database, taskId: string, commentId: string): TaskComment {
+  const row = db
+    .query(
+      `SELECT id, task_id, body, author, created_at, updated_at
+         FROM comments
+        WHERE id = $id AND task_id = $task_id`,
+    )
+    .get({
+      $id: commentId,
+      $task_id: taskId,
+    }) as TaskComment | null
+  if (!row) {
+    throw new KanbanError(
+      ErrorCode.COMMENT_NOT_FOUND,
+      `No comment '${commentId}' exists on task '${taskId}'`,
+    )
+  }
+  return row
+}
+
+export function countComments(db: Database, taskId: string): number {
+  const row = db
+    .query('SELECT COUNT(*) as count FROM comments WHERE task_id = $task_id')
+    .get({ $task_id: taskId }) as { count: number }
+  return row.count
+}
+
+export function countCommentsByTask(db: Database): Map<string, number> {
+  const rows = db
+    .query('SELECT task_id, COUNT(*) as count FROM comments GROUP BY task_id')
+    .all() as Array<{ task_id: string; count: number }>
+  return new Map(rows.map((row) => [row.task_id, row.count]))
+}
+
+export function addComment(
+  db: Database,
+  taskId: string,
+  body: string,
+  author: string | null = null,
+): TaskComment {
+  getTask(db, taskId)
+  const id = generateId('cm')
+  db.query(
+    `INSERT INTO comments (id, task_id, body, author)
+     VALUES ($id, $task_id, $body, $author)`,
+  ).run({
+    $id: id,
+    $task_id: taskId,
+    $body: body,
+    $author: author,
+  })
+  logActivity(db, taskId, 'updated', {
+    field: 'comment',
+    new_value: body,
+  })
+  return getComment(db, taskId, id)
+}
+
+export function updateComment(
+  db: Database,
+  taskId: string,
+  commentId: string,
+  body: string,
+): TaskComment {
+  const existing = getComment(db, taskId, commentId)
+  db.query(
+    `UPDATE comments
+        SET body = $body,
+            updated_at = datetime('now')
+      WHERE id = $id AND task_id = $task_id`,
+  ).run({
+    $id: commentId,
+    $task_id: taskId,
+    $body: body,
+  })
+  logActivity(db, taskId, 'updated', {
+    field: 'comment',
+    old_value: existing.body,
+    new_value: body,
+  })
+  return getComment(db, taskId, commentId)
+}
+
+export function deleteComment(db: Database, taskId: string, commentId: string): TaskComment {
+  const existing = getComment(db, taskId, commentId)
+  db.query('DELETE FROM comments WHERE id = $id AND task_id = $task_id').run({
+    $id: commentId,
+    $task_id: taskId,
+  })
+  logActivity(db, taskId, 'deleted', {
+    field: 'comment',
+    old_value: existing.body,
+  })
+  return existing
+}
+
 export function moveTask(db: Database, id: string, columnIdOrName: string): TaskWithColumn {
   const task = getTask(db, id)
   const column = resolveColumn(db, columnIdOrName)
@@ -583,6 +690,7 @@ export function bulkClearDone(db: Database): { deleted: number } {
 }
 
 export function resetBoard(db: Database): void {
+  db.run('DROP TABLE IF EXISTS comments')
   db.run('DROP TABLE IF EXISTS column_time_tracking')
   db.run('DROP TABLE IF EXISTS activity_log')
   db.run('DROP TABLE IF EXISTS tasks')

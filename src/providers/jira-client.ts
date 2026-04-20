@@ -64,6 +64,14 @@ export interface JiraCommentPayload {
   body: unknown
 }
 
+export interface JiraComment {
+  id: string
+  body?: unknown
+  created?: string
+  updated?: string
+  author?: { accountId?: string; displayName?: string }
+}
+
 export interface JiraCreatedIssueRef {
   id: string
   key: string
@@ -271,11 +279,30 @@ export class JiraClient {
     )
   }
 
-  addComment(idOrKey: string, payload: JiraCommentPayload): Promise<void> {
-    return this.request<JiraCommentPayload, void>(
+  addComment(idOrKey: string, payload: JiraCommentPayload): Promise<JiraComment> {
+    return this.request<JiraCommentPayload, JiraComment>(
       'POST',
       `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment`,
       payload,
+    )
+  }
+
+  updateComment(
+    idOrKey: string,
+    commentId: string,
+    payload: JiraCommentPayload,
+  ): Promise<JiraComment> {
+    return this.request<JiraCommentPayload, JiraComment>(
+      'PUT',
+      `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment/${encodeURIComponent(commentId)}`,
+      payload,
+    )
+  }
+
+  deleteComment(idOrKey: string, commentId: string): Promise<void> {
+    return this.request<never, void>(
+      'DELETE',
+      `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment/${encodeURIComponent(commentId)}`,
     )
   }
 

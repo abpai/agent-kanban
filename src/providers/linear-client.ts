@@ -35,6 +35,14 @@ export interface LinearIssue {
   commentCount?: number
 }
 
+export interface LinearComment {
+  id: string
+  body: string
+  createdAt: string
+  updatedAt: string
+  user?: { id: string; name?: string | null; displayName?: string | null } | null
+}
+
 interface LinearIssueNode {
   id: string
   identifier: string
@@ -49,6 +57,22 @@ interface LinearIssueNode {
   state: { id: string; name: string; position: number }
   labels?: { nodes: Array<{ id: string; name: string }> }
 }
+
+interface LinearCommentNode {
+  id: string
+  body: string
+  createdAt: string
+  updatedAt: string
+  user?: { id: string; name?: string | null; displayName?: string | null } | null
+}
+
+const COMMENT_FIELDS = `
+  id
+  body
+  createdAt
+  updatedAt
+  user { id name displayName }
+`
 
 export class LinearClient {
   private readonly endpoint = 'https://api.linear.app/graphql'
@@ -399,14 +423,18 @@ export class LinearClient {
     return data.issueHistory
   }
 
-  async commentCreate(issueId: string, body: string): Promise<{ success: boolean }> {
+  async commentCreate(
+    issueId: string,
+    body: string,
+  ): Promise<{ success: boolean; comment: LinearComment | null }> {
     const data = await this.query<{
-      commentCreate: { success: boolean }
+      commentCreate: { success: boolean; comment: LinearCommentNode | null }
     }>(
       `
         mutation CommentCreate($input: CommentCreateInput!) {
           commentCreate(input: $input) {
             success
+            comment { ${COMMENT_FIELDS} }
           }
         }
       `,
@@ -417,6 +445,53 @@ export class LinearClient {
         },
       },
     )
-    return data.commentCreate
+    return {
+      success: data.commentCreate.success,
+      comment: data.commentCreate.comment,
+    }
+  }
+
+  async commentUpdate(
+    commentId: string,
+    body: string,
+  ): Promise<{ success: boolean; comment: LinearComment | null }> {
+    const data = await this.query<{
+      commentUpdate: { success: boolean; comment: LinearCommentNode | null }
+    }>(
+      `
+        mutation CommentUpdate($id: String!, $input: CommentUpdateInput!) {
+          commentUpdate(id: $id, input: $input) {
+            success
+            comment { ${COMMENT_FIELDS} }
+          }
+        }
+      `,
+      {
+        id: commentId,
+        input: {
+          body,
+        },
+      },
+    )
+    return {
+      success: data.commentUpdate.success,
+      comment: data.commentUpdate.comment,
+    }
+  }
+
+  async commentDelete(commentId: string): Promise<{ success: boolean }> {
+    const data = await this.query<{
+      commentDelete: { success: boolean }
+    }>(
+      `
+        mutation CommentDelete($id: String!) {
+          commentDelete(id: $id) {
+            success
+          }
+        }
+      `,
+      { id: commentId },
+    )
+    return data.commentDelete
   }
 }

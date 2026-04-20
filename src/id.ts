@@ -1,4 +1,4 @@
-export function generateId(prefix: 't' | 'c' | 'a' | 'ct'): string {
+export function generateId(prefix: 't' | 'c' | 'a' | 'ct' | 'cm'): string {
   const bytes = new Uint8Array(5)
   crypto.getRandomValues(bytes)
   let num = 0n

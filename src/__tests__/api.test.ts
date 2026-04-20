@@ -58,6 +58,46 @@ describe('handleRequest', () => {
     expect(result.mutated).toBe(true)
   })
 
+  test('marks successful comment creation as mutated', async () => {
+    const task = addTask(db, 'Comment me')
+    const req = new Request(`http://localhost/api/tasks/${task.id}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: 'hello from api' }),
+    })
+    const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as {
+      ok: boolean
+      data: { id: string; body: string }
+    }
+
+    expect(result.response.status).toBe(200)
+    expect(result.mutated).toBe(true)
+    expect(body.ok).toBe(true)
+    expect(body.data.body).toBe('hello from api')
+  })
+
+  test('marks successful comment update and delete as mutated', async () => {
+    const task = addTask(db, 'Comment me')
+    const created = await provider.comment(task.id, 'hello from api')
+
+    const updateReq = new Request(`http://localhost/api/tasks/${task.id}/comments/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: 'edited via api' }),
+    })
+    const updated = await handleRequest(provider, updateReq)
+    expect(updated.response.status).toBe(200)
+    expect(updated.mutated).toBe(true)
+
+    const deleteReq = new Request(`http://localhost/api/tasks/${task.id}/comments/${created.id}`, {
+      method: 'DELETE',
+    })
+    const deleted = await handleRequest(provider, deleteReq)
+    expect(deleted.response.status).toBe(200)
+    expect(deleted.mutated).toBe(true)
+  })
+
   test('emits task:upsert event on create', async () => {
     const req = new Request('http://localhost/api/tasks', {
       method: 'POST',

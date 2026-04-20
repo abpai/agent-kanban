@@ -42,18 +42,19 @@ Provider support lives in `src/providers/`:
 
 ## Capability matrix
 
-| Capability              | Local | Linear |
-| ----------------------- | ----- | ------ |
-| task create/update/move | yes   | yes    |
-| task delete             | yes   | no     |
-| activity log            | yes   | no     |
-| metrics                 | yes   | no     |
-| column CRUD             | yes   | no     |
-| bulk operations         | yes   | no     |
-| config edit             | yes   | no     |
-| webhooks                | no    | yes    |
-| labels (read)           | no    | yes    |
-| conflict detection      | yes   | yes    |
+| Capability                   | Local | Linear |
+| ---------------------------- | ----- | ------ |
+| task create/update/move      | yes   | yes    |
+| task delete                  | yes   | no     |
+| activity log                 | yes   | no     |
+| metrics                      | yes   | no     |
+| column CRUD                  | yes   | no     |
+| bulk operations              | yes   | no     |
+| config edit                  | yes   | no     |
+| webhooks                     | no    | yes    |
+| comment create/update/delete | yes   | yes    |
+| labels (read)                | no    | yes    |
+| conflict detection           | yes   | yes    |
 
 The CLI, API server, and web UI check capabilities before calling the provider.
 Unsupported operations return `UNSUPPORTED_OPERATION` with exit code `1`. The UI
@@ -88,7 +89,9 @@ The shipped work includes:
 2. API key auth only, with no OAuth flow
 3. Webhook sync is optional; see [Webhooks](#webhooks). Polling remains the
    fallback.
-4. Some local-only operations intentionally remain unsupported
+4. Comment bodies are not mirrored into the cached board view; comment create,
+   update, and delete calls go straight upstream.
+5. Some local-only operations intentionally remain unsupported
 
 ## Webhooks
 
