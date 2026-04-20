@@ -346,6 +346,59 @@ export class LinearClient {
     return data.issueUpdate
   }
 
+  async listIssueHistory(params: {
+    teamId: string
+    updatedAtGte: string
+    first?: number
+    after?: string | null
+  }): Promise<{
+    nodes: Array<{
+      id: string
+      createdAt: string
+      issue: { id: string } | null
+      fromState?: { id: string } | null
+      toState?: { id: string } | null
+    }>
+    pageInfo: { hasNextPage: boolean; endCursor: string | null }
+  }> {
+    const data = await this.query<{
+      issueHistory: {
+        nodes: Array<{
+          id: string
+          createdAt: string
+          issue: { id: string } | null
+          fromState?: { id: string } | null
+          toState?: { id: string } | null
+        }>
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      }
+    }>(
+      `
+        query IssueHistoryDelta($filter: IssueHistoryFilter!, $first: Int, $after: String) {
+          issueHistory(filter: $filter, first: $first, after: $after) {
+            nodes {
+              id
+              createdAt
+              issue { id }
+              fromState { id }
+              toState { id }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      `,
+      {
+        filter: {
+          issue: { team: { id: { eq: params.teamId } } },
+          updatedAt: { gte: params.updatedAtGte },
+        },
+        first: params.first ?? 100,
+        after: params.after ?? null,
+      },
+    )
+    return data.issueHistory
+  }
+
   async commentCreate(issueId: string, body: string): Promise<{ success: boolean }> {
     const data = await this.query<{
       commentCreate: { success: boolean }

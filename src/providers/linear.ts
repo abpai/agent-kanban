@@ -20,15 +20,18 @@ import {
   getCachedBoard,
   getCachedColumns,
   getCachedConfig,
+  getCachedLinearActivity,
   getCachedTask,
   getCachedTasks,
   initLinearCacheSchema,
   loadSyncMeta,
   replaceStates,
+  saveLinearActivity,
   saveSyncMeta,
   upsertIssues,
   upsertProjects,
   upsertUsers,
+  type LinearActivityRow,
 } from './linear-cache.ts'
 import { LinearClient } from './linear-client.ts'
 import { unsupportedOperation } from './errors.ts'
@@ -133,11 +136,45 @@ export class LinearProvider implements KanbanProvider {
           )
         : meta.lastIssueUpdatedAt
 
+    // Best-effort changelog ingest; failures don't fail the main sync.
+    await this.ingestTeamHistory(team.id, meta.lastIssueUpdatedAt).catch((err) => {
+      console.warn('[linear] issueHistory ingest failed:', err)
+    })
+
     saveSyncMeta(this.db, {
       team: { id: team.id, key: team.key, name: team.name },
       lastSyncAt: new Date().toISOString(),
       lastIssueUpdatedAt: newestIssueTimestamp ?? new Date().toISOString(),
     })
+  }
+
+  private async ingestTeamHistory(teamId: string, sinceIso: string | null): Promise<void> {
+    const updatedAtGte = sinceIso ?? '1970-01-01T00:00:00.000Z'
+    let cursor: string | null = null
+    for (let page = 0; page < 20; page++) {
+      const batch = await this.client.listIssueHistory({
+        teamId,
+        updatedAtGte,
+        first: 100,
+        after: cursor,
+      })
+      const rows: LinearActivityRow[] = []
+      for (const node of batch.nodes) {
+        if (!node.issue) continue
+        if (!node.fromState && !node.toState) continue
+        rows.push({
+          issue_id: node.issue.id,
+          history_id: node.id,
+          item_field: 'state',
+          from_value: node.fromState?.id ?? null,
+          to_value: node.toState?.id ?? null,
+          created_at: node.createdAt,
+        })
+      }
+      saveLinearActivity(this.db, rows)
+      if (!batch.pageInfo.hasNextPage || !batch.pageInfo.endCursor) break
+      cursor = batch.pageInfo.endCursor
+    }
   }
 
   private resolveTask(idOrRef: string): Task {
@@ -327,8 +364,40 @@ export class LinearProvider implements KanbanProvider {
     }
   }
 
-  async getActivity(_limit?: number, _taskId?: string): Promise<ActivityEntry[]> {
-    unsupportedOperation('Activity is not available in Linear mode')
+  async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {
+    await this.sync()
+    const issueId = taskId ? this.resolveIssueIdFromTaskId(taskId) : undefined
+    const rows = getCachedLinearActivity(this.db, {
+      ...(issueId !== undefined ? { issueId } : {}),
+      limit: limit ?? 100,
+    })
+    return rows.map((row) => this.activityRowToEntry(row))
+  }
+
+  private resolveIssueIdFromTaskId(taskId: string): string | undefined {
+    const normalized = taskId.startsWith('linear:') ? taskId.slice('linear:'.length) : taskId
+    const row = this.db
+      .query<
+        { id: string },
+        Record<string, string>
+      >(`SELECT id FROM linear_issues WHERE id = $lookup OR identifier = $lookup LIMIT 1`)
+      .get({ $lookup: normalized })
+    return row?.id
+  }
+
+  private activityRowToEntry(row: LinearActivityRow): ActivityEntry {
+    // fromState/toState already reference state ids which agent-kanban
+    // surfaces 1:1 as column ids (see linear_states/getCachedColumns),
+    // so no lookup is needed here.
+    return {
+      id: `linear-activity:${row.issue_id}:${row.history_id}:${row.item_field}`,
+      task_id: `linear:${row.issue_id}`,
+      action: row.item_field === 'state' ? 'moved' : 'updated',
+      field_changed: row.item_field,
+      old_value: row.from_value,
+      new_value: row.to_value,
+      timestamp: row.created_at,
+    }
   }
 
   async getMetrics(): Promise<BoardMetrics> {
