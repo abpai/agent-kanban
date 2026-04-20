@@ -371,56 +371,111 @@ export class LinearClient {
   }
 
   async listIssueHistory(params: {
-    teamId: string
-    updatedAtGte: string
+    issueId: string
     first?: number
     after?: string | null
   }): Promise<{
     nodes: Array<{
       id: string
       createdAt: string
-      issue: { id: string } | null
       fromState?: { id: string } | null
       toState?: { id: string } | null
     }>
     pageInfo: { hasNextPage: boolean; endCursor: string | null }
   }> {
     const data = await this.query<{
-      issueHistory: {
-        nodes: Array<{
-          id: string
-          createdAt: string
-          issue: { id: string } | null
-          fromState?: { id: string } | null
-          toState?: { id: string } | null
-        }>
-        pageInfo: { hasNextPage: boolean; endCursor: string | null }
-      }
+      issue: {
+        history: {
+          nodes: Array<{
+            id: string
+            createdAt: string
+            fromState?: { id: string } | null
+            toState?: { id: string } | null
+          }>
+          pageInfo: { hasNextPage: boolean; endCursor: string | null }
+        }
+      } | null
     }>(
       `
-        query IssueHistoryDelta($filter: IssueHistoryFilter!, $first: Int, $after: String) {
-          issueHistory(filter: $filter, first: $first, after: $after) {
-            nodes {
-              id
-              createdAt
-              issue { id }
-              fromState { id }
-              toState { id }
+        query IssueHistory($issueId: String!, $first: Int, $after: String) {
+          issue(id: $issueId) {
+            history(first: $first, after: $after) {
+              nodes {
+                id
+                createdAt
+                fromState { id }
+                toState { id }
+              }
+              pageInfo { hasNextPage endCursor }
             }
-            pageInfo { hasNextPage endCursor }
           }
         }
       `,
       {
-        filter: {
-          issue: { team: { id: { eq: params.teamId } } },
-          updatedAt: { gte: params.updatedAtGte },
-        },
-        first: params.first ?? 100,
+        issueId: params.issueId,
+        first: params.first ?? 50,
         after: params.after ?? null,
       },
     )
-    return data.issueHistory
+    if (!data.issue) {
+      return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }
+    }
+    return data.issue.history
+  }
+
+  async listComments(issueId: string): Promise<LinearComment[]> {
+    let after: string | null = null
+    const comments: LinearComment[] = []
+
+    do {
+      const data: {
+        issue: {
+          comments: {
+            nodes: LinearCommentNode[]
+            pageInfo: PageInfo
+          }
+        } | null
+      } = await this.query(
+        `
+          query IssueComments($issueId: String!, $after: String) {
+            issue(id: $issueId) {
+              comments(first: 100, after: $after) {
+                nodes { ${COMMENT_FIELDS} }
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+              }
+            }
+          }
+        `,
+        { issueId, after },
+      )
+      if (!data.issue) {
+        providerUpstreamError(`Linear issue '${issueId}' was not found`)
+      }
+      comments.push(...data.issue.comments.nodes)
+      after = data.issue.comments.pageInfo.hasNextPage
+        ? data.issue.comments.pageInfo.endCursor
+        : null
+    } while (after)
+
+    return comments
+  }
+
+  async getComment(commentId: string): Promise<LinearComment> {
+    const data = await this.query<{ comment: LinearCommentNode | null }>(
+      `
+        query Comment($id: String!) {
+          comment(id: $id) { ${COMMENT_FIELDS} }
+        }
+      `,
+      { id: commentId },
+    )
+    if (!data.comment) {
+      providerUpstreamError(`Linear comment '${commentId}' was not found`)
+    }
+    return data.comment
   }
 
   async commentCreate(
@@ -477,21 +532,5 @@ export class LinearClient {
       success: data.commentUpdate.success,
       comment: data.commentUpdate.comment,
     }
-  }
-
-  async commentDelete(commentId: string): Promise<{ success: boolean }> {
-    const data = await this.query<{
-      commentDelete: { success: boolean }
-    }>(
-      `
-        mutation CommentDelete($id: String!) {
-          commentDelete(id: $id) {
-            success
-          }
-        }
-      `,
-      { id: commentId },
-    )
-    return data.commentDelete
   }
 }

@@ -6,11 +6,12 @@ import {
   countComments,
   countCommentsByTask,
   addTask,
-  deleteComment as deleteTaskComment,
   deleteTask,
   getBoardView,
+  getComment as getTaskComment,
   getDbPath,
   getTask,
+  listComments as listTaskComments,
   listColumns,
   listTasks,
   moveTask,
@@ -142,16 +143,20 @@ export class LocalProvider implements KanbanProvider {
     return this.enrichTask(deleteTask(this.db, idOrRef))
   }
 
+  async listComments(idOrRef: string): Promise<TaskComment[]> {
+    return listTaskComments(this.db, idOrRef)
+  }
+
+  async getComment(idOrRef: string, commentId: string): Promise<TaskComment> {
+    return getTaskComment(this.db, idOrRef, commentId)
+  }
+
   async comment(idOrRef: string, body: string): Promise<TaskComment> {
     return addComment(this.db, idOrRef, body)
   }
 
   async updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment> {
     return updateTaskComment(this.db, idOrRef, commentId, body)
-  }
-
-  async deleteComment(idOrRef: string, commentId: string): Promise<void> {
-    deleteTaskComment(this.db, idOrRef, commentId)
   }
 
   async getActivity(limit?: number, taskId?: string) {

@@ -77,6 +77,65 @@ beforeEach(() => {
       )
     }
 
+    if (init?.method === 'GET' && /\/comment\/[^/?]+$/.test(request.url)) {
+      return new Response(
+        JSON.stringify({
+          id: 'comment-1',
+          body: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'one jira comment' }] }],
+          },
+          created: '2026-01-03T00:00:00Z',
+          updated: '2026-01-05T00:00:00Z',
+          author: { displayName: 'Jira User' },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
+    }
+
+    if (init?.method === 'GET') {
+      return new Response(
+        JSON.stringify({
+          startAt: 0,
+          maxResults: 100,
+          total: 2,
+          comments: [
+            {
+              id: 'comment-1',
+              body: {
+                type: 'doc',
+                content: [
+                  { type: 'paragraph', content: [{ type: 'text', text: 'first jira comment' }] },
+                ],
+              },
+              created: '2026-01-03T00:00:00Z',
+              updated: '2026-01-03T00:00:00Z',
+              author: { displayName: 'Jira User' },
+            },
+            {
+              id: 'comment-2',
+              body: {
+                type: 'doc',
+                content: [
+                  { type: 'paragraph', content: [{ type: 'text', text: 'second jira comment' }] },
+                ],
+              },
+              created: '2026-01-04T00:00:00Z',
+              updated: '2026-01-04T00:00:00Z',
+              author: { displayName: 'Reviewer' },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
+    }
+
     if (init?.method === 'PUT') {
       return new Response(
         JSON.stringify({
@@ -142,6 +201,63 @@ describe('JiraProvider.comment', () => {
     expect(context.capabilities.comment).toBe(true)
   })
 
+  test('gets Jira issue comments and normalizes them into TaskComment rows', async () => {
+    const client = new JiraClient({
+      baseUrl: baseConfig.baseUrl,
+      email: baseConfig.email,
+      apiToken: baseConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, baseConfig, client)
+
+    const comments = await provider.listComments('ENG-1')
+
+    expect(requests[0]?.url).toBe(
+      'https://example.atlassian.net/rest/api/3/issue/ENG-1/comment?startAt=0&maxResults=100',
+    )
+    expect(requests[0]?.init?.method).toBe('GET')
+    expect(comments).toEqual([
+      {
+        id: 'comment-1',
+        task_id: 'jira:10001',
+        body: 'first jira comment',
+        author: 'Jira User',
+        created_at: '2026-01-03T00:00:00Z',
+        updated_at: '2026-01-03T00:00:00Z',
+      },
+      {
+        id: 'comment-2',
+        task_id: 'jira:10001',
+        body: 'second jira comment',
+        author: 'Reviewer',
+        created_at: '2026-01-04T00:00:00Z',
+        updated_at: '2026-01-04T00:00:00Z',
+      },
+    ])
+  })
+
+  test('gets a single Jira issue comment by id', async () => {
+    const client = new JiraClient({
+      baseUrl: baseConfig.baseUrl,
+      email: baseConfig.email,
+      apiToken: baseConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, baseConfig, client)
+
+    const comment = await provider.getComment('ENG-1', 'comment-1')
+
+    expect(requests[0]?.url).toBe(
+      'https://example.atlassian.net/rest/api/3/issue/ENG-1/comment/comment-1',
+    )
+    expect(requests[0]?.init?.method).toBe('GET')
+    expect(comment).toMatchObject({
+      id: 'comment-1',
+      task_id: 'jira:10001',
+      body: 'one jira comment',
+      author: 'Jira User',
+      updated_at: '2026-01-05T00:00:00Z',
+    })
+  })
+
   test('puts an updated ADF comment to the Jira issue comment endpoint', async () => {
     const client = new JiraClient({
       baseUrl: baseConfig.baseUrl,
@@ -161,25 +277,5 @@ describe('JiraProvider.comment', () => {
       task_id: 'jira:10001',
       body: 'edited jira comment',
     })
-  })
-
-  test('deletes the Jira issue comment by id', async () => {
-    const client = new JiraClient({
-      baseUrl: baseConfig.baseUrl,
-      email: baseConfig.email,
-      apiToken: baseConfig.apiToken,
-    })
-    const provider = new JiraProvider(db, baseConfig, client)
-
-    await provider.comment('ENG-1', 'hello from jira')
-    requests = []
-
-    await provider.deleteComment('ENG-1', 'comment-1')
-
-    expect(requests[0]?.url).toBe(
-      'https://example.atlassian.net/rest/api/3/issue/ENG-1/comment/comment-1',
-    )
-    expect(requests[0]?.init?.method).toBe('DELETE')
-    expect((await provider.getTask('ENG-1')).comment_count).toBe(0)
   })
 })

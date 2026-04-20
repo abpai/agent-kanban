@@ -77,7 +77,30 @@ describe('handleRequest', () => {
     expect(body.data.body).toBe('hello from api')
   })
 
-  test('marks successful comment update and delete as mutated', async () => {
+  test('lists comments without marking the request as mutated', async () => {
+    const task = addTask(db, 'Comment me')
+    await provider.comment(task.id, 'hello from api')
+    await provider.comment(task.id, 'second api comment')
+
+    const req = new Request(`http://localhost/api/tasks/${task.id}/comments`, {
+      method: 'GET',
+    })
+    const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as {
+      ok: boolean
+      data: Array<{ id: string; body: string }>
+    }
+
+    expect(result.response.status).toBe(200)
+    expect(result.mutated).toBe(false)
+    expect(body.ok).toBe(true)
+    expect(body.data.map((comment) => comment.body)).toEqual([
+      'hello from api',
+      'second api comment',
+    ])
+  })
+
+  test('marks successful comment update as mutated', async () => {
     const task = addTask(db, 'Comment me')
     const created = await provider.comment(task.id, 'hello from api')
 
@@ -89,13 +112,6 @@ describe('handleRequest', () => {
     const updated = await handleRequest(provider, updateReq)
     expect(updated.response.status).toBe(200)
     expect(updated.mutated).toBe(true)
-
-    const deleteReq = new Request(`http://localhost/api/tasks/${task.id}/comments/${created.id}`, {
-      method: 'DELETE',
-    })
-    const deleted = await handleRequest(provider, deleteReq)
-    expect(deleted.response.status).toBe(200)
-    expect(deleted.mutated).toBe(true)
   })
 
   test('emits task:upsert event on create', async () => {
