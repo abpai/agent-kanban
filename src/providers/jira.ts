@@ -8,6 +8,7 @@ import type {
   BoardView,
   Column,
   Priority,
+  TaskComment,
   Task,
 } from '../types.ts'
 import {
@@ -19,8 +20,9 @@ import {
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf.ts'
 import { JIRA_CAPABILITIES } from './capabilities.ts'
 import { providerUpstreamError, unsupportedOperation } from './errors.ts'
-import { JiraClient, type JiraIssue } from './jira-client.ts'
+import { JiraClient, type JiraComment, type JiraIssue } from './jira-client.ts'
 import {
+  adjustJiraIssueCommentCount,
   decodeColumnStatusIds,
   deleteJiraIssue,
   getCachedActivity,
@@ -425,6 +427,22 @@ export class JiraProvider implements KanbanProvider {
     return task
   }
 
+  private issueKeyFor(task: Task): string {
+    return task.externalRef ?? task.providerId ?? task.id.replace(/^jira:/, '')
+  }
+
+  private toTaskComment(task: Task, comment: JiraComment): TaskComment {
+    const timestamp = comment.updated ?? comment.created ?? task.updated_at
+    return {
+      id: comment.id,
+      task_id: task.id,
+      body: comment.body ? adfToPlainText(comment.body as AdfDocument) : '',
+      author: comment.author?.displayName ?? null,
+      created_at: comment.created ?? timestamp,
+      updated_at: timestamp,
+    }
+  }
+
   async createTask(input: CreateTaskInput): Promise<Task> {
     await this.sync()
     this.normalizeProjectField(input.project)
@@ -473,7 +491,7 @@ export class JiraProvider implements KanbanProvider {
         `Jira issue ${task.externalRef ?? idOrRef} was updated remotely (expected version ${input.expectedVersion}, current ${task.version ?? 'unknown'})`,
       )
     }
-    const issueKey = task.externalRef ?? task.providerId ?? task.id.replace(/^jira:/, '')
+    const issueKey = this.issueKeyFor(task)
     const fields: Record<string, unknown> = {}
     if (input.title !== undefined) fields['summary'] = input.title
     if (input.description !== undefined) {
@@ -503,8 +521,7 @@ export class JiraProvider implements KanbanProvider {
   async moveTask(idOrRef: string, column: string): Promise<Task> {
     await this.sync()
     const task = this.resolveTaskByIdOrKey(idOrRef)
-    const issueKey = task.externalRef ?? task.providerId ?? task.id.replace(/^jira:/, '')
-    return this.moveTaskByKey(issueKey, column)
+    return this.moveTaskByKey(this.issueKeyFor(task), column)
   }
 
   private async moveTaskByKey(issueKey: string, column: string): Promise<Task> {
@@ -547,12 +564,30 @@ export class JiraProvider implements KanbanProvider {
     unsupportedOperation('Task deletion is not supported in Jira mode')
   }
 
-  async comment(idOrRef: string, body: string): Promise<void> {
+  async comment(idOrRef: string, body: string): Promise<TaskComment> {
     await this.sync()
     const task = this.resolveTaskByIdOrKey(idOrRef)
-    const issueKey = task.externalRef ?? task.providerId ?? task.id.replace(/^jira:/, '')
-    // Comment counts stay eventually consistent through the normal sync interval.
-    await this.client.addComment(issueKey, { body: plainTextToAdf(body) })
+    const created = await this.client.addComment(this.issueKeyFor(task), {
+      body: plainTextToAdf(body),
+    })
+    adjustJiraIssueCommentCount(this.db, task.providerId || task.externalRef || task.id, 1)
+    return this.toTaskComment(task, created)
+  }
+
+  async updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment> {
+    await this.sync()
+    const task = this.resolveTaskByIdOrKey(idOrRef)
+    const updated = await this.client.updateComment(this.issueKeyFor(task), commentId, {
+      body: plainTextToAdf(body),
+    })
+    return this.toTaskComment(task, updated)
+  }
+
+  async deleteComment(idOrRef: string, commentId: string): Promise<void> {
+    await this.sync()
+    const task = this.resolveTaskByIdOrKey(idOrRef)
+    await this.client.deleteComment(this.issueKeyFor(task), commentId)
+    adjustJiraIssueCommentCount(this.db, task.providerId || task.externalRef || task.id, -1)
   }
 
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {

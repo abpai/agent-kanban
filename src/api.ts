@@ -10,6 +10,10 @@ interface MoveTaskBody {
   column?: string
 }
 
+interface CommentBody {
+  body?: string
+}
+
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status })
 }
@@ -26,7 +30,12 @@ function missingArgument(field: string): Response {
 }
 
 function statusForCode(code: string): number {
-  if (code === ErrorCode.TASK_NOT_FOUND || code === ErrorCode.COLUMN_NOT_FOUND) return 404
+  if (
+    code === ErrorCode.TASK_NOT_FOUND ||
+    code === ErrorCode.COLUMN_NOT_FOUND ||
+    code === ErrorCode.COMMENT_NOT_FOUND
+  )
+    return 404
   if (code === ErrorCode.PROVIDER_AUTH_FAILED) return 401
   if (code === ErrorCode.PROVIDER_RATE_LIMITED) return 429
   if (code === ErrorCode.CONFLICT) return 409
@@ -189,6 +198,42 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     })
     const event = response.ok && moved ? await upsertEvent(provider, moved) : undefined
     return { response, mutated: response.ok, event }
+  }
+
+  const commentsMatch = path.match(/^\/api\/tasks\/([^/]+)\/comments$/)
+  if (commentsMatch && method === 'POST') {
+    const id = decodeURIComponent(commentsMatch[1]!)
+    const body = (await req.json()) as CommentBody
+    if (!body.body) return { response: missingArgument('body'), mutated: false }
+    const response = await wrapHandler(async () => ({
+      ok: true,
+      data: await provider.comment(id, body.body!),
+    }))
+    return { response, mutated: response.ok }
+  }
+
+  const commentMatch = path.match(/^\/api\/tasks\/([^/]+)\/comments\/([^/]+)$/)
+  if (commentMatch) {
+    const id = decodeURIComponent(commentMatch[1]!)
+    const commentId = decodeURIComponent(commentMatch[2]!)
+
+    if (method === 'PATCH') {
+      const body = (await req.json()) as CommentBody
+      if (!body.body) return { response: missingArgument('body'), mutated: false }
+      const response = await wrapHandler(async () => ({
+        ok: true,
+        data: await provider.updateComment(id, commentId, body.body!),
+      }))
+      return { response, mutated: response.ok }
+    }
+
+    if (method === 'DELETE') {
+      const response = await wrapHandler(async () => {
+        await provider.deleteComment(id, commentId)
+        return { ok: true, data: { id: commentId } }
+      })
+      return { response, mutated: response.ok }
+    }
   }
 
   if (path === '/api/activity' && method === 'GET') {

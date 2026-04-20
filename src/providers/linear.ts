@@ -6,6 +6,7 @@ import type {
   BoardConfig,
   BoardMetrics,
   Column,
+  TaskComment,
   Task,
 } from '../types.ts'
 import {
@@ -16,6 +17,7 @@ import {
 } from '../webhooks.ts'
 import { LINEAR_CAPABILITIES } from './capabilities.ts'
 import {
+  adjustLinearIssueCommentCount,
   deleteLinearIssue,
   getCachedBoard,
   getCachedColumns,
@@ -33,7 +35,7 @@ import {
   upsertUsers,
   type LinearActivityRow,
 } from './linear-cache.ts'
-import { LinearClient } from './linear-client.ts'
+import { LinearClient, type LinearComment } from './linear-client.ts'
 import { unsupportedOperation } from './errors.ts'
 import type {
   CreateTaskInput,
@@ -215,6 +217,17 @@ export class LinearProvider implements KanbanProvider {
     return row?.id
   }
 
+  private toTaskComment(task: Task, comment: LinearComment): TaskComment {
+    return {
+      id: comment.id,
+      task_id: task.id,
+      body: comment.body,
+      author: comment.user?.displayName || comment.user?.name || null,
+      created_at: comment.createdAt,
+      updated_at: comment.updatedAt,
+    }
+  }
+
   async getContext(): Promise<ProviderContext> {
     await this.sync()
     const meta = loadSyncMeta(this.db)
@@ -354,14 +367,35 @@ export class LinearProvider implements KanbanProvider {
     unsupportedOperation('Task deletion is not supported in Linear mode')
   }
 
-  async comment(idOrRef: string, body: string): Promise<void> {
+  async comment(idOrRef: string, body: string): Promise<TaskComment> {
     await this.sync()
     const task = this.resolveTask(idOrRef)
-    // Comment counts stay eventually consistent through the normal sync interval.
     const result = await this.client.commentCreate(task.providerId || task.id, body)
-    if (!result.success) {
+    if (!result.success || !result.comment) {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear comment creation failed')
     }
+    adjustLinearIssueCommentCount(this.db, task.providerId || task.id, 1)
+    return this.toTaskComment(task, result.comment)
+  }
+
+  async updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment> {
+    await this.sync()
+    const task = this.resolveTask(idOrRef)
+    const result = await this.client.commentUpdate(commentId, body)
+    if (!result.success || !result.comment) {
+      throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear comment update failed')
+    }
+    return this.toTaskComment(task, result.comment)
+  }
+
+  async deleteComment(idOrRef: string, commentId: string): Promise<void> {
+    await this.sync()
+    const task = this.resolveTask(idOrRef)
+    const result = await this.client.commentDelete(commentId)
+    if (!result.success) {
+      throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear comment deletion failed')
+    }
+    adjustLinearIssueCommentCount(this.db, task.providerId || task.id, -1)
   }
 
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {

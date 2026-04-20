@@ -18,7 +18,7 @@ const baseConfig: JiraProviderConfig = {
 
 let db: Database
 let originalFetch: typeof fetch
-let captured: { url: string; init?: RequestInit } | null
+let requests: Array<{ url: string; init?: RequestInit }>
 
 beforeEach(() => {
   db = new Database(':memory:')
@@ -50,16 +50,59 @@ beforeEach(() => {
     },
   ])
   originalFetch = globalThis.fetch
-  captured = null
+  requests = []
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    captured = {
+    const request = {
       url: typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url,
       init,
     }
-    return new Response(JSON.stringify({ id: 'comment-1' }), {
-      status: 201,
-      headers: { 'content-type': 'application/json' },
-    })
+    requests.push(request)
+
+    if (init?.method === 'POST') {
+      return new Response(
+        JSON.stringify({
+          id: 'comment-1',
+          body: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'hello from jira' }] }],
+          },
+          created: '2026-01-03T00:00:00Z',
+          updated: '2026-01-03T00:00:00Z',
+          author: { displayName: 'Jira User' },
+        }),
+        {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
+    }
+
+    if (init?.method === 'PUT') {
+      return new Response(
+        JSON.stringify({
+          id: 'comment-1',
+          body: {
+            type: 'doc',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'edited jira comment' }] },
+            ],
+          },
+          created: '2026-01-03T00:00:00Z',
+          updated: '2026-01-04T00:00:00Z',
+          author: { displayName: 'Jira User' },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
+    }
+
+    if (init?.method === 'DELETE') {
+      return new Response(null, { status: 204 })
+    }
+
+    throw new Error(`Unexpected Jira request: ${request.url}`)
   }) as unknown as typeof fetch
 })
 
@@ -76,19 +119,67 @@ describe('JiraProvider.comment', () => {
     })
     const provider = new JiraProvider(db, baseConfig, client)
 
-    await provider.comment('ENG-1', 'hello from jira')
+    const comment = await provider.comment('ENG-1', 'hello from jira')
 
-    expect(captured?.url).toBe('https://example.atlassian.net/rest/api/3/issue/ENG-1/comment')
-    expect(captured?.init?.method).toBe('POST')
-    const body = JSON.parse(String(captured?.init?.body)) as {
+    expect(requests[0]?.url).toBe('https://example.atlassian.net/rest/api/3/issue/ENG-1/comment')
+    expect(requests[0]?.init?.method).toBe('POST')
+    const body = JSON.parse(String(requests[0]?.init?.body)) as {
       body: { type: string; content: unknown[] }
     }
     expect(body.body.type).toBe('doc')
     expect(body.body.content).toEqual([
       { type: 'paragraph', content: [{ type: 'text', text: 'hello from jira' }] },
     ])
+    expect(comment).toMatchObject({
+      id: 'comment-1',
+      task_id: 'jira:10001',
+      body: 'hello from jira',
+      author: 'Jira User',
+    })
+    expect((await provider.getTask('ENG-1')).comment_count).toBe(1)
 
     const context = await provider.getContext()
     expect(context.capabilities.comment).toBe(true)
+  })
+
+  test('puts an updated ADF comment to the Jira issue comment endpoint', async () => {
+    const client = new JiraClient({
+      baseUrl: baseConfig.baseUrl,
+      email: baseConfig.email,
+      apiToken: baseConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, baseConfig, client)
+
+    const comment = await provider.updateComment('ENG-1', 'comment-1', 'edited jira comment')
+
+    expect(requests[0]?.url).toBe(
+      'https://example.atlassian.net/rest/api/3/issue/ENG-1/comment/comment-1',
+    )
+    expect(requests[0]?.init?.method).toBe('PUT')
+    expect(comment).toMatchObject({
+      id: 'comment-1',
+      task_id: 'jira:10001',
+      body: 'edited jira comment',
+    })
+  })
+
+  test('deletes the Jira issue comment by id', async () => {
+    const client = new JiraClient({
+      baseUrl: baseConfig.baseUrl,
+      email: baseConfig.email,
+      apiToken: baseConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, baseConfig, client)
+
+    await provider.comment('ENG-1', 'hello from jira')
+    requests = []
+
+    await provider.deleteComment('ENG-1', 'comment-1')
+
+    expect(requests[0]?.url).toBe(
+      'https://example.atlassian.net/rest/api/3/issue/ENG-1/comment/comment-1',
+    )
+    expect(requests[0]?.init?.method).toBe('DELETE')
+    expect((await provider.getTask('ENG-1')).comment_count).toBe(0)
   })
 })

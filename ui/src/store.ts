@@ -44,6 +44,7 @@ const defaultCapabilities: ProviderCapabilities = {
   taskUpdate: true,
   taskMove: true,
   taskDelete: true,
+  comment: true,
   activity: true,
   metrics: true,
   columnCrud: true,

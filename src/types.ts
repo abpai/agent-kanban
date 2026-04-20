@@ -32,6 +32,15 @@ export interface Task {
   source_updated_at: string | null
 }
 
+export interface TaskComment {
+  id: string
+  task_id: string
+  body: string
+  author: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface TaskWithColumn extends Task {
   column_name: string
 }

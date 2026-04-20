@@ -1,8 +1,12 @@
 import type { Database } from 'bun:sqlite'
-import { listActivity, logActivity } from '../activity.ts'
+import { listActivity } from '../activity.ts'
 import { getConfigPath, loadConfig, saveConfig } from '../config.ts'
 import {
+  addComment,
+  countComments,
+  countCommentsByTask,
   addTask,
+  deleteComment as deleteTaskComment,
   deleteTask,
   getBoardView,
   getDbPath,
@@ -10,10 +14,11 @@ import {
   listColumns,
   listTasks,
   moveTask,
+  updateComment as updateTaskComment,
   updateTask,
 } from '../db.ts'
 import { getBoardMetrics, getDiscoveredAssignees, getDiscoveredProjects } from '../metrics.ts'
-import type { BoardBootstrap, BoardConfig, Task } from '../types.ts'
+import type { BoardBootstrap, BoardConfig, Task, TaskComment } from '../types.ts'
 import { ErrorCode, KanbanError } from '../errors.ts'
 import { LOCAL_CAPABILITIES } from './capabilities.ts'
 import type {
@@ -38,22 +43,6 @@ function buildLocalConfig(
   }
 }
 
-function enrichTask(task: Task): Task {
-  const revision = task.revision ?? 0
-  const assignees = task.assignee ? [task.assignee] : []
-  return {
-    ...task,
-    providerId: task.id,
-    externalRef: task.id,
-    url: null,
-    assignees,
-    labels: [],
-    comment_count: 0,
-    version: String(revision),
-    source_updated_at: null,
-  }
-}
-
 export class LocalProvider implements KanbanProvider {
   readonly type = 'local' as const
 
@@ -61,6 +50,22 @@ export class LocalProvider implements KanbanProvider {
     private readonly db: Database,
     private readonly dbPath = getDbPath(),
   ) {}
+
+  private enrichTask(task: Task, commentCount?: number): Task {
+    const revision = task.revision ?? 0
+    const assignees = task.assignee ? [task.assignee] : []
+    return {
+      ...task,
+      providerId: task.id,
+      externalRef: task.id,
+      url: null,
+      assignees,
+      labels: [],
+      comment_count: commentCount ?? countComments(this.db, task.id),
+      version: String(revision),
+      source_updated_at: null,
+    }
+  }
 
   async getContext(): Promise<ProviderContext> {
     return {
@@ -85,10 +90,11 @@ export class LocalProvider implements KanbanProvider {
 
   async getBoard() {
     const board = getBoardView(this.db)
+    const counts = countCommentsByTask(this.db)
     return {
       columns: board.columns.map((column) => ({
         ...column,
-        tasks: column.tasks.map(enrichTask),
+        tasks: column.tasks.map((task) => this.enrichTask(task, counts.get(task.id) ?? 0)),
       })),
     }
   }
@@ -98,15 +104,18 @@ export class LocalProvider implements KanbanProvider {
   }
 
   async listTasks(filters: TaskListFilters = {}) {
-    return listTasks(this.db, filters).map(enrichTask)
+    const counts = countCommentsByTask(this.db)
+    return listTasks(this.db, filters).map((task) =>
+      this.enrichTask(task, counts.get(task.id) ?? 0),
+    )
   }
 
   async getTask(idOrRef: string) {
-    return enrichTask(getTask(this.db, idOrRef))
+    return this.enrichTask(getTask(this.db, idOrRef))
   }
 
   async createTask(input: CreateTaskInput) {
-    return enrichTask(addTask(this.db, input.title, input))
+    return this.enrichTask(addTask(this.db, input.title, input))
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput) {
@@ -122,23 +131,27 @@ export class LocalProvider implements KanbanProvider {
     }
     const updates: Omit<UpdateTaskInput, 'expectedVersion'> = { ...input }
     delete (updates as UpdateTaskInput).expectedVersion
-    return enrichTask(updateTask(this.db, idOrRef, updates))
+    return this.enrichTask(updateTask(this.db, idOrRef, updates))
   }
 
   async moveTask(idOrRef: string, column: string) {
-    return enrichTask(moveTask(this.db, idOrRef, column))
+    return this.enrichTask(moveTask(this.db, idOrRef, column))
   }
 
   async deleteTask(idOrRef: string) {
-    return enrichTask(deleteTask(this.db, idOrRef))
+    return this.enrichTask(deleteTask(this.db, idOrRef))
   }
 
-  async comment(idOrRef: string, body: string): Promise<void> {
-    const task = getTask(this.db, idOrRef)
-    logActivity(this.db, task.id, 'updated', {
-      field: 'comment',
-      new_value: body,
-    })
+  async comment(idOrRef: string, body: string): Promise<TaskComment> {
+    return addComment(this.db, idOrRef, body)
+  }
+
+  async updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment> {
+    return updateTaskComment(this.db, idOrRef, commentId, body)
+  }
+
+  async deleteComment(idOrRef: string, commentId: string): Promise<void> {
+    deleteTaskComment(this.db, idOrRef, commentId)
   }
 
   async getActivity(limit?: number, taskId?: string) {
