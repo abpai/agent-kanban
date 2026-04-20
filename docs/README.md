@@ -5,10 +5,14 @@ This directory holds the longer-form project guides that support the main
 
 ## Start here
 
-- [`WORKFLOW.md`](./WORKFLOW.md): a common day-to-day workflow for running the
+- [`workflow.md`](./workflow.md): a common day-to-day workflow for running the
   board locally and moving work through it
+- [`mcp.md`](./mcp.md): the reusable tracker MCP module, its default tools, and
+  the current integration caveats
+- [`providers/jira.md`](./providers/jira.md): how the Jira provider works,
+  including comments, webhooks, transitions, and current limits
 - [`providers/linear.md`](./providers/linear.md): how the Linear provider works,
-  what shipped, and what remains intentionally unsupported
+  including comments, webhooks, and intentionally unsupported behavior
 
 ## Doc layout
 
