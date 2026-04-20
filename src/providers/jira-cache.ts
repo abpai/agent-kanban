@@ -84,6 +84,20 @@ CREATE TABLE IF NOT EXISTS jira_issue_types (
 )
   `)
   db.run(`
+CREATE TABLE IF NOT EXISTS jira_activity (
+  issue_id TEXT NOT NULL,
+  history_id TEXT NOT NULL,
+  item_field TEXT NOT NULL,
+  from_value TEXT,
+  to_value TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (issue_id, history_id, item_field)
+)
+  `)
+  db.run(`
+CREATE INDEX IF NOT EXISTS jira_activity_created_at_idx ON jira_activity(created_at DESC)
+  `)
+  db.run(`
 CREATE TABLE IF NOT EXISTS jira_issues (
   id TEXT PRIMARY KEY,
   key TEXT NOT NULL UNIQUE,
@@ -498,4 +512,54 @@ export function getCachedConfig(db: Database): JiraCacheConfig {
     priorities,
     issueTypes,
   }
+}
+
+export interface JiraActivityRow {
+  issue_id: string
+  history_id: string
+  item_field: string
+  from_value: string | null
+  to_value: string | null
+  created_at: string
+}
+
+export function saveJiraActivity(db: Database, rows: JiraActivityRow[]): void {
+  if (rows.length === 0) return
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO jira_activity
+     (issue_id, history_id, item_field, from_value, to_value, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  )
+  const tx = db.transaction((items: JiraActivityRow[]) => {
+    for (const r of items) {
+      stmt.run(r.issue_id, r.history_id, r.item_field, r.from_value, r.to_value, r.created_at)
+    }
+  })
+  tx(rows)
+}
+
+export function getCachedActivity(
+  db: Database,
+  params: { issueId?: string; limit?: number } = {},
+): JiraActivityRow[] {
+  const limit = params.limit ?? 100
+  if (params.issueId) {
+    return db
+      .query(
+        `SELECT issue_id, history_id, item_field, from_value, to_value, created_at
+         FROM jira_activity
+         WHERE issue_id = $issueId
+         ORDER BY created_at DESC
+         LIMIT $limit`,
+      )
+      .all({ $issueId: params.issueId, $limit: limit }) as JiraActivityRow[]
+  }
+  return db
+    .query(
+      `SELECT issue_id, history_id, item_field, from_value, to_value, created_at
+       FROM jira_activity
+       ORDER BY created_at DESC
+       LIMIT $limit`,
+    )
+    .all({ $limit: limit }) as JiraActivityRow[]
 }

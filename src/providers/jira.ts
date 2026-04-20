@@ -23,6 +23,7 @@ import { JiraClient, type JiraIssue } from './jira-client.ts'
 import {
   decodeColumnStatusIds,
   deleteJiraIssue,
+  getCachedActivity,
   getCachedBoard,
   getCachedColumns,
   getCachedConfig,
@@ -34,10 +35,12 @@ import {
   replaceJiraColumns,
   replaceJiraIssueTypes,
   replaceJiraPriorities,
+  saveJiraActivity,
   saveJiraSyncMeta,
   saveTeamInfo,
   upsertJiraIssues,
   upsertJiraUsers,
+  type JiraActivityRow,
 } from './jira-cache.ts'
 import type {
   CreateTaskInput,
@@ -231,6 +234,18 @@ export class JiraProvider implements KanbanProvider {
         if (newestUpdatedAt === null || issue.fields.updated > newestUpdatedAt) {
           newestUpdatedAt = issue.fields.updated
         }
+      }
+
+      // Fetch changelog per changed issue so the poll-based
+      // `moved` trigger in @garage/dispatch works. Server-side dedupe
+      // keyed on (issue_id, history_id, item_field) keeps this cheap
+      // even if the same issue is updated repeatedly.
+      for (const issue of page.issues) {
+        await this.ingestIssueActivity(issue.id).catch((err) => {
+          // Activity is best-effort; the main sync shouldn't fail if
+          // one changelog call 404s or rate-limits.
+          console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
+        })
       }
 
       accumulated += page.issues.length
@@ -540,8 +555,74 @@ export class JiraProvider implements KanbanProvider {
     await this.client.addComment(issueKey, { body: plainTextToAdf(body) })
   }
 
-  async getActivity(_limit?: number, _taskId?: string): Promise<ActivityEntry[]> {
-    unsupportedOperation('Activity is not available in Jira mode')
+  async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {
+    await this.sync()
+    const lookupIssueId = taskId ? this.resolveIssueIdFromTaskId(taskId) : undefined
+    const rows = getCachedActivity(this.db, {
+      ...(lookupIssueId !== undefined ? { issueId: lookupIssueId } : {}),
+      limit: limit ?? 100,
+    })
+    return rows.map((row) => this.activityRowToEntry(row))
+  }
+
+  private resolveIssueIdFromTaskId(taskId: string): string | undefined {
+    const normalized = taskId.startsWith('jira:') ? taskId.slice('jira:'.length) : taskId
+    const row = this.db
+      .query<
+        { id: string },
+        Record<string, string>
+      >(`SELECT id FROM jira_issues WHERE id = $lookup OR key = $lookup LIMIT 1`)
+      .get({ $lookup: normalized })
+    return row?.id
+  }
+
+  private activityRowToEntry(row: JiraActivityRow): ActivityEntry {
+    // Map status field items to the same 'moved' shape the local provider
+    // emits, so dispatch's collector can trigger uniformly. Translate status
+    // ids into column ids via the cached column mapping; fall back to the raw
+    // status name for unmapped rows so we never drop activity silently.
+    const action: ActivityEntry['action'] = row.item_field === 'status' ? 'moved' : 'updated'
+    let fromCol = row.from_value
+    let toCol = row.to_value
+    if (row.item_field === 'status') {
+      fromCol = row.from_value ? (this.statusIdToColumnId(row.from_value) ?? row.from_value) : null
+      toCol = row.to_value ? (this.statusIdToColumnId(row.to_value) ?? row.to_value) : null
+    }
+    return {
+      id: `jira-activity:${row.issue_id}:${row.history_id}:${row.item_field}`,
+      task_id: `jira:${row.issue_id}`,
+      action,
+      field_changed: row.item_field,
+      old_value: fromCol,
+      new_value: toCol,
+      timestamp: row.created_at,
+    }
+  }
+
+  private statusIdToColumnId(statusId: string): string | undefined {
+    const cols = getCachedColumns(this.db)
+    for (const col of cols) {
+      if (decodeColumnStatusIds(col).includes(statusId)) return col.id
+    }
+    return undefined
+  }
+
+  private async ingestIssueActivity(issueId: string): Promise<void> {
+    const page = await this.client.getChangelog(issueId, { maxResults: 100 })
+    const rows: JiraActivityRow[] = []
+    for (const entry of page.values) {
+      for (const item of entry.items) {
+        rows.push({
+          issue_id: issueId,
+          history_id: entry.id,
+          item_field: item.field,
+          from_value: item.from ?? null,
+          to_value: item.to ?? null,
+          created_at: entry.created,
+        })
+      }
+    }
+    saveJiraActivity(this.db, rows)
   }
 
   async getMetrics(): Promise<BoardMetrics> {
