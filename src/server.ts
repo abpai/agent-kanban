@@ -43,6 +43,9 @@ export function startServer(provider: KanbanProvider, port: number): void {
     },
     async fetch(req, server) {
       const url = new URL(req.url)
+      const rawPath = url.pathname
+      const basePath = rawPath === '/kanban' || rawPath.startsWith('/kanban/') ? '/kanban' : ''
+      const pathname = basePath ? rawPath.slice(basePath.length) || '/' : rawPath
 
       // Handle OPTIONS preflight first (before /api routing)
       if (req.method === 'OPTIONS') {
@@ -50,13 +53,13 @@ export function startServer(provider: KanbanProvider, port: number): void {
       }
 
       // WebSocket upgrade
-      if (url.pathname === '/ws') {
+      if (pathname === '/ws') {
         const upgraded = server.upgrade(req)
         if (upgraded) return undefined as unknown as Response
         return new Response('WebSocket upgrade failed', { status: 400 })
       }
 
-      if (url.pathname === '/api/health') {
+      if (pathname === '/api/health') {
         const context = await provider.getContext()
         return Response.json({
           ok: true,
@@ -64,8 +67,11 @@ export function startServer(provider: KanbanProvider, port: number): void {
         })
       }
 
-      if (url.pathname.startsWith('/api/')) {
-        const result = await handleRequest(provider, req)
+      if (pathname.startsWith('/api/')) {
+        const forwardedUrl = new URL(req.url)
+        forwardedUrl.pathname = pathname
+        const forwardedReq = new Request(forwardedUrl.toString(), req)
+        const result = await handleRequest(provider, forwardedReq)
         applyCorsHeaders(result.response)
         if (result.mutated && result.response.ok) {
           broadcast({ type: 'refresh' })
@@ -74,7 +80,8 @@ export function startServer(provider: KanbanProvider, port: number): void {
       }
 
       if (hasStatic) {
-        const filePath = join(distDir, url.pathname === '/' ? 'index.html' : url.pathname)
+        const assetPath = pathname === '/' ? '/index.html' : pathname
+        const filePath = join(distDir, assetPath.replace(/^\//, ''))
         const file = Bun.file(filePath)
         if (await file.exists()) return new Response(file)
         return new Response(Bun.file(join(distDir, 'index.html')))

@@ -7,8 +7,9 @@ import type {
   Task,
   Priority,
 } from './types'
+import { withBasePath } from './base'
 
-const BASE = '/api'
+const BASE = withBasePath('/api')
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init)
