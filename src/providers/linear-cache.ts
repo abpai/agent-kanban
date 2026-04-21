@@ -271,6 +271,16 @@ export function upsertProjects(
   }
 }
 
+// Bound per-value storage so repeated edits to a long description can't balloon the cache.
+const ACTIVITY_VALUE_MAX_CHARS = 4096
+const ACTIVITY_TRUNCATION_SUFFIX = '…[truncated]'
+const ACTIVITY_VALUE_BUDGET = ACTIVITY_VALUE_MAX_CHARS - ACTIVITY_TRUNCATION_SUFFIX.length
+
+function clampActivityValue(value: string): string {
+  if (value.length <= ACTIVITY_VALUE_MAX_CHARS) return value
+  return value.slice(0, ACTIVITY_VALUE_BUDGET) + ACTIVITY_TRUNCATION_SUFFIX
+}
+
 export function upsertIssues(
   db: Database,
   issues: Array<{
@@ -339,8 +349,8 @@ export function upsertIssues(
           $issue_id: issue.id,
           $history_id: `desc:${issue.updatedAt}`,
           $item_field: 'description',
-          $from_value: prior.description,
-          $to_value: nextDescription,
+          $from_value: clampActivityValue(prior.description),
+          $to_value: clampActivityValue(nextDescription),
           $created_at: issue.updatedAt,
         })
       }

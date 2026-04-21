@@ -30,57 +30,82 @@ function mkIssue(overrides: Partial<Parameters<typeof upsertIssues>[1][0]> = {})
   }
 }
 
+function freshDb(): Database {
+  const db = new Database(':memory:')
+  initLinearCacheSchema(db)
+  return db
+}
+
+function descriptionRows(db: Database, issueId = 'issue-1') {
+  return getCachedLinearActivity(db, { issueId }).filter((r) => r.item_field === 'description')
+}
+
 describe('upsertIssues description activity', () => {
   test('emits an activity row when description changes between upserts', () => {
-    const db = new Database(':memory:')
-    initLinearCacheSchema(db)
+    const db = freshDb()
     upsertIssues(db, [mkIssue({ description: 'first' })])
     upsertIssues(db, [mkIssue({ description: 'second', updatedAt: '2026-04-19T00:01:00.000Z' })])
-    const rows = getCachedLinearActivity(db, { issueId: 'issue-1' })
-    const descRows = rows.filter((r) => r.item_field === 'description')
-    expect(descRows).toHaveLength(1)
-    expect(descRows[0]!.from_value).toBe('first')
-    expect(descRows[0]!.to_value).toBe('second')
-    expect(descRows[0]!.created_at).toBe('2026-04-19T00:01:00.000Z')
+    const rows = descriptionRows(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.from_value).toBe('first')
+    expect(rows[0]!.to_value).toBe('second')
+    expect(rows[0]!.created_at).toBe('2026-04-19T00:01:00.000Z')
   })
 
   test('does not emit on first insert (no prior value to diff)', () => {
-    const db = new Database(':memory:')
-    initLinearCacheSchema(db)
+    const db = freshDb()
     upsertIssues(db, [mkIssue({ description: 'hello' })])
-    const rows = getCachedLinearActivity(db, { issueId: 'issue-1' })
-    expect(rows.filter((r) => r.item_field === 'description')).toHaveLength(0)
+    expect(descriptionRows(db)).toHaveLength(0)
   })
 
   test('skips unchanged descriptions', () => {
-    const db = new Database(':memory:')
-    initLinearCacheSchema(db)
+    const db = freshDb()
     upsertIssues(db, [mkIssue({ description: 'same' })])
     upsertIssues(db, [mkIssue({ description: 'same', updatedAt: '2026-04-19T00:01:00.000Z' })])
-    const rows = getCachedLinearActivity(db, { issueId: 'issue-1' })
-    expect(rows.filter((r) => r.item_field === 'description')).toHaveLength(0)
+    expect(descriptionRows(db)).toHaveLength(0)
   })
 
   test('is idempotent when the same updatedAt is replayed', () => {
-    const db = new Database(':memory:')
-    initLinearCacheSchema(db)
+    const db = freshDb()
     upsertIssues(db, [mkIssue({ description: 'a' })])
     const edited = mkIssue({ description: 'b', updatedAt: '2026-04-19T00:01:00.000Z' })
     upsertIssues(db, [edited])
     upsertIssues(db, [edited])
-    const rows = getCachedLinearActivity(db, { issueId: 'issue-1' })
-    expect(rows.filter((r) => r.item_field === 'description')).toHaveLength(1)
+    expect(descriptionRows(db)).toHaveLength(1)
   })
 
   test('treats null/undefined descriptions as empty string', () => {
-    const db = new Database(':memory:')
-    initLinearCacheSchema(db)
+    const db = freshDb()
     upsertIssues(db, [mkIssue({ description: 'had content' })])
     upsertIssues(db, [mkIssue({ description: null, updatedAt: '2026-04-19T00:01:00.000Z' })])
-    const rows = getCachedLinearActivity(db, { issueId: 'issue-1' })
-    const descRows = rows.filter((r) => r.item_field === 'description')
-    expect(descRows).toHaveLength(1)
-    expect(descRows[0]!.from_value).toBe('had content')
-    expect(descRows[0]!.to_value).toBe('')
+    const rows = descriptionRows(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.from_value).toBe('had content')
+    expect(rows[0]!.to_value).toBe('')
+  })
+
+  test('emits when an empty description is populated', () => {
+    const db = freshDb()
+    upsertIssues(db, [mkIssue({ description: '' })])
+    upsertIssues(db, [
+      mkIssue({ description: 'now has content', updatedAt: '2026-04-19T00:01:00.000Z' }),
+    ])
+    const rows = descriptionRows(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.from_value).toBe('')
+    expect(rows[0]!.to_value).toBe('now has content')
+  })
+
+  test('truncates very long description values to cap storage growth', () => {
+    const db = freshDb()
+    upsertIssues(db, [mkIssue({ description: 'x'.repeat(10_000) })])
+    upsertIssues(db, [
+      mkIssue({ description: 'y'.repeat(10_000), updatedAt: '2026-04-19T00:01:00.000Z' }),
+    ])
+    const row = descriptionRows(db)[0]!
+    expect(row.from_value!.length).toBeLessThanOrEqual(4096)
+    expect(row.to_value!.length).toBeLessThanOrEqual(4096)
+    expect(row.from_value!.endsWith('…[truncated]')).toBe(true)
+    expect(row.to_value!.endsWith('…[truncated]')).toBe(true)
   })
 })
