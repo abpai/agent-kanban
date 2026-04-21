@@ -2,6 +2,9 @@
 .kanban/
 .tmp/
 
+# Local scratch / experiments
+.scratch/
+
 # General
 .DS_Store
 .AppleDouble
