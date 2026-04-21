@@ -493,7 +493,7 @@ export function deleteTask(db: Database, id: string): TaskWithColumn {
   return task
 }
 
-function getComment(db: Database, taskId: string, commentId: string): TaskComment {
+export function getComment(db: Database, taskId: string, commentId: string): TaskComment {
   const row = db
     .query(
       `SELECT id, task_id, body, author, created_at, updated_at
@@ -511,6 +511,18 @@ function getComment(db: Database, taskId: string, commentId: string): TaskCommen
     )
   }
   return row
+}
+
+export function listComments(db: Database, taskId: string): TaskComment[] {
+  getTask(db, taskId)
+  return db
+    .query(
+      `SELECT id, task_id, body, author, created_at, updated_at
+         FROM comments
+        WHERE task_id = $task_id
+        ORDER BY created_at ASC, rowid ASC`,
+    )
+    .all({ $task_id: taskId }) as TaskComment[]
 }
 
 export function countComments(db: Database, taskId: string): number {
@@ -574,19 +586,6 @@ export function updateComment(
     new_value: body,
   })
   return getComment(db, taskId, commentId)
-}
-
-export function deleteComment(db: Database, taskId: string, commentId: string): TaskComment {
-  const existing = getComment(db, taskId, commentId)
-  db.query('DELETE FROM comments WHERE id = $id AND task_id = $task_id').run({
-    $id: commentId,
-    $task_id: taskId,
-  })
-  logActivity(db, taskId, 'deleted', {
-    field: 'comment',
-    old_value: existing.body,
-  })
-  return existing
 }
 
 export function moveTask(db: Database, id: string, columnIdOrName: string): TaskWithColumn {

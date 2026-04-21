@@ -89,11 +89,58 @@ beforeEach(() => {
       )
     }
 
-    if (body.query.includes('mutation CommentDelete')) {
-      return new Response(JSON.stringify({ data: { commentDelete: { success: true } } }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })
+    if (body.query.includes('query Comment(')) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            comment: {
+              id: String(body.variables.id),
+              body: 'one linear comment',
+              createdAt: '2026-01-03T00:00:00Z',
+              updatedAt: '2026-01-05T00:00:00Z',
+              user: { id: 'user-1', displayName: 'Linear User' },
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
+    }
+
+    if (body.query.includes('query IssueComments')) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            issue: {
+              comments: {
+                nodes: [
+                  {
+                    id: 'comment-1',
+                    body: 'first linear comment',
+                    createdAt: '2026-01-03T00:00:00Z',
+                    updatedAt: '2026-01-03T00:00:00Z',
+                    user: { id: 'user-1', displayName: 'Linear User' },
+                  },
+                  {
+                    id: 'comment-2',
+                    body: 'second linear comment',
+                    createdAt: '2026-01-04T00:00:00Z',
+                    updatedAt: '2026-01-04T00:00:00Z',
+                    user: { id: 'user-2', displayName: 'Reviewer' },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
     }
 
     throw new Error(`Unexpected Linear GraphQL query: ${body.query}`)
@@ -129,6 +176,52 @@ describe('LinearProvider.comment', () => {
     expect(context.capabilities.comment).toBe(true)
   })
 
+  test('queries issue comments and normalizes them into TaskComment rows', async () => {
+    const provider = new LinearProvider(db, 'team-1', 'lin_api_test')
+
+    const comments = await provider.listComments('ENG-1')
+
+    expect(requests[0]?.query).toContain('query IssueComments')
+    expect(requests[0]?.variables).toEqual({
+      issueId: 'issue-1',
+      after: null,
+    })
+    expect(comments).toEqual([
+      {
+        id: 'comment-1',
+        task_id: 'linear:issue-1',
+        body: 'first linear comment',
+        author: 'Linear User',
+        created_at: '2026-01-03T00:00:00Z',
+        updated_at: '2026-01-03T00:00:00Z',
+      },
+      {
+        id: 'comment-2',
+        task_id: 'linear:issue-1',
+        body: 'second linear comment',
+        author: 'Reviewer',
+        created_at: '2026-01-04T00:00:00Z',
+        updated_at: '2026-01-04T00:00:00Z',
+      },
+    ])
+  })
+
+  test('queries a single Linear comment by id', async () => {
+    const provider = new LinearProvider(db, 'team-1', 'lin_api_test')
+
+    const comment = await provider.getComment('ENG-1', 'comment-1')
+
+    expect(requests[0]?.query).toContain('query Comment(')
+    expect(requests[0]?.variables).toEqual({ id: 'comment-1' })
+    expect(comment).toMatchObject({
+      id: 'comment-1',
+      task_id: 'linear:issue-1',
+      body: 'one linear comment',
+      author: 'Linear User',
+      updated_at: '2026-01-05T00:00:00Z',
+    })
+  })
+
   test('posts the commentUpdate mutation with the provided id', async () => {
     const provider = new LinearProvider(db, 'team-1', 'lin_api_test')
 
@@ -146,17 +239,5 @@ describe('LinearProvider.comment', () => {
       task_id: 'linear:issue-1',
       body: 'edited linear comment',
     })
-  })
-
-  test('posts the commentDelete mutation with the provided id', async () => {
-    const provider = new LinearProvider(db, 'team-1', 'lin_api_test')
-
-    await provider.comment('ENG-1', 'hello from linear')
-    requests = []
-    await provider.deleteComment('ENG-1', 'comment-1')
-
-    expect(requests[0]?.query).toContain('mutation CommentDelete')
-    expect(requests[0]?.variables).toEqual({ id: 'comment-1' })
-    expect((await provider.getTask('ENG-1')).comment_count).toBe(0)
   })
 })

@@ -10,8 +10,9 @@ Most project-management tools are built for humans clicking through UIs. `agent-
 
 ## Documentation
 
-- [`docs/README.md`](docs/README.md) for the documentation index
-- [`docs/WORKFLOW.md`](docs/WORKFLOW.md) for a common day-to-day workflow
+- [`docs/readme.md`](docs/readme.md) for the documentation index
+- [`docs/workflow.md`](docs/workflow.md) for a common day-to-day workflow
+- [`docs/mcp.md`](docs/mcp.md) for the reusable tracker MCP module
 - [`docs/providers/linear.md`](docs/providers/linear.md) for Linear provider details
 - [`docs/providers/jira.md`](docs/providers/jira.md) for Jira provider details
 - [`SKILL.md`](SKILL.md) for agent-specific repo usage instructions
@@ -93,19 +94,24 @@ kanban board view
 
 ### Capability matrix
 
-| Capability              | Local | Linear | Jira |
-| ----------------------- | ----- | ------ | ---- |
-| task create/update/move | yes   | yes    | yes  |
-| task delete             | yes   | no     | no   |
-| activity log            | yes   | no     | no   |
-| metrics                 | yes   | no     | no   |
-| column CRUD             | yes   | no     | no   |
-| bulk operations         | yes   | no     | no   |
-| config edit             | yes   | no     | no   |
+| Capability                 | Local | Linear | Jira |
+| -------------------------- | ----- | ------ | ---- |
+| task create/update/move    | yes   | yes    | yes  |
+| task delete                | yes   | no     | no   |
+| comment read/create/update | yes   | yes    | yes  |
+| activity log               | yes   | no     | no   |
+| metrics                    | yes   | no     | no   |
+| column CRUD                | yes   | no     | no   |
+| bulk operations            | yes   | no     | no   |
+| config edit                | yes   | no     | no   |
+| webhooks                   | no    | yes    | yes  |
 
 Linear tasks carry an `externalRef` (e.g. `TEAM-123`) and a `url`. Commands accept either the internal ID or the external ref.
 
 Unsupported operations return error code `UNSUPPORTED_OPERATION` with exit code 1.
+
+Task comments are currently exposed through the REST API and dashboard task
+detail flows rather than dedicated `kanban comment ...` CLI commands.
 
 ## Commands
 
@@ -210,6 +216,7 @@ Default columns: `recurring`, `backlog`, `in-progress`, `review`, `done`.
 ```bash
 kanban serve            # default port 3000
 kanban serve --port 8080
+kanban serve --tunnel   # optional public URL for webhook testing
 ```
 
 ## Global flags
@@ -247,10 +254,25 @@ In Linear mode the dashboard hides unsupported actions and shows Linear issue id
 
 Starts a Bun HTTP server with:
 
-- **REST API** at `/api/*` — same operations as the CLI (board, tasks, columns, activity, metrics, config)
-- **WebSocket** at `/ws` — push notifications on board mutations (clients receive `{"type":"refresh"}`)
+- **REST API** at `/api/*` — board, tasks, task comments, bootstrap/provider metadata, activity, metrics, config, and webhook endpoints
+- **WebSocket** at `/ws` — push notifications on board mutations (clients receive `task:upsert`, `task:delete`, or a fallback `refresh` event)
 - **Static UI** served from `ui/dist/` (build with `bun run build:ui` or `bun run ui:build`)
 - **Health check** at `/api/health`
+
+Comment routes:
+
+- `GET /api/tasks/:id/comments`
+- `POST /api/tasks/:id/comments`
+- `PATCH /api/tasks/:id/comments/:commentId`
+
+## Reusable MCP core
+
+The repo also includes a reusable tracker MCP implementation under `src/mcp/`.
+It is intended for sibling workspaces and in-repo consumers rather than the
+`kanban` CLI itself.
+
+See [`docs/mcp.md`](docs/mcp.md) for the current default tool set, the auth and
+policy model, and the caveats around source-level imports and `kanban serve`.
 
 ## Scripts
 
@@ -334,7 +356,7 @@ If you want to contribute or report an issue, start with these guides:
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - [SECURITY.md](SECURITY.md)
 
-Longer product and workflow docs live under [`docs/`](docs/README.md).
+Longer product and workflow docs live under [`docs/`](docs/readme.md).
 
 ## License
 

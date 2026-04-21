@@ -109,8 +109,8 @@ Then open `http://localhost:3000`.
 
 The server exposes:
 
-- `/api/*` for the same board operations used by the CLI
-- `/ws` for refresh notifications after mutations
+- `/api/*` for board, task, task-comment, config, and health routes used by the dashboard
+- `/ws` for mutation notifications (`task:upsert`, `task:delete`, or fallback `refresh`)
 - `/api/health` for a simple health check
 
 ## Practical tips

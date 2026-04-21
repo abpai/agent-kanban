@@ -32,6 +32,17 @@ describe('LocalProvider.comment', () => {
     expect(context.capabilities.comment).toBe(true)
   })
 
+  test('lists stored comments in creation order', async () => {
+    const task = addTask(db, 'Comment me')
+
+    const first = await provider.comment(task.id, 'first comment')
+    const second = await provider.comment(task.id, 'second comment')
+    const comments = await provider.listComments(task.id)
+
+    expect(comments.map((comment) => comment.id)).toEqual([first.id, second.id])
+    expect(comments.map((comment) => comment.body)).toEqual(['first comment', 'second comment'])
+  })
+
   test('updates a stored comment body', async () => {
     const task = addTask(db, 'Comment me')
     const comment = await provider.comment(task.id, 'hello from local')
@@ -45,18 +56,5 @@ describe('LocalProvider.comment', () => {
     expect(activity[0]?.field_changed).toBe('comment')
     expect(activity[0]?.old_value).toBe('hello from local')
     expect(activity[0]?.new_value).toBe('edited local comment')
-  })
-
-  test('deletes a stored comment and decrements the task comment count', async () => {
-    const task = addTask(db, 'Comment me')
-    const comment = await provider.comment(task.id, 'hello from local')
-
-    await provider.deleteComment(task.id, comment.id)
-
-    expect((await provider.getTask(task.id)).comment_count).toBe(0)
-    const activity = await provider.getActivity(10, task.id)
-    expect(activity[0]?.action).toBe('deleted')
-    expect(activity[0]?.field_changed).toBe('comment')
-    expect(activity[0]?.old_value).toBe('hello from local')
   })
 })

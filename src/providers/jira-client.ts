@@ -72,6 +72,13 @@ export interface JiraComment {
   author?: { accountId?: string; displayName?: string }
 }
 
+export interface JiraCommentPage {
+  startAt: number
+  maxResults: number
+  total: number
+  comments: JiraComment[]
+}
+
 export interface JiraCreatedIssueRef {
   id: string
   key: string
@@ -287,6 +294,28 @@ export class JiraClient {
     )
   }
 
+  getComments(
+    idOrKey: string,
+    params: { startAt?: number; maxResults?: number } = {},
+  ): Promise<JiraCommentPage> {
+    const query: QueryParams = {}
+    if (params.startAt !== undefined) query.startAt = params.startAt
+    if (params.maxResults !== undefined) query.maxResults = params.maxResults
+    return this.request<never, JiraCommentPage>(
+      'GET',
+      `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment`,
+      undefined,
+      query,
+    )
+  }
+
+  getComment(idOrKey: string, commentId: string): Promise<JiraComment> {
+    return this.request<never, JiraComment>(
+      'GET',
+      `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment/${encodeURIComponent(commentId)}`,
+    )
+  }
+
   updateComment(
     idOrKey: string,
     commentId: string,
@@ -296,13 +325,6 @@ export class JiraClient {
       'PUT',
       `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment/${encodeURIComponent(commentId)}`,
       payload,
-    )
-  }
-
-  deleteComment(idOrKey: string, commentId: string): Promise<void> {
-    return this.request<never, void>(
-      'DELETE',
-      `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment/${encodeURIComponent(commentId)}`,
     )
   }
 

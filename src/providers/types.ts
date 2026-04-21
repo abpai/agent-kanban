@@ -61,9 +61,10 @@ export interface KanbanProvider {
   updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task>
   moveTask(idOrRef: string, column: string): Promise<Task>
   deleteTask(idOrRef: string): Promise<Task>
+  listComments(idOrRef: string): Promise<TaskComment[]>
+  getComment(idOrRef: string, commentId: string): Promise<TaskComment>
   comment(idOrRef: string, body: string): Promise<TaskComment>
   updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment>
-  deleteComment(idOrRef: string, commentId: string): Promise<void>
   getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]>
   getMetrics(): Promise<BoardMetrics>
   getConfig(): Promise<BoardConfig>

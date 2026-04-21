@@ -139,7 +139,10 @@ export class LinearProvider implements KanbanProvider {
         : meta.lastIssueUpdatedAt
 
     // Best-effort changelog ingest; failures don't fail the main sync.
-    await this.ingestTeamHistory(team.id, meta.lastIssueUpdatedAt).catch((err) => {
+    await this.ingestTeamHistory(
+      issues.map((issue) => issue.id),
+      meta.lastIssueUpdatedAt,
+    ).catch((err) => {
       console.warn('[linear] issueHistory ingest failed:', err)
     })
 
@@ -150,22 +153,38 @@ export class LinearProvider implements KanbanProvider {
     })
   }
 
-  private async ingestTeamHistory(teamId: string, sinceIso: string | null): Promise<void> {
-    const updatedAtGte = sinceIso ?? '1970-01-01T00:00:00.000Z'
+  private async ingestTeamHistory(issueIds: string[], sinceIso: string | null): Promise<void> {
+    if (issueIds.length === 0) return
+    const concurrency = 5
+    for (let i = 0; i < issueIds.length; i += concurrency) {
+      const batch = issueIds.slice(i, i + concurrency)
+      const results = await Promise.all(
+        batch.map((issueId) => this.fetchIssueHistory(issueId, sinceIso)),
+      )
+      const rows = results.flat()
+      if (rows.length > 0) saveLinearActivity(this.db, rows)
+    }
+  }
+
+  private async fetchIssueHistory(
+    issueId: string,
+    sinceIso: string | null,
+  ): Promise<LinearActivityRow[]> {
+    const rows: LinearActivityRow[] = []
     let cursor: string | null = null
-    for (let page = 0; page < 20; page++) {
-      const batch = await this.client.listIssueHistory({
-        teamId,
-        updatedAtGte,
-        first: 100,
-        after: cursor,
-      })
-      const rows: LinearActivityRow[] = []
+    for (let page = 0; page < 10; page++) {
+      const batch = await this.client.listIssueHistory({ issueId, first: 50, after: cursor })
+      let reachedKnown = false
       for (const node of batch.nodes) {
-        if (!node.issue) continue
+        // Linear returns history newest-first; once we hit an entry we've already ingested,
+        // every subsequent page is older still, so break out of pagination entirely.
+        if (sinceIso && node.createdAt <= sinceIso) {
+          reachedKnown = true
+          break
+        }
         if (!node.fromState && !node.toState) continue
         rows.push({
-          issue_id: node.issue.id,
+          issue_id: issueId,
           history_id: node.id,
           item_field: 'state',
           from_value: node.fromState?.id ?? null,
@@ -173,10 +192,11 @@ export class LinearProvider implements KanbanProvider {
           created_at: node.createdAt,
         })
       }
-      saveLinearActivity(this.db, rows)
+      if (reachedKnown) break
       if (!batch.pageInfo.hasNextPage || !batch.pageInfo.endCursor) break
       cursor = batch.pageInfo.endCursor
     }
+    return rows
   }
 
   private resolveTask(idOrRef: string): Task {
@@ -367,6 +387,20 @@ export class LinearProvider implements KanbanProvider {
     unsupportedOperation('Task deletion is not supported in Linear mode')
   }
 
+  async listComments(idOrRef: string): Promise<TaskComment[]> {
+    await this.sync()
+    const task = this.resolveTask(idOrRef)
+    const comments = await this.client.listComments(task.providerId || task.id)
+    return comments.map((comment) => this.toTaskComment(task, comment))
+  }
+
+  async getComment(idOrRef: string, commentId: string): Promise<TaskComment> {
+    await this.sync()
+    const task = this.resolveTask(idOrRef)
+    const comment = await this.client.getComment(commentId)
+    return this.toTaskComment(task, comment)
+  }
+
   async comment(idOrRef: string, body: string): Promise<TaskComment> {
     await this.sync()
     const task = this.resolveTask(idOrRef)
@@ -386,16 +420,6 @@ export class LinearProvider implements KanbanProvider {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear comment update failed')
     }
     return this.toTaskComment(task, result.comment)
-  }
-
-  async deleteComment(idOrRef: string, commentId: string): Promise<void> {
-    await this.sync()
-    const task = this.resolveTask(idOrRef)
-    const result = await this.client.commentDelete(commentId)
-    if (!result.success) {
-      throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear comment deletion failed')
-    }
-    adjustLinearIssueCommentCount(this.db, task.providerId || task.id, -1)
   }
 
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {

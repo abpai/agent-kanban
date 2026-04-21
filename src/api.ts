@@ -201,15 +201,27 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
   }
 
   const commentsMatch = path.match(/^\/api\/tasks\/([^/]+)\/comments$/)
-  if (commentsMatch && method === 'POST') {
+  if (commentsMatch) {
     const id = decodeURIComponent(commentsMatch[1]!)
-    const body = (await req.json()) as CommentBody
-    if (!body.body) return { response: missingArgument('body'), mutated: false }
-    const response = await wrapHandler(async () => ({
-      ok: true,
-      data: await provider.comment(id, body.body!),
-    }))
-    return { response, mutated: response.ok }
+    if (method === 'GET') {
+      return {
+        response: await wrapHandler(async () => ({
+          ok: true,
+          data: await provider.listComments(id),
+        })),
+        mutated: false,
+      }
+    }
+
+    if (method === 'POST') {
+      const body = (await req.json()) as CommentBody
+      if (!body.body) return { response: missingArgument('body'), mutated: false }
+      const response = await wrapHandler(async () => ({
+        ok: true,
+        data: await provider.comment(id, body.body!),
+      }))
+      return { response, mutated: response.ok }
+    }
   }
 
   const commentMatch = path.match(/^\/api\/tasks\/([^/]+)\/comments\/([^/]+)$/)
@@ -224,14 +236,6 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
         ok: true,
         data: await provider.updateComment(id, commentId, body.body!),
       }))
-      return { response, mutated: response.ok }
-    }
-
-    if (method === 'DELETE') {
-      const response = await wrapHandler(async () => {
-        await provider.deleteComment(id, commentId)
-        return { ok: true, data: { id: commentId } }
-      })
       return { response, mutated: response.ok }
     }
   }

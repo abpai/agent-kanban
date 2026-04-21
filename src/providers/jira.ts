@@ -564,6 +564,30 @@ export class JiraProvider implements KanbanProvider {
     unsupportedOperation('Task deletion is not supported in Jira mode')
   }
 
+  async listComments(idOrRef: string): Promise<TaskComment[]> {
+    await this.sync()
+    const task = this.resolveTaskByIdOrKey(idOrRef)
+    const issueKey = this.issueKeyFor(task)
+    const comments: JiraComment[] = []
+    let startAt = 0
+
+    while (true) {
+      const page = await this.client.getComments(issueKey, { startAt, maxResults: 100 })
+      comments.push(...page.comments)
+      startAt += page.comments.length
+      if (comments.length >= page.total || page.comments.length === 0) break
+    }
+
+    return comments.map((comment) => this.toTaskComment(task, comment))
+  }
+
+  async getComment(idOrRef: string, commentId: string): Promise<TaskComment> {
+    await this.sync()
+    const task = this.resolveTaskByIdOrKey(idOrRef)
+    const comment = await this.client.getComment(this.issueKeyFor(task), commentId)
+    return this.toTaskComment(task, comment)
+  }
+
   async comment(idOrRef: string, body: string): Promise<TaskComment> {
     await this.sync()
     const task = this.resolveTaskByIdOrKey(idOrRef)
@@ -581,13 +605,6 @@ export class JiraProvider implements KanbanProvider {
       body: plainTextToAdf(body),
     })
     return this.toTaskComment(task, updated)
-  }
-
-  async deleteComment(idOrRef: string, commentId: string): Promise<void> {
-    await this.sync()
-    const task = this.resolveTaskByIdOrKey(idOrRef)
-    await this.client.deleteComment(this.issueKeyFor(task), commentId)
-    adjustJiraIssueCommentCount(this.db, task.providerId || task.externalRef || task.id, -1)
   }
 
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {

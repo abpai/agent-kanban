@@ -357,6 +357,7 @@ Commands:
   config remove-project <name> Remove project
 
   serve                       Start web dashboard [--port 3000]
+  mcp                         Run as an MCP server over stdio (for Claude Desktop, etc.)
 
 Options:
   --pretty      Human-readable output (default: JSON)
@@ -391,10 +392,32 @@ export function parseServeArgs(argv: string[]): ServeOptions {
   }
 }
 
+export interface McpOptions {
+  db?: string
+}
+
+export function parseMcpArgs(argv: string[]): McpOptions {
+  const { values } = parseArgs({
+    args: argv,
+    options: { db: { type: 'string' } },
+    strict: false,
+    allowPositionals: true,
+  })
+  return { db: values.db as string | undefined }
+}
+
 if (import.meta.main) {
   const argv = process.argv.slice(2)
 
-  if (argv[0] === 'serve') {
+  if (argv[0] === 'mcp') {
+    const opts = parseMcpArgs(argv)
+    const dbPath = opts.db ?? getDbPath()
+    const db = openDb(dbPath)
+    migrateSchema(db)
+    const provider = createProvider(db, dbPath)
+    const { startStdioMcpServer } = await import('./commands/mcp.ts')
+    await startStdioMcpServer(provider)
+  } else if (argv[0] === 'serve') {
     const opts = parseServeArgs(argv)
 
     const dbPath = opts.db ?? getDbPath()
