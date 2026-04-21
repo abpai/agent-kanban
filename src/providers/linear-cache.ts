@@ -293,7 +293,8 @@ export function upsertIssues(
     updatedAt: string
   }>,
 ): void {
-  const stmt = db.prepare(
+  if (issues.length === 0) return
+  const upsertStmt = db.prepare(
     `INSERT INTO linear_issues (
       id, identifier, title, description, priority, assignee_id, assignee_name,
       project_id, project_name, state_id, state_name, state_position, labels, comment_count,
@@ -321,27 +322,50 @@ export function upsertIssues(
       created_at = excluded.created_at,
       updated_at = excluded.updated_at`,
   )
-  for (const issue of issues) {
-    stmt.run({
-      $id: issue.id,
-      $identifier: issue.identifier,
-      $title: issue.title,
-      $description: issue.description ?? '',
-      $priority: issue.priority ?? 0,
-      $assignee_id: issue.assigneeId ?? null,
-      $assignee_name: issue.assigneeName ?? '',
-      $project_id: issue.projectId ?? null,
-      $project_name: issue.projectName ?? '',
-      $state_id: issue.stateId,
-      $state_name: issue.stateName,
-      $state_position: issue.statePosition,
-      $labels: JSON.stringify(issue.labels ?? []),
-      $comment_count: issue.commentCount ?? 0,
-      $url: issue.url ?? null,
-      $created_at: issue.createdAt,
-      $updated_at: issue.updatedAt,
-    })
-  }
+  const existingDescStmt = db.prepare(
+    'SELECT description FROM linear_issues WHERE id = $id LIMIT 1',
+  )
+  const activityStmt = db.prepare(
+    `INSERT OR IGNORE INTO linear_activity
+     (issue_id, history_id, item_field, from_value, to_value, created_at)
+     VALUES ($issue_id, $history_id, $item_field, $from_value, $to_value, $created_at)`,
+  )
+  const run = db.transaction(() => {
+    for (const issue of issues) {
+      const nextDescription = issue.description ?? ''
+      const prior = existingDescStmt.get({ $id: issue.id }) as { description: string } | null
+      if (prior && prior.description !== nextDescription) {
+        activityStmt.run({
+          $issue_id: issue.id,
+          $history_id: `desc:${issue.updatedAt}`,
+          $item_field: 'description',
+          $from_value: prior.description,
+          $to_value: nextDescription,
+          $created_at: issue.updatedAt,
+        })
+      }
+      upsertStmt.run({
+        $id: issue.id,
+        $identifier: issue.identifier,
+        $title: issue.title,
+        $description: nextDescription,
+        $priority: issue.priority ?? 0,
+        $assignee_id: issue.assigneeId ?? null,
+        $assignee_name: issue.assigneeName ?? '',
+        $project_id: issue.projectId ?? null,
+        $project_name: issue.projectName ?? '',
+        $state_id: issue.stateId,
+        $state_name: issue.stateName,
+        $state_position: issue.statePosition,
+        $labels: JSON.stringify(issue.labels ?? []),
+        $comment_count: issue.commentCount ?? 0,
+        $url: issue.url ?? null,
+        $created_at: issue.createdAt,
+        $updated_at: issue.updatedAt,
+      })
+    }
+  })
+  run()
 }
 
 export function deleteLinearIssue(db: Database, idOrIdentifier: string): void {
