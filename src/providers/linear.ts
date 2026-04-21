@@ -139,7 +139,10 @@ export class LinearProvider implements KanbanProvider {
         : meta.lastIssueUpdatedAt
 
     // Best-effort changelog ingest; failures don't fail the main sync.
-    await this.ingestTeamHistory(issues.map((issue) => issue.id)).catch((err) => {
+    await this.ingestTeamHistory(
+      issues.map((issue) => issue.id),
+      meta.lastIssueUpdatedAt,
+    ).catch((err) => {
       console.warn('[linear] issueHistory ingest failed:', err)
     })
 
@@ -150,23 +153,35 @@ export class LinearProvider implements KanbanProvider {
     })
   }
 
-  private async ingestTeamHistory(issueIds: string[]): Promise<void> {
+  private async ingestTeamHistory(issueIds: string[], sinceIso: string | null): Promise<void> {
     if (issueIds.length === 0) return
     const concurrency = 5
     for (let i = 0; i < issueIds.length; i += concurrency) {
       const batch = issueIds.slice(i, i + concurrency)
-      const results = await Promise.all(batch.map((issueId) => this.fetchIssueHistory(issueId)))
+      const results = await Promise.all(
+        batch.map((issueId) => this.fetchIssueHistory(issueId, sinceIso)),
+      )
       const rows = results.flat()
       if (rows.length > 0) saveLinearActivity(this.db, rows)
     }
   }
 
-  private async fetchIssueHistory(issueId: string): Promise<LinearActivityRow[]> {
+  private async fetchIssueHistory(
+    issueId: string,
+    sinceIso: string | null,
+  ): Promise<LinearActivityRow[]> {
     const rows: LinearActivityRow[] = []
     let cursor: string | null = null
     for (let page = 0; page < 10; page++) {
       const batch = await this.client.listIssueHistory({ issueId, first: 50, after: cursor })
+      let reachedKnown = false
       for (const node of batch.nodes) {
+        // Linear returns history newest-first; once we hit an entry we've already ingested,
+        // every subsequent page is older still, so break out of pagination entirely.
+        if (sinceIso && node.createdAt <= sinceIso) {
+          reachedKnown = true
+          break
+        }
         if (!node.fromState && !node.toState) continue
         rows.push({
           issue_id: issueId,
@@ -177,6 +192,7 @@ export class LinearProvider implements KanbanProvider {
           created_at: node.createdAt,
         })
       }
+      if (reachedKnown) break
       if (!batch.pageInfo.hasNextPage || !batch.pageInfo.endCursor) break
       cursor = batch.pageInfo.endCursor
     }
