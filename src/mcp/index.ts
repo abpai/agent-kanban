@@ -6,8 +6,8 @@ export type {
   TrackerMcpAuthResolver,
   TrackerMcpHooks,
   TrackerMcpPolicy,
-  TrackerMcpScope,
   TrackerMcpServer,
   TrackerMcpTool,
   TrackerMcpToolHandlerContext,
 } from './types.ts'
+export { defaultTools } from './server.ts'

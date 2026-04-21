@@ -3,8 +3,6 @@ import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation'
 import type { TaskComment } from '../types.ts'
 import type { TrackerMcpError, TrackerMcpErrorCode } from './errors.ts'
 
-export type TrackerMcpScope = Record<string, unknown>
-
 export type TrackerMcpAuthResolver<TScope> = (ctx: {
   request: Request
   url: URL
@@ -55,7 +53,7 @@ export interface TrackerMcpHooks<TScope> {
 export interface TrackerMcpToolHandlerContext<TScope, TArgs = Record<string, unknown>> {
   scope: TScope
   args: TArgs
-  request: Request
+  request?: Request
 }
 
 export interface TrackerMcpTool<TScope, TArgs = Record<string, unknown>, TResult = unknown> {

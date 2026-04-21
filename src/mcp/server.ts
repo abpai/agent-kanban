@@ -23,15 +23,6 @@ const EMPTY_OBJECT_SCHEMA = {
   additionalProperties: false,
 } as JsonSchemaType
 
-const DEFAULT_TOOLS_DESCRIPTION = {
-  getTicket: 'Fetch a ticket by id.',
-  listComments: 'List comments for a ticket.',
-  getBoard: 'Fetch the current board state.',
-  postComment: 'Create a comment on a ticket.',
-  updateComment: 'Update an existing ticket comment.',
-  moveTicket: 'Move a ticket to another column.',
-} as const
-
 interface RegisteredTrackerTool<TScope> {
   tool: TrackerMcpTool<TScope>
   validateInput(input: unknown): JsonSchemaValidatorResult<unknown>
@@ -90,65 +81,57 @@ function ticketIdSchema(extra: Record<string, JsonSchemaType> = {}): JsonSchemaT
   } as JsonSchemaType
 }
 
-function defaultTools<TScope>(core: TrackerCore<TScope>): TrackerMcpTool<TScope>[] {
+export function defaultTools<TScope>(core: TrackerCore<TScope>): TrackerMcpTool<TScope>[] {
   return [
     {
       name: 'getTicket',
-      description: DEFAULT_TOOLS_DESCRIPTION.getTicket,
+      description: 'Fetch a ticket by id.',
       inputSchema: ticketIdSchema(),
-      handler: ({ scope, args }) => {
-        const { ticketId } = args as { ticketId: string }
-        return core.handlers.getTicket({ scope, ticketId })
-      },
+      handler: ({ scope, args }) =>
+        core.handlers.getTicket({ scope, ...(args as { ticketId: string }) }),
     },
     {
       name: 'listComments',
-      description: DEFAULT_TOOLS_DESCRIPTION.listComments,
+      description: 'List comments for a ticket.',
       inputSchema: ticketIdSchema(),
-      handler: ({ scope, args }) => {
-        const { ticketId } = args as { ticketId: string }
-        return core.handlers.listComments({ scope, ticketId })
-      },
+      handler: ({ scope, args }) =>
+        core.handlers.listComments({ scope, ...(args as { ticketId: string }) }),
     },
     {
       name: 'getBoard',
-      description: DEFAULT_TOOLS_DESCRIPTION.getBoard,
+      description: 'Fetch the current board state.',
       inputSchema: EMPTY_OBJECT_SCHEMA,
       handler: ({ scope }) => core.handlers.getBoard({ scope }),
     },
     {
       name: 'postComment',
-      description: DEFAULT_TOOLS_DESCRIPTION.postComment,
+      description: 'Create a comment on a ticket.',
       inputSchema: ticketIdSchema({ body: { type: 'string' } as JsonSchemaType }),
-      handler: ({ scope, args }) => {
-        const { ticketId, body } = args as { ticketId: string; body: string }
-        return core.handlers.postComment({ scope, ticketId, body })
-      },
+      handler: ({ scope, args }) =>
+        core.handlers.postComment({ scope, ...(args as { ticketId: string; body: string }) }),
     },
     {
       name: 'updateComment',
-      description: DEFAULT_TOOLS_DESCRIPTION.updateComment,
+      description: 'Update an existing ticket comment.',
       inputSchema: ticketIdSchema({
         commentId: { type: 'string' } as JsonSchemaType,
         body: { type: 'string' } as JsonSchemaType,
       }),
-      handler: ({ scope, args }) => {
-        const { ticketId, commentId, body } = args as {
-          ticketId: string
-          commentId: string
-          body: string
-        }
-        return core.handlers.updateComment({ scope, ticketId, commentId, body })
-      },
+      handler: ({ scope, args }) =>
+        core.handlers.updateComment({
+          scope,
+          ...(args as { ticketId: string; commentId: string; body: string }),
+        }),
     },
     {
       name: 'moveTicket',
-      description: DEFAULT_TOOLS_DESCRIPTION.moveTicket,
+      description: 'Move a ticket to another column.',
       inputSchema: ticketIdSchema({ column: { type: 'string' } as JsonSchemaType }),
-      handler: ({ scope, args }) => {
-        const { ticketId, column } = args as { ticketId: string; column: string }
-        return core.handlers.moveTicket({ scope, ticketId, column })
-      },
+      handler: ({ scope, args }) =>
+        core.handlers.moveTicket({
+          scope,
+          ...(args as { ticketId: string; column: string }),
+        }),
     },
   ]
 }
@@ -355,22 +338,15 @@ export function createTrackerMcpServer<TScope>(input: {
         },
       }
     } catch (error) {
-      const trackerError =
-        error instanceof TrackerMcpError
-          ? error
-          : new TrackerMcpError({
-              code: 'auth_failed',
-              publicMessage: 'Authentication failed',
-              cause: error,
-            })
-      if (trackerError.code !== 'auth_failed') {
-        throw new TrackerMcpError({
-          code: 'auth_failed',
-          publicMessage: trackerError.publicMessage ?? trackerError.message,
-          cause: trackerError,
-        })
-      }
-      throw trackerError
+      if (error instanceof TrackerMcpError && error.code === 'auth_failed') throw error
+      throw new TrackerMcpError({
+        code: 'auth_failed',
+        publicMessage:
+          error instanceof TrackerMcpError
+            ? (error.publicMessage ?? error.message)
+            : 'Authentication failed',
+        cause: error,
+      })
     }
   }
 
