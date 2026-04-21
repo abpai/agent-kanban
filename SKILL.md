@@ -1,32 +1,78 @@
 ---
 name: agent-kanban
-description: Operate the agent-kanban board through the `kanban` CLI — supports local (SQLite), Linear, and Jira providers.
+description: Operate the agent-kanban board via its stdio MCP server (preferred) or the `kanban` CLI — supports local (SQLite), Linear, and Jira providers.
 ---
 
 # agent-kanban Usage Skill
 
-Use this skill when working inside the `agent-kanban` repository and you need to manage board data from the terminal. All commands return structured JSON by default — parse the output to chain operations.
+Use this skill when working inside the `agent-kanban` repository and you need to manage board data. Two interfaces are available:
+
+1. **MCP (preferred).** `bun src/index.ts mcp` starts a stdio MCP server that exposes `getBoard`, `getTicket`, `listComments`, `postComment`, `updateComment`, `moveTicket`. This is the right surface for Claude Code, Claude Desktop, and any MCP-aware agent — no spawning per command, no JSON parsing boilerplate, and inputs are schema-validated.
+2. **CLI (fallback).** `kanban <command>` (or `bun src/index.ts <command>`). Useful for shell scripts, cron jobs, or anything not MCP-aware. All commands return structured JSON — parse to chain.
 
 ## Prerequisites
 
 - Bun is installed (`>=1.1.0`).
-- The CLI is globally available as `kanban` (run `bun link` once from repo root).
-- Fallback: `bun src/index.ts <command>`.
+- For CLI use: run `bun link` once from repo root so `kanban` resolves globally. Fallback: `bun src/index.ts <command>`.
+- For MCP use: no separate install — the server ships as the `mcp` subcommand.
+
+## MCP server (preferred)
+
+Start the server over stdio:
+
+```bash
+cd /path/to/agent-kanban && bun src/index.ts mcp
+```
+
+Register it with a client. For Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`) or Claude Code (`~/.claude.json` under `mcpServers`):
+
+```json
+{
+  "mcpServers": {
+    "agent-kanban": {
+      "command": "bun",
+      "args": ["/path/to/agent-kanban/src/index.ts", "mcp"],
+      "env": {
+        "KANBAN_PROVIDER": "local"
+      }
+    }
+  }
+}
+```
+
+Available tools:
+
+| Tool            | Input                           | Returns                            |
+| --------------- | ------------------------------- | ---------------------------------- |
+| `getBoard`      | `{}`                            | Full board state (columns + tasks) |
+| `getTicket`     | `{ ticketId }`                  | Single task by id or external ref  |
+| `listComments`  | `{ ticketId }`                  | Comments in creation order         |
+| `postComment`   | `{ ticketId, body }`            | Created comment                    |
+| `updateComment` | `{ ticketId, commentId, body }` | Updated comment                    |
+| `moveTicket`    | `{ ticketId, column }`          | `{ ok: true }`                     |
+
+The stdio server runs with an allow-all policy — suitable for local/single-user contexts. For multi-tenant HTTP deployments use `createTrackerMcpServer` from `src/mcp/` and supply your own auth + policy.
 
 ## Provider configuration
 
-| Variable           | Default            | Description                                                              |
-| ------------------ | ------------------ | ------------------------------------------------------------------------ |
-| `KANBAN_PROVIDER`  | `local`            | `local`, `linear`, or `jira`                                             |
-| `KANBAN_DB_PATH`   | `.kanban/board.db` | SQLite database path                                                     |
-| `LINEAR_API_KEY`   | —                  | Required when `KANBAN_PROVIDER=linear`                                   |
-| `LINEAR_TEAM_ID`   | —                  | Required when `KANBAN_PROVIDER=linear`                                   |
-| `JIRA_BASE_URL`    | —                  | Required when `KANBAN_PROVIDER=jira` (e.g. `https://acme.atlassian.net`) |
-| `JIRA_EMAIL`       | —                  | Required when `KANBAN_PROVIDER=jira` (Atlassian account email)           |
-| `JIRA_API_TOKEN`   | —                  | Required when `KANBAN_PROVIDER=jira` (Atlassian API token)               |
-| `JIRA_PROJECT_KEY` | —                  | Required when `KANBAN_PROVIDER=jira` (e.g. `ENG`)                        |
-| `JIRA_BOARD_ID`    | —                  | Optional when `KANBAN_PROVIDER=jira` (Agile board id)                    |
-| `JIRA_ISSUE_TYPE`  | `Task`             | Optional when `KANBAN_PROVIDER=jira` (default issue type)                |
+| Variable           | Default       | Description                                                              |
+| ------------------ | ------------- | ------------------------------------------------------------------------ |
+| `KANBAN_PROVIDER`  | `local`       | `local`, `linear`, or `jira`                                             |
+| `KANBAN_DB_PATH`   | auto-resolved | SQLite database path                                                     |
+| `LINEAR_API_KEY`   | —             | Required when `KANBAN_PROVIDER=linear`                                   |
+| `LINEAR_TEAM_ID`   | —             | Required when `KANBAN_PROVIDER=linear`                                   |
+| `JIRA_BASE_URL`    | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `https://acme.atlassian.net`) |
+| `JIRA_EMAIL`       | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian account email)           |
+| `JIRA_API_TOKEN`   | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian API token)               |
+| `JIRA_PROJECT_KEY` | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `ENG`)                        |
+| `JIRA_BOARD_ID`    | —             | Optional when `KANBAN_PROVIDER=jira` (Agile board id)                    |
+| `JIRA_ISSUE_TYPE`  | `Task`        | Optional when `KANBAN_PROVIDER=jira` (default issue type)                |
+
+Without `KANBAN_DB_PATH`, the local provider resolves the database in this order:
+
+1. `./.kanban/board.db` if it already exists
+2. `~/.kanban/board.db` if it already exists
+3. create and use `./.kanban/board.db`
 
 In Linear mode, tasks have an `externalRef` (e.g. `TEAM-123`). Use it interchangeably with UUIDs:
 
@@ -44,6 +90,10 @@ These commands return `UNSUPPORTED_OPERATION` in both Linear mode and Jira mode:
 - `config set-member/remove-member/add-project/remove-project`
 
 Works in all three modes (local, Linear, Jira): `task add/list/view/update/move`, `board view`, `column list`, `config show`, `serve`.
+
+## CLI reference
+
+Use the CLI when MCP is not an option (shell scripts, cron, non-MCP clients) or when you need a capability MCP doesn't expose (column CRUD, bulk ops, config edits, board init/reset). MCP covers the common read/write path; the CLI is the escape hatch.
 
 ## Output format
 
