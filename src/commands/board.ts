@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns, isInitialized, getBoardView, resetBoard } from '../db.ts'
+import { initSchema, seedDefaultColumns, isInitialized, resetBoard } from '../db.ts'
 import { ErrorCode, KanbanError } from '../errors.ts'
 import { success } from '../output.ts'
 import type { CliOutput } from '../types.ts'
@@ -11,16 +11,6 @@ export function boardInit(db: Database): CliOutput {
   initSchema(db)
   seedDefaultColumns(db)
   return success({ message: 'Board initialized with default columns.' })
-}
-
-export function boardView(db: Database): CliOutput {
-  if (!isInitialized(db)) {
-    throw new KanbanError(
-      ErrorCode.BOARD_NOT_INITIALIZED,
-      'Board not initialized. Run: kanban board init',
-    )
-  }
-  return success(getBoardView(db))
 }
 
 export function boardReset(db: Database): CliOutput {

@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
-import type { Priority } from './types.ts'
-import { addTask, moveTask, updateTask, listTasks } from './db.ts'
+import type { Priority } from '../src/types.ts'
+import { addTask, listTasks, moveTask, updateTask } from '../src/db.ts'
 
 interface FixtureTask {
   title: string
@@ -11,8 +11,7 @@ interface FixtureTask {
   project?: string
 }
 
-export const FIXTURE_TASKS: FixtureTask[] = [
-  // recurring
+const FIXTURE_TASKS: FixtureTask[] = [
   {
     title: 'Daily standup notes',
     description: 'Capture blockers and progress each morning',
@@ -28,8 +27,6 @@ export const FIXTURE_TASKS: FixtureTask[] = [
     assignee: 'BuildBot',
     project: 'Platform',
   },
-
-  // backlog
   {
     title: 'Add search functionality',
     description: 'Full-text search across task titles and descriptions',
@@ -52,8 +49,6 @@ export const FIXTURE_TASKS: FixtureTask[] = [
     priority: 'low',
     project: 'Platform',
   },
-
-  // in-progress
   {
     title: 'Implement board export',
     description: 'Export board state to JSON and CSV formats',
@@ -69,8 +64,6 @@ export const FIXTURE_TASKS: FixtureTask[] = [
     priority: 'high',
     assignee: 'BuildBot',
   },
-
-  // review
   {
     title: 'Add bulk delete command',
     description: 'Allow deleting multiple tasks by ID or filter',
@@ -79,8 +72,6 @@ export const FIXTURE_TASKS: FixtureTask[] = [
     assignee: 'Alex',
     project: 'Platform',
   },
-
-  // done
   {
     title: 'Set up CI pipeline',
     description: 'GitHub Actions for lint, typecheck, and test on every PR',
@@ -102,7 +93,6 @@ export function seedFixtures(db: Database): { taskCount: number; movedCount: num
   let movedCount = 0
 
   for (const fixture of FIXTURE_TASKS) {
-    // Create all tasks in backlog first (addTask defaults to backlog)
     const task = addTask(db, fixture.title, {
       description: fixture.description,
       priority: fixture.priority,
@@ -110,16 +100,14 @@ export function seedFixtures(db: Database): { taskCount: number; movedCount: num
       project: fixture.project,
     })
 
-    // Move to target column if not already in backlog
     if (fixture.column !== 'backlog') {
       moveTask(db, task.id, fixture.column)
       movedCount++
     }
   }
 
-  // Escalate the bug to urgent — generates a realistic "prioritized" activity entry
   const inProgress = listTasks(db, { column: 'in-progress' })
-  const bug = inProgress.find((t) => t.title === 'Fix column reorder bug')
+  const bug = inProgress.find((task) => task.title === 'Fix column reorder bug')
   if (bug) {
     updateTask(db, bug.id, { priority: 'urgent' })
   }

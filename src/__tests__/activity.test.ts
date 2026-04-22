@@ -10,7 +10,7 @@ import {
   bulkMoveAll,
   bulkClearDone,
 } from '../db.ts'
-import { listActivity, getTaskActivity, getColumnTimeEntries } from '../activity.ts'
+import { listActivity } from '../activity.ts'
 
 let db: Database
 
@@ -21,10 +21,16 @@ beforeEach(() => {
   seedDefaultColumns(db)
 })
 
+function getColumnTimeEntries(taskId: string): { exited_at: string | null }[] {
+  return db
+    .query('SELECT * FROM column_time_tracking WHERE task_id = $id ORDER BY entered_at')
+    .all({ $id: taskId }) as { exited_at: string | null }[]
+}
+
 describe('activity logging', () => {
   test('addTask logs created activity', () => {
     const task = addTask(db, 'Test task')
-    const activities = getTaskActivity(db, task.id)
+    const activities = listActivity(db, { taskId: task.id })
     expect(activities).toHaveLength(1)
     expect(activities[0]!.action).toBe('created')
     expect(activities[0]!.new_value).toBe('Test task')
@@ -33,7 +39,7 @@ describe('activity logging', () => {
   test('updateTask logs field changes', () => {
     const task = addTask(db, 'Original')
     updateTask(db, task.id, { title: 'Updated', priority: 'high' })
-    const activities = getTaskActivity(db, task.id)
+    const activities = listActivity(db, { taskId: task.id })
     const actions = activities.map((a) => a.action)
     expect(actions).toContain('updated')
     expect(actions).toContain('prioritized')
@@ -42,7 +48,7 @@ describe('activity logging', () => {
   test('updateTask logs assignee change as assigned', () => {
     const task = addTask(db, 'Task')
     updateTask(db, task.id, { assignee: 'alice' })
-    const activities = getTaskActivity(db, task.id)
+    const activities = listActivity(db, { taskId: task.id })
     const assigned = activities.find((a) => a.action === 'assigned')
     expect(assigned).toBeDefined()
     expect(assigned!.new_value).toBe('alice')
@@ -51,7 +57,7 @@ describe('activity logging', () => {
   test('updateTask does not log when value unchanged', () => {
     const task = addTask(db, 'Task', { priority: 'high' })
     updateTask(db, task.id, { priority: 'high' })
-    const activities = getTaskActivity(db, task.id)
+    const activities = listActivity(db, { taskId: task.id })
     expect(activities.filter((a) => a.action === 'prioritized')).toHaveLength(0)
   })
 
@@ -68,7 +74,7 @@ describe('activity logging', () => {
   test('moveTask logs moved activity', () => {
     const task = addTask(db, 'Mobile', { column: 'recurring' })
     moveTask(db, task.id, 'in-progress')
-    const activities = getTaskActivity(db, task.id)
+    const activities = listActivity(db, { taskId: task.id })
     const moved = activities.find((a) => a.action === 'moved')
     expect(moved).toBeDefined()
     expect(moved!.old_value).toBe('recurring')
@@ -96,7 +102,7 @@ describe('activity logging', () => {
   test('listActivity returns most recent first', () => {
     const task = addTask(db, 'Task')
     updateTask(db, task.id, { title: 'Updated' })
-    const activities = getTaskActivity(db, task.id)
+    const activities = listActivity(db, { taskId: task.id })
     expect(activities[0]!.action).toBe('updated')
     expect(activities[1]!.action).toBe('created')
   })
@@ -113,7 +119,7 @@ describe('activity logging', () => {
 describe('column time tracking', () => {
   test('addTask creates enter record', () => {
     const task = addTask(db, 'Task', { column: 'recurring' })
-    const entries = getColumnTimeEntries(db, task.id)
+    const entries = getColumnTimeEntries(task.id)
     expect(entries).toHaveLength(1)
     expect(entries[0]!.exited_at).toBeNull()
   })
@@ -121,7 +127,7 @@ describe('column time tracking', () => {
   test('moveTask creates exit and enter records', () => {
     const task = addTask(db, 'Task', { column: 'recurring' })
     moveTask(db, task.id, 'in-progress')
-    const entries = getColumnTimeEntries(db, task.id)
+    const entries = getColumnTimeEntries(task.id)
     expect(entries).toHaveLength(2)
     expect(entries[0]!.exited_at).not.toBeNull()
     expect(entries[1]!.exited_at).toBeNull()

@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns } from '../../db.ts'
-import { boardInit, boardView, boardReset } from '../../commands/board.ts'
+import { getBoardView, initSchema, seedDefaultColumns } from '../../db.ts'
+import { boardInit, boardReset } from '../../commands/board.ts'
 import { KanbanError } from '../../errors.ts'
 
 let db: Database
@@ -24,20 +24,12 @@ describe('boardInit', () => {
   })
 })
 
-describe('boardView', () => {
+describe('getBoardView', () => {
   test('returns board view after init', () => {
     initSchema(db)
     seedDefaultColumns(db)
-    const result = boardView(db)
-    expect(result.ok).toBe(true)
-    if (result.ok) {
-      const data = result.data as { columns: unknown[] }
-      expect(data.columns).toHaveLength(5)
-    }
-  })
-
-  test('throws if not initialized', () => {
-    expect(() => boardView(db)).toThrow(KanbanError)
+    const data = getBoardView(db)
+    expect(data.columns).toHaveLength(5)
   })
 })
 
@@ -47,5 +39,6 @@ describe('boardReset', () => {
     seedDefaultColumns(db)
     const result = boardReset(db)
     expect(result.ok).toBe(true)
+    expect(getBoardView(db).columns).toHaveLength(5)
   })
 })

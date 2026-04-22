@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { generateId } from './id.ts'
-import type { ActivityEntry, ActivityAction, ColumnTimeEntry } from './types.ts'
+import type { ActivityEntry, ActivityAction } from './types.ts'
 
 export function logActivity(
   db: Database,
@@ -41,10 +41,6 @@ export function listActivity(
     .all(params as Record<string, string>) as ActivityEntry[]
 }
 
-export function getTaskActivity(db: Database, taskId: string): ActivityEntry[] {
-  return listActivity(db, { taskId })
-}
-
 export function enterColumn(db: Database, taskId: string, columnId: string): void {
   db.query(
     `INSERT INTO column_time_tracking (id, task_id, column_id)
@@ -64,10 +60,4 @@ export function exitColumn(db: Database, taskId: string, columnId: string): void
     $task_id: taskId,
     $col: columnId,
   })
-}
-
-export function getColumnTimeEntries(db: Database, taskId: string): ColumnTimeEntry[] {
-  return db
-    .query(`SELECT * FROM column_time_tracking WHERE task_id = $task_id ORDER BY entered_at`)
-    .all({ $task_id: taskId }) as ColumnTimeEntry[]
 }

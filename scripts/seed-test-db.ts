@@ -8,7 +8,7 @@
 
 import { existsSync, unlinkSync } from 'node:fs'
 import { openDb, initSchema, seedDefaultColumns, getDbPath, getBoardView } from '../src/db.ts'
-import { seedFixtures } from '../src/fixtures.ts'
+import { seedFixtures } from './fixtures.ts'
 
 const dbPath = getDbPath()
 
