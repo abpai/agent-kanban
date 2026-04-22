@@ -23,6 +23,7 @@
 - Safe-area-aware root, overlay, and drawer padding is required for iPhone Safari; sticky mobile chrome should also account for the top inset.
 - Start review tasks by comparing requested plan scope against actual implementation across backend and frontend.
 - For session/work review in this repo, separate committed git history from the current dirty worktree; substantial agent work may be present, testable, and still not landed in a commit.
+- For dead-code audits in this repo, run reachability tools separately in the root and in `ui/`; root-only scans misclassify the Vite dashboard as unused because the frontend is an independent workspace.
 - For UI smoke checks with duplicate visible text, use stable locators (`title`, `nth`, `role+name`) rather than plain text locators.
 - For Bun CLIs, adding `#!/usr/bin/env bun` to the bin entrypoint plus `bun link` gives a reliable global command workflow (`kanban ...`) for local agent usage.
 - For readability-only refactors, extract tiny helpers for repeated response/header/error logic to reduce duplication while keeping behavior identical.
