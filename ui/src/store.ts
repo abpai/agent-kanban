@@ -19,7 +19,6 @@ import type {
   Priority,
   ProviderCapabilities,
   ProviderTeamInfo,
-  ActivityEntry,
   Task,
 } from './types'
 
@@ -27,7 +26,7 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
 }
 
-export interface PendingConflict {
+interface PendingConflict {
   taskId: string
   attemptedUpdates: {
     title?: string
@@ -52,7 +51,7 @@ const defaultCapabilities: ProviderCapabilities = {
   configEdit: true,
 }
 
-export type ActivityWindowDays = 7 | 14 | 28 | 70 | null
+type ActivityWindowDays = 1 | 7 | 14 | 28 | 70 | null
 
 const STORAGE_KEYS = {
   assignee: 'agent-kanban:filter:assignee',
@@ -62,15 +61,14 @@ const STORAGE_KEYS = {
 
 function loadStoredActivityDays(): ActivityWindowDays {
   const value = safeLocalStorageGet(STORAGE_KEYS.activityDays)
-  if (value === '7' || value === '14' || value === '28' || value === '70') {
-    return Number(value) as 7 | 14 | 28 | 70
+  if (value === '1' || value === '7' || value === '14' || value === '28' || value === '70') {
+    return Number(value) as 1 | 7 | 14 | 28 | 70
   }
   return null
 }
 
 interface AppState {
   board: BoardView | null
-  activity: ActivityEntry[]
   metrics: BoardMetrics | null
   config: BoardConfig | null
   provider: 'local' | 'linear' | 'jira'
@@ -129,7 +127,6 @@ interface AppState {
 
 export const useStore = create<AppState>((set, get) => ({
   board: null,
-  activity: [],
   metrics: null,
   config: null,
   provider: 'local',
@@ -155,7 +152,6 @@ export const useStore = create<AppState>((set, get) => ({
       const bootstrap = await api.getBootstrap()
       set({
         board: bootstrap.board,
-        activity: bootstrap.activity,
         metrics: bootstrap.metrics,
         config: bootstrap.config,
         provider: bootstrap.provider,

@@ -202,30 +202,28 @@ textarea {
 
 /* ─── Filter bar ─── */
 .filterBar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
-  gap: var(--space-md);
-  align-items: end;
-}
-
-.filterSection {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
+  align-items: center;
+  gap: var(--space-md);
   min-width: 0;
-}
-
-.filterSectionCompact {
-  justify-self: end;
-  width: 100%;
 }
 
 .filterLabel {
   font-family: 'Space Mono', monospace;
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-disabled);
+  flex-shrink: 0;
+}
+
+.filterRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .filterGroup {
@@ -241,8 +239,11 @@ textarea {
   gap: 6px;
 }
 
-.filterGroupWrap {
-  flex-wrap: wrap;
+.filterDivider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border-visible);
+  margin: 4px 6px;
 }
 
 .filterBtn {
@@ -272,60 +273,60 @@ textarea {
   color: var(--black);
 }
 
-.projectDropdown {
-  width: 100%;
+.filterSelect {
   min-height: 36px;
   background: transparent;
   border: 1px solid var(--border-visible);
-  color: var(--text-primary);
-  padding: 6px 14px;
-  border-radius: 999px;
-  font-family: 'Space Mono', monospace;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-  appearance: none;
-  padding-right: 34px;
-  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23666666' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-}
-
-.projectDropdown:focus {
-  outline: none;
-  border-color: var(--text-primary);
-}
-
-.projectDropdown.active {
-  border-color: var(--accent);
-  color: var(--text-primary);
-  box-shadow: 0 0 0 1px var(--accent-subtle);
-}
-
-.filterStatusChip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 36px;
-  background: transparent;
-  border: 1px dashed var(--border-visible);
-  color: var(--text-disabled);
-  padding: 5px 12px;
+  color: var(--text-secondary);
+  padding: 6px 32px 6px 14px;
   border-radius: 999px;
   font-family: 'Space Mono', monospace;
   font-size: 12px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  cursor: pointer;
+  appearance: none;
   white-space: nowrap;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23666666' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
 }
 
-.filterStatusChip.active {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
+.filterSelect:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.filterSelect:focus {
+  outline: none;
+  border-color: var(--text-primary);
+  color: var(--text-primary);
+}
+
+.filterSelect.active {
+  border-color: var(--text-display);
   color: var(--text-display);
 }
 
-.filterSelect {
-  flex: 1 1 180px;
+.filterReset {
+  background: transparent;
+  border: none;
+  color: var(--text-disabled);
+  padding: 6px 10px;
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.15s;
+  margin-left: auto;
+}
+
+.filterReset:hover {
+  color: var(--text-primary);
 }
 
 /* ─── Board layout ─── */
@@ -1100,14 +1101,6 @@ select.formInput {
   .statsBar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
-  .filterBar {
-    grid-template-columns: 1fr;
-  }
-
-  .filterSectionCompact {
-    justify-self: stretch;
-  }
 }
 
 /* ─── Responsive: Mobile ─── */
@@ -1186,15 +1179,11 @@ select.formInput {
   .filterBar {
     display: flex;
     flex-direction: column;
-    gap: var(--space-sm);
+    align-items: stretch;
+    gap: 10px;
   }
 
-  .filterSection,
-  .filterSectionCompact {
-    width: 100%;
-  }
-
-  .filterSection {
+  .filterRow {
     gap: 6px;
   }
 
@@ -1212,9 +1201,20 @@ select.formInput {
     font-size: 11px;
   }
 
-  .projectDropdown {
+  .filterSelect {
     min-height: 34px;
     font-size: 11px;
+    padding: 6px 28px 6px 12px;
+    flex: 1 1 140px;
+  }
+
+  .filterDivider {
+    display: none;
+  }
+
+  .filterReset {
+    margin-left: auto;
+    padding: 6px 4px;
   }
 
   .boardShell {
