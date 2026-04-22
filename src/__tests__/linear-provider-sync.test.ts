@@ -37,7 +37,11 @@ function linearIssue(
     project: { id: string; name: string; url?: string | null; state?: string | null } | null
     state: { id: string; name: string; position: number }
     labels: { nodes: Array<{ id: string; name: string }> }
-    comments: { totalCount: number }
+    comments: {
+      totalCount?: number
+      nodes: Array<{ id: string }>
+      pageInfo?: { hasNextPage: boolean; endCursor: string | null }
+    }
   }> = {},
 ) {
   return {
@@ -53,7 +57,7 @@ function linearIssue(
     project: null,
     state: { id: 'state-1', name: 'Todo', position: 0 },
     labels: { nodes: [] },
-    comments: { totalCount: 0 },
+    comments: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
     ...overrides,
   }
 }
@@ -157,7 +161,11 @@ describe('LinearProvider sync', () => {
                   project: null,
                   state: { id: 'state-1', name: 'Todo', position: 0 },
                   labels: { nodes: [] },
-                  comments: { totalCount: 0 },
+                  comments: {
+                    totalCount: 0,
+                    nodes: [],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
                 },
               },
             },
@@ -250,7 +258,9 @@ describe('LinearProvider sync', () => {
           JSON.stringify({
             data: {
               issues: {
-                nodes: [linearIssue({ comments: { totalCount: 2 } })],
+                nodes: [
+                  linearIssue({ comments: { totalCount: 2, nodes: [{ id: 'c1' }, { id: 'c2' }] } }),
+                ],
                 pageInfo: { hasNextPage: false, endCursor: null },
               },
             },
@@ -355,7 +365,14 @@ describe('LinearProvider sync', () => {
           JSON.stringify({
             data: {
               issues: {
-                nodes: [linearIssue({ comments: { totalCount: 7 } })],
+                nodes: [
+                  linearIssue({
+                    comments: {
+                      totalCount: 7,
+                      nodes: Array.from({ length: 7 }, (_, index) => ({ id: `c${index}` })),
+                    },
+                  }),
+                ],
                 pageInfo: { hasNextPage: false, endCursor: null },
               },
             },
