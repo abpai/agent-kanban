@@ -121,9 +121,9 @@
           eyebrow: 'Foundation',
           activeColumn: 'recurring',
           summary:
-            'Initialize a local board once or point the CLI at a Linear team before doing any planning.',
+            'Initialize a local board once or point the CLI at a Linear team or Jira project before doing any planning.',
           outcome: 'You end with a board that is ready for real work instead of placeholder data.',
-          note: 'In Linear mode, skip local board init and let Linear remain the source of truth.',
+          note: 'In Linear or Jira mode, skip local board init and let the upstream tracker remain the source of truth.',
           commands: [
             'kanban board init',
             'kanban config set-member Alex --role human',
@@ -185,7 +185,7 @@
           summary:
             'Verify what is waiting in review, check what is done, and clear finished work when the provider supports it.',
           outcome: 'The board stays current instead of collecting stale finished tasks.',
-          note: 'Bulk cleanup is local-only. In Linear mode, let workflow state stay in Linear.',
+          note: 'Bulk cleanup is local-only. In Linear and Jira modes, let workflow state stay in the upstream tracker.',
           commands: [
             'kanban task list -c review',
             'kanban task list -c done',
@@ -216,6 +216,7 @@
         'Prefer default JSON output when another tool or agent will parse the result.',
         'Use --pretty only when a human is reading the terminal output directly.',
         'In Linear mode, task commands can use either the internal ID or the issue ref, such as TEAM-123.',
+        'In Jira mode, task commands can use either the cached internal ID or the issue key, such as ENG-123.',
         'For local mode, mount the database directory rather than a single file because SQLite WAL creates sibling files.',
       ]
 

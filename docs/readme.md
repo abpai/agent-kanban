@@ -6,9 +6,9 @@ This directory holds the longer-form project guides that support the main
 ## Start here
 
 - [`workflow.md`](./workflow.md): a common day-to-day workflow for running the
-  board locally and moving work through it
-- [`mcp.md`](./mcp.md): the reusable tracker MCP module, its default tools, and
-  the current integration caveats
+  board locally or against Linear/Jira and moving work through it
+- [`mcp.md`](./mcp.md): the reusable tracker MCP module, the bundled
+  `kanban mcp` entrypoint, and the current integration caveats
 - [`providers/jira.md`](./providers/jira.md): how the Jira provider works,
   including comments, webhooks, transitions, and current limits
 - [`providers/linear.md`](./providers/linear.md): how the Linear provider works,

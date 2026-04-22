@@ -76,6 +76,11 @@ The CLI, API server, and web UI check capabilities before calling the provider.
 Unsupported operations return `UNSUPPORTED_OPERATION` with exit code `1`. The UI
 hides actions that the active provider does not support.
 
+`activity log = no` here means Jira mode does not expose the same local
+dashboard/bootstrap activity feed or metrics surface as the SQLite provider.
+The provider still syncs changelog history into cache tables for reconciliation
+and provider-backed reads.
+
 ## How moves work
 
 Jira does not let callers write an issue's status directly. A status change is

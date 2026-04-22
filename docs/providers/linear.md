@@ -38,7 +38,7 @@ Provider support lives in `src/providers/`:
 | `local.ts`         | `LocalProvider`, which wraps the SQLite implementation                                                          |
 | `linear.ts`        | `LinearProvider`, which implements the interface against Linear                                                 |
 | `linear-client.ts` | GraphQL client, query builders, and response parsing                                                            |
-| `linear-cache.ts`  | In-memory cache for workflow states and team metadata                                                           |
+| `linear-cache.ts`  | SQLite-backed cache tables for synced issues, states, activity rows, and team metadata                          |
 
 ## Capability matrix
 
@@ -60,6 +60,11 @@ Provider support lives in `src/providers/`:
 The CLI, API server, and web UI check capabilities before calling the provider.
 Unsupported operations return `UNSUPPORTED_OPERATION` with exit code `1`. The UI
 hides actions the active provider does not support.
+
+`activity log = no` here means Linear mode does not expose the same local
+dashboard/bootstrap activity feed or metrics surface as the SQLite provider.
+The provider still syncs upstream history into cache tables for reconciliation
+and provider-backed reads.
 
 ## API and interface notes
 

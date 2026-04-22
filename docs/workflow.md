@@ -2,7 +2,8 @@
 
 This guide shows a typical workflow for using `agent-kanban` as a lightweight
 project board from the terminal, with the dashboard available when you want a
-visual pass.
+visual pass. The same rhythm works whether your source of truth is a local
+SQLite board, Linear, or Jira Cloud.
 
 ## 1. Set up the board
 
@@ -15,13 +16,26 @@ kanban config set-member BuildBot --role agent
 kanban config add-project website-redesign
 ```
 
-If you are using Linear instead, point the CLI at your team and skip local board
-initialization:
+If you are using a remote provider instead, point the CLI at that provider and
+skip local board initialization.
+
+Linear:
 
 ```bash
 export KANBAN_PROVIDER=linear
 export LINEAR_API_KEY=lin_api_...
 export LINEAR_TEAM_ID=<team-id>
+kanban board view
+```
+
+Jira:
+
+```bash
+export KANBAN_PROVIDER=jira
+export JIRA_BASE_URL=https://your-domain.atlassian.net
+export JIRA_EMAIL=you@example.com
+export JIRA_API_TOKEN=...
+export JIRA_PROJECT_KEY=ENG
 kanban board view
 ```
 
@@ -93,8 +107,8 @@ kanban task list -c done
 kanban bulk clear-done
 ```
 
-`bulk clear-done` is local-provider only. In Linear mode, keep the issue in
-Linear and rely on workflow state there.
+`bulk clear-done` is local-provider only. In Linear and Jira modes, keep the
+issue in the upstream system and rely on workflow state there.
 
 ## 6. Open the dashboard when needed
 
@@ -121,5 +135,7 @@ The server exposes:
 - Use `--pretty` only when a human is reading the terminal output directly.
 - In Linear mode, task commands can use either the internal ID or the issue ref,
   such as `TEAM-123`.
+- In Jira mode, task commands can use either the cached internal ID or the
+  issue key, such as `ENG-123`.
 - If you rely on the local provider, let the database live in a directory volume,
   not a single-file mount, because SQLite WAL mode creates sibling files.

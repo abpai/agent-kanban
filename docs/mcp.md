@@ -1,9 +1,12 @@
 # Reusable Tracker MCP
 
 `agent-kanban` includes a reusable tracker MCP implementation under `src/mcp/`.
-It is designed for sibling workspaces and in-repo consumers that want to host a
-tracker-backed MCP server without reimplementing the policy and transport
-layers.
+There are really two shipped entry points now:
+
+- `kanban mcp`, which runs a local stdio MCP server
+- the reusable helpers under `src/mcp/`, for sibling workspaces or in-repo
+  consumers that want to host their own tracker-backed MCP server without
+  reimplementing the policy and transport layers
 
 ## What is shipped
 
@@ -13,6 +16,8 @@ The shipped MCP layer has two pieces:
   observability hooks
 - `createTrackerMcpServer(...)`: a Streamable HTTP MCP server that wraps the
   core with host-owned auth
+- `kanban mcp`: a bundled stdio server built on the same default tool set for
+  trusted local use
 
 The current default tool set is:
 
@@ -22,6 +27,18 @@ The current default tool set is:
 - `postComment`
 - `updateComment`
 - `moveTicket`
+
+## Quick start
+
+Use the bundled stdio server when you want the fastest path for a local MCP
+client:
+
+```sh
+kanban mcp
+```
+
+It accepts the same provider env vars as the CLI. If you want to point it at a
+specific local database file, pass `--db <path>`.
 
 ## Comment behavior
 
@@ -41,7 +58,10 @@ edit against the current body and authoring rules.
 - `kanban serve` does not mount this MCP server. The shipped app server exposes
   the dashboard, `/api/*`, `/api/health`, `/api/ready`, `/api/sync-status`,
   and `/ws`, but not `/mcp`.
-- The CLI does not currently expose MCP commands.
+- The CLI does expose MCP over stdio via `kanban mcp`.
+- The bundled stdio server uses an allow-all local policy. If you need host
+  auth, scope resolution, or stricter policy checks, use
+  `createTrackerMcpServer(...)` in your own host instead.
 - The MCP helpers live under `src/mcp/` and are not yet documented as stable
   package-root exports such as `@andypai/agent-kanban`.
 - The public HTTP API exposes comment list/create/update routes, but not a

@@ -2,11 +2,21 @@
 
 [![CI](https://github.com/abpai/agent-kanban/actions/workflows/ci.yml/badge.svg)](https://github.com/abpai/agent-kanban/actions/workflows/ci.yml)
 
-Agent-friendly kanban board CLI. Manage tasks via bash commands, parse structured JSON output.
+`agent-kanban` exists because browser-first project tools are a bad control
+plane for agents, shell scripts, and CI jobs. If automation has to click
+through a web app, scrape HTML, or learn a different integration for every
+tracker, the setup gets brittle fast.
 
-## Why
+This repo gives you one small contract across three modes: a local SQLite board,
+Linear, and Jira Cloud. The CLI stays the same. The JSON envelope stays the
+same. Humans still get an optional dashboard when they want a visual pass.
 
-Most project-management tools are built for humans clicking through UIs. `agent-kanban` is built for **CLI-first workflows** — AI agents and scripts get deterministic JSON they can parse, humans get a pretty-printed view and a web dashboard. Runs against a local SQLite file, a Linear backend, or a Jira Cloud project.
+That buys you a few things that are easy to miss at first:
+
+- You can prototype an agent against a local board, then point the same workflow at Linear or Jira later.
+- Remote modes use webhooks plus polling fallback, so missed events are less painful than with one-shot scripts or browser automation.
+- Local mode needs no external database or service, which makes scratch boards, demos, and CI setups much easier to spin up.
+- The repo also includes a reusable MCP layer, so sibling tools can reuse the same tracker semantics instead of growing their own tracker adapter.
 
 ## Documentation
 
@@ -107,6 +117,13 @@ kanban board view
 | webhooks                   | no    | yes    | yes  |
 
 Linear tasks carry an `externalRef` (e.g. `TEAM-123`) and a `url`. Commands accept either the internal ID or the external ref.
+Jira tasks can also be addressed by issue key (for example `ENG-123`).
+
+Local mode is still the only mode with built-in metrics, config mutation, bulk
+cleanup, and the dashboard/bootstrap activity feed. Linear and Jira do keep
+remote issue history and comment counts in their cache tables for sync and
+provider-backed flows, but those modes do not expose the same local analytics
+surface.
 
 Unsupported operations return error code `UNSUPPORTED_OPERATION` with exit code 1.
 
@@ -223,6 +240,16 @@ kanban serve --port 8080
 kanban serve --tunnel   # optional public URL for webhook testing
 ```
 
+### mcp
+
+```bash
+kanban mcp
+kanban mcp --db /path/to/board.db
+```
+
+Runs the bundled MCP server over stdio for local MCP clients such as Claude
+Desktop. See [`docs/mcp.md`](docs/mcp.md) for the tool surface and caveats.
+
 ## Global flags
 
 | Flag               | Description                                                                                      |
@@ -278,8 +305,10 @@ Comment routes:
 ## Reusable MCP core
 
 The repo also includes a reusable tracker MCP implementation under `src/mcp/`.
-It is intended for sibling workspaces and in-repo consumers rather than the
-`kanban` CLI itself.
+There are two ways to use it today:
+
+- run `kanban mcp` for a bundled stdio MCP server
+- import the helpers in `src/mcp/` from a sibling workspace or in-repo consumer
 
 See [`docs/mcp.md`](docs/mcp.md) for the current default tool set, the auth and
 policy model, and the caveats around source-level imports and `kanban serve`.
