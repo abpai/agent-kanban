@@ -6,6 +6,7 @@ import { JiraProvider, type JiraProviderConfig } from '../providers/jira.ts'
 import { JiraClient } from '../providers/jira-client.ts'
 import { LinearProvider } from '../providers/linear.ts'
 import {
+  getCachedActivity,
   getCachedTasks as getCachedJiraTasks,
   initJiraCacheSchema,
   saveJiraSyncMeta,
@@ -24,6 +25,13 @@ import {
 
 function hmac(secret: string, body: string): string {
   return createHmac('sha256', secret).update(body).digest('hex')
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  })
 }
 
 describe('verifyHmacSha256', () => {
@@ -246,6 +254,78 @@ describe('Jira webhook', () => {
     expect(result.message).toContain('Ignoring issue from project')
     expect(getCachedJiraTasks(db).find((task) => task.externalRef === 'OPS-500')).toBeUndefined()
   })
+
+  test('issue_updated backfills activity immediately', async () => {
+    const db = new Database(':memory:')
+    seedJira(db)
+    delete process.env['JIRA_WEBHOOK_SECRET']
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('/rest/api/3/issue/600/changelog')) {
+        return jsonResponse({
+          startAt: 0,
+          maxResults: 100,
+          total: 1,
+          isLast: true,
+          values: [
+            {
+              id: 'hist-1',
+              created: '2025-02-01T00:01:00.000Z',
+              items: [{ field: 'status', from: '1', to: '2' }],
+            },
+          ],
+        })
+      }
+      return new Response(`route not stubbed: ${url}`, { status: 500 })
+    }) as typeof fetch
+
+    try {
+      const client = new JiraClient({
+        baseUrl: jiraConfig.baseUrl,
+        email: jiraConfig.email,
+        apiToken: jiraConfig.apiToken,
+      })
+      const provider = new JiraProvider(db, jiraConfig, client)
+      const body = JSON.stringify({
+        webhookEvent: 'jira:issue_updated',
+        issue: {
+          id: '600',
+          key: 'ENG-600',
+          fields: {
+            summary: 'Moved issue',
+            status: { id: '2', name: 'Done' },
+            issuetype: { id: 't', name: 'Task' },
+            labels: [],
+            comment: { total: 0 },
+            created: '2025-02-01T00:00:00.000Z',
+            updated: '2025-02-01T00:01:00.000Z',
+            project: { id: '1', key: 'ENG' },
+          },
+        },
+      })
+
+      const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+
+      expect(result.handled).toBe(true)
+      expect(getCachedJiraTasks(db).find((task) => task.externalRef === 'ENG-600')?.column_id).toBe(
+        '2',
+      )
+      expect(getCachedActivity(db, { issueId: '600' })).toEqual([
+        {
+          issue_id: '600',
+          history_id: 'hist-1',
+          item_field: 'status',
+          from_value: '1',
+          to_value: '2',
+          created_at: '2025-02-01T00:01:00.000Z',
+        },
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 
 function seedLinear(db: Database): void {
@@ -263,14 +343,17 @@ function seedLinear(db: Database): void {
 
 describe('Linear webhook', () => {
   let originalSecret: string | undefined
+  let originalFetch: typeof fetch
 
   beforeEach(() => {
     originalSecret = process.env['LINEAR_WEBHOOK_SECRET']
+    originalFetch = globalThis.fetch
   })
 
   afterEach(() => {
     if (originalSecret === undefined) delete process.env['LINEAR_WEBHOOK_SECRET']
     else process.env['LINEAR_WEBHOOK_SECRET'] = originalSecret
+    globalThis.fetch = originalFetch
   })
 
   test('Issue.create upserts the task', async () => {
@@ -291,6 +374,7 @@ describe('Linear webhook', () => {
         createdAt: '2025-02-01T00:00:00.000Z',
         updatedAt: '2025-02-01T00:00:00.000Z',
         state: { id: 's1', name: 'Todo', position: 0 },
+        team: { id: 'tid', key: 'DX' },
         labels: [{ id: 'l1', name: 'bug' }],
         commentCount: 1,
       },
@@ -332,6 +416,122 @@ describe('Linear webhook', () => {
     expect(getCachedLinearTasks(db).find((t) => t.externalRef === 'DX-9')).toBeUndefined()
   })
 
+  test('ignores create/update events from another team', async () => {
+    const db = new Database(':memory:')
+    seedLinear(db)
+    delete process.env['LINEAR_WEBHOOK_SECRET']
+    const provider = new LinearProvider(db, 'tid', 'key')
+    const body = JSON.stringify({
+      action: 'update',
+      type: 'Issue',
+      data: {
+        id: 'other-1',
+        identifier: 'OPS-1',
+        title: 'Wrong team',
+        createdAt: '2025-02-01T00:00:00.000Z',
+        updatedAt: '2025-02-01T00:00:00.000Z',
+        state: { id: 's1', name: 'Todo', position: 0 },
+        team: { id: 'other-team', key: 'OPS' },
+      },
+    })
+
+    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+
+    expect(result.handled).toBe(false)
+    expect(result.message).toContain("Ignoring issue from team 'other-team'")
+    expect(getCachedLinearTasks(db).find((task) => task.externalRef === 'OPS-1')).toBeUndefined()
+  })
+
+  test('falls back to issue-team lookup when the webhook payload omits team info', async () => {
+    const db = new Database(':memory:')
+    seedLinear(db)
+    delete process.env['LINEAR_WEBHOOK_SECRET']
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string
+      }
+
+      if (body.query.includes('query IssueTeam')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: {
+                team: {
+                  id: 'other-team',
+                  key: 'OPS',
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const provider = new LinearProvider(db, 'tid', 'key')
+    const body = JSON.stringify({
+      action: 'update',
+      type: 'Issue',
+      data: {
+        id: 'other-2',
+        identifier: 'OPS-2',
+        title: 'Wrong team via fallback',
+        createdAt: '2025-02-01T00:00:00.000Z',
+        updatedAt: '2025-02-01T00:00:00.000Z',
+        state: { id: 's1', name: 'Todo', position: 0 },
+      },
+    })
+
+    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+
+    expect(result.handled).toBe(false)
+    expect(result.message).toContain("Ignoring issue from team 'OPS'")
+    expect(getCachedLinearTasks(db).find((task) => task.externalRef === 'OPS-2')).toBeUndefined()
+  })
+
+  test('webhook updates preserve cached comment_count when the payload omits it', async () => {
+    const db = new Database(':memory:')
+    seedLinear(db)
+    upsertIssues(db, [
+      {
+        id: 'i1',
+        identifier: 'DX-1',
+        title: 'Existing issue',
+        priority: 0,
+        stateId: 's1',
+        stateName: 'Todo',
+        statePosition: 0,
+        commentCount: 4,
+        createdAt: '2025-02-01T00:00:00.000Z',
+        updatedAt: '2025-02-01T00:00:00.000Z',
+      },
+    ])
+    delete process.env['LINEAR_WEBHOOK_SECRET']
+    const provider = new LinearProvider(db, 'tid', 'key')
+    const body = JSON.stringify({
+      action: 'update',
+      type: 'Issue',
+      data: {
+        id: 'i1',
+        identifier: 'DX-1',
+        title: 'Existing issue, updated',
+        createdAt: '2025-02-01T00:00:00.000Z',
+        updatedAt: '2025-02-02T00:00:00.000Z',
+        state: { id: 's1', name: 'Todo', position: 0 },
+        team: { id: 'tid', key: 'DX' },
+      },
+    })
+
+    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+
+    expect(result.handled).toBe(true)
+    expect(
+      getCachedLinearTasks(db).find((task) => task.externalRef === 'DX-1')?.comment_count,
+    ).toBe(4)
+  })
+
   test('create event stamps lastWebhookAt without clobbering team/lastSyncAt', async () => {
     const db = new Database(':memory:')
     seedLinear(db)
@@ -347,6 +547,7 @@ describe('Linear webhook', () => {
         createdAt: '2025-02-01T00:00:00.000Z',
         updatedAt: '2025-02-01T00:00:00.000Z',
         state: { id: 's1', name: 'Todo', position: 0 },
+        team: { id: 'tid', key: 'DX' },
       },
     })
     const before = Date.now()

@@ -56,6 +56,7 @@ interface LinearIssueNode {
   project?: { id: string; name: string; url?: string | null; state?: string | null } | null
   state: { id: string; name: string; position: number }
   labels?: { nodes: Array<{ id: string; name: string }> }
+  comments?: { totalCount: number } | null
 }
 
 interface LinearCommentNode {
@@ -64,6 +65,20 @@ interface LinearCommentNode {
   createdAt: string
   updatedAt: string
   user?: { id: string; name?: string | null; displayName?: string | null } | null
+}
+
+function toLinearIssue(node: LinearIssueNode): LinearIssue {
+  return {
+    ...node,
+    assignee: node.assignee
+      ? {
+          id: node.assignee.id,
+          name: node.assignee.displayName || node.assignee.name,
+        }
+      : null,
+    labels: node.labels?.nodes.map((label) => label.name) ?? [],
+    commentCount: node.comments?.totalCount ?? undefined,
+  }
 }
 
 const COMMENT_FIELDS = `
@@ -264,6 +279,9 @@ export class LinearClient {
                 labels {
                   nodes { id name }
                 }
+                comments {
+                  totalCount
+                }
               }
               pageInfo {
                 hasNextPage
@@ -274,19 +292,7 @@ export class LinearClient {
         `,
         { teamId, after, updatedAfter: updatedAfter ?? '1970-01-01T00:00:00.000Z' },
       )
-      issues.push(
-        ...data.issues.nodes.map((issue: LinearIssueNode) => ({
-          ...issue,
-          assignee: issue.assignee
-            ? {
-                id: issue.assignee.id,
-                name: issue.assignee.displayName || issue.assignee.name,
-              }
-            : null,
-          labels: issue.labels?.nodes.map((l) => l.name) ?? [],
-          commentCount: 0,
-        })),
-      )
+      issues.push(...data.issues.nodes.map(toLinearIssue))
       after = data.issues.pageInfo.hasNextPage ? data.issues.pageInfo.endCursor : null
     } while (after)
 
@@ -322,6 +328,7 @@ export class LinearClient {
               project { id name url state }
               state { id name position }
               labels { nodes { id name } }
+              comments { totalCount }
             }
           }
         }
@@ -341,13 +348,7 @@ export class LinearClient {
     const node = data.issueCreate.issue
     return {
       success: data.issueCreate.success,
-      issue: node
-        ? {
-            ...node,
-            labels: node.labels?.nodes.map((l) => l.name) ?? [],
-            commentCount: 0,
-          }
-        : null,
+      issue: node ? toLinearIssue(node) : null,
     }
   }
 
@@ -421,6 +422,31 @@ export class LinearClient {
       return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }
     }
     return data.issue.history
+  }
+
+  async getIssueTeam(issueId: string): Promise<{ id: string; key: string } | null> {
+    const data = await this.query<{
+      issue: {
+        team: {
+          id: string
+          key: string
+        } | null
+      } | null
+    }>(
+      `
+        query IssueTeam($issueId: String!) {
+          issue(id: $issueId) {
+            team {
+              id
+              key
+            }
+          }
+        }
+      `,
+      { issueId },
+    )
+
+    return data.issue?.team ?? null
   }
 
   async listComments(issueId: string): Promise<LinearComment[]> {

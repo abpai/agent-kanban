@@ -48,6 +48,12 @@ export interface ProviderContext {
   team: ProviderTeamInfo | null
 }
 
+export interface ProviderSyncStatus {
+  lastSyncAt: string | null
+  lastFullSyncAt: string | null
+  lastWebhookAt: string | null
+}
+
 export interface KanbanProvider {
   readonly type: 'local' | 'linear' | 'jira'
 
@@ -69,5 +75,7 @@ export interface KanbanProvider {
   getMetrics(): Promise<BoardMetrics>
   getConfig(): Promise<BoardConfig>
   patchConfig(input: Partial<BoardConfig>): Promise<BoardConfig>
+  syncCache?(): Promise<void>
+  getSyncStatus?(): Promise<ProviderSyncStatus | null>
   handleWebhook?(payload: WebhookRequest): Promise<WebhookResult>
 }

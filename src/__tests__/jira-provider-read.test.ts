@@ -8,6 +8,7 @@ import {
   getCachedTasks,
   decodeColumnStatusIds,
   loadTeamInfo,
+  saveJiraSyncMeta,
   saveTeamInfo,
   initJiraCacheSchema,
 } from '../providers/jira-cache.ts'
@@ -110,6 +111,7 @@ function standardRoutes(opts: {
   users?: unknown
   priorities?: unknown
   issueTypes?: unknown
+  changelogHandler?: StubHandler
   searchHandler?: StubHandler
 }): StubRoute[] {
   return [
@@ -136,6 +138,19 @@ function standardRoutes(opts: {
     {
       match: (u) => u.includes('/rest/api/3/issuetype/project'),
       handler: () => jsonResponse(opts.issueTypes ?? issueTypesFixture),
+    },
+    {
+      match: (u) => /\/rest\/api\/3\/issue\/[^/]+\/changelog/.test(u),
+      handler:
+        opts.changelogHandler ??
+        (() =>
+          jsonResponse({
+            startAt: 0,
+            maxResults: 100,
+            total: 0,
+            isLast: true,
+            values: [],
+          })),
     },
     {
       match: (u) => u.includes('/rest/api/3/search/jql'),
@@ -262,6 +277,75 @@ describe('JiraProvider read path', () => {
     expect(capturedJql[1]).toBe(
       'project = ENG AND updated >= "2026-01-05T00:00:00Z" ORDER BY updated ASC',
     )
+  })
+
+  test('periodic full reconciliation prunes cached issues missing upstream', async () => {
+    const capturedJql: string[] = []
+    let searchCalls = 0
+    const searchHandler: StubHandler = (url) => {
+      const parsed = new URL(url)
+      const jql = parsed.searchParams.get('jql') ?? ''
+      capturedJql.push(jql)
+      searchCalls += 1
+      if (searchCalls === 1) {
+        return jsonResponse({
+          startAt: 0,
+          maxResults: 100,
+          total: 2,
+          issues: [
+            makeIssue({
+              id: '1',
+              key: 'ENG-1',
+              statusId: '10001',
+              updated: '2026-01-02T00:00:00Z',
+            }),
+            makeIssue({
+              id: '2',
+              key: 'ENG-2',
+              statusId: '10001',
+              updated: '2026-01-03T00:00:00Z',
+            }),
+          ],
+        })
+      }
+      if (searchCalls === 2) {
+        return jsonResponse({ startAt: 0, maxResults: 100, total: 0, issues: [] })
+      }
+      return jsonResponse({
+        startAt: 0,
+        maxResults: 100,
+        total: 1,
+        issues: [
+          makeIssue({
+            id: '1',
+            key: 'ENG-1',
+            statusId: '10001',
+            updated: '2026-01-04T00:00:00Z',
+          }),
+        ],
+      })
+    }
+    const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+    const baseNow = originalDateNow()
+
+    Date.now = () => baseNow
+    await provider.getBoard()
+    expect(getCachedTasks(db).map((task) => task.externalRef)).toEqual(['ENG-2', 'ENG-1'])
+
+    Date.now = () => baseNow + 31_000
+    await provider.getBoard()
+    expect(getCachedTasks(db).map((task) => task.externalRef)).toEqual(['ENG-2', 'ENG-1'])
+
+    Date.now = () => baseNow + 5 * 60_000 + 31_000
+    await provider.getBoard()
+
+    expect(searchCalls).toBe(3)
+    expect(capturedJql).toEqual([
+      'project = ENG AND updated >= "1970-01-01 00:00" ORDER BY updated ASC',
+      'project = ENG AND updated >= "2026-01-03T00:00:00Z" ORDER BY updated ASC',
+      'project = ENG AND updated >= "1970-01-01 00:00" ORDER BY updated ASC',
+    ])
+    expect(getCachedTasks(db).map((task) => task.externalRef)).toEqual(['ENG-1'])
   })
 
   test('listTasks filters by columnId with many-to-one mapping', async () => {
@@ -398,6 +482,22 @@ describe('JiraProvider read path', () => {
     const origNow = originalDateNow
     Date.now = () => origNow() + 31_000
     await provider.getBoard()
+    expect(calls.length).toBeGreaterThanOrEqual(first + 2)
+  })
+
+  test('recent webhook timestamps do not stretch polling past the normal 30 second cadence', async () => {
+    const { provider, calls } = makeProvider(standardRoutes({}))
+    const baseNow = originalDateNow()
+
+    Date.now = () => baseNow
+    await provider.getBoard()
+    const first = calls.length
+    const webhookAt = new Date(baseNow + 1_000).toISOString()
+    saveJiraSyncMeta(db, { lastWebhookAt: webhookAt })
+
+    Date.now = () => baseNow + 31_000
+    await provider.getBoard()
+
     expect(calls.length).toBeGreaterThanOrEqual(first + 2)
   })
 

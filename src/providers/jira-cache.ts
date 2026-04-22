@@ -19,6 +19,7 @@ export interface JiraSyncMeta {
   boardId: number | null
   lastSyncAt: string | null
   lastIssueUpdatedAt: string | null
+  lastFullSyncAt: string | null
   lastWebhookAt: string | null
 }
 
@@ -121,7 +122,7 @@ CREATE TABLE IF NOT EXISTS jira_issues (
   migrateJiraCacheSchema(db)
 }
 
-export function migrateJiraCacheSchema(db: Database): void {
+function migrateJiraCacheSchema(db: Database): void {
   const cols = db.query('PRAGMA table_info(jira_issues)').all() as { name: string }[]
   if (!cols.some((c) => c.name === 'labels')) {
     db.run("ALTER TABLE jira_issues ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
@@ -154,6 +155,7 @@ const META_KEYS = [
   'boardId',
   'lastSyncAt',
   'lastIssueUpdatedAt',
+  'lastFullSyncAt',
   'lastWebhookAt',
 ] as const
 type MetaKey = (typeof META_KEYS)[number]
@@ -218,6 +220,7 @@ export function loadJiraSyncMeta(db: Database): JiraSyncMeta {
     boardId: boardId === null || Number.isNaN(boardId) ? null : boardId,
     lastSyncAt: getMeta(db, 'lastSyncAt'),
     lastIssueUpdatedAt: getMeta(db, 'lastIssueUpdatedAt'),
+    lastFullSyncAt: getMeta(db, 'lastFullSyncAt'),
     lastWebhookAt: getMeta(db, 'lastWebhookAt'),
   }
 }
@@ -366,7 +369,53 @@ export function upsertJiraIssues(
 }
 
 export function deleteJiraIssue(db: Database, idOrKey: string): void {
+  db.query(
+    `DELETE FROM jira_activity
+     WHERE issue_id = $value
+        OR issue_id IN (SELECT id FROM jira_issues WHERE key = $value)`,
+  ).run({ $value: idOrKey })
   db.query('DELETE FROM jira_issues WHERE id = $v OR key = $v').run({ $v: idOrKey })
+}
+
+export function pruneJiraIssuesMissingUpstream(
+  db: Database,
+  projectKey: string,
+  upstreamIssueIds: string[],
+): void {
+  const run = db.transaction(() => {
+    if (upstreamIssueIds.length === 0) {
+      db.query(
+        `DELETE FROM jira_activity
+         WHERE issue_id IN (SELECT id FROM jira_issues WHERE project_key = $projectKey)`,
+      ).run({ $projectKey: projectKey })
+      db.query('DELETE FROM jira_issues WHERE project_key = $projectKey').run({
+        $projectKey: projectKey,
+      })
+      return
+    }
+
+    const placeholders = upstreamIssueIds.map((_, index) => `$id${index}`).join(', ')
+    const params: Record<string, string> = { $projectKey: projectKey }
+    upstreamIssueIds.forEach((issueId, index) => {
+      params[`$id${index}`] = issueId
+    })
+
+    db.query(
+      `DELETE FROM jira_activity
+       WHERE issue_id IN (
+         SELECT id
+         FROM jira_issues
+         WHERE project_key = $projectKey
+           AND id NOT IN (${placeholders})
+       )`,
+    ).run(params)
+    db.query(
+      `DELETE FROM jira_issues
+       WHERE project_key = $projectKey
+         AND id NOT IN (${placeholders})`,
+    ).run(params)
+  })
+  run()
 }
 
 export function adjustJiraIssueCommentCount(db: Database, idOrKey: string, delta: number): void {

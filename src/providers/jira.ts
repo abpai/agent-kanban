@@ -34,6 +34,7 @@ import {
   initJiraCacheSchema,
   loadJiraSyncMeta,
   loadTeamInfo,
+  pruneJiraIssuesMissingUpstream,
   replaceJiraColumns,
   replaceJiraIssueTypes,
   replaceJiraPriorities,
@@ -43,26 +44,25 @@ import {
   upsertJiraIssues,
   upsertJiraUsers,
   type JiraActivityRow,
+  type JiraSyncMeta,
 } from './jira-cache.ts'
 import type {
   CreateTaskInput,
   KanbanProvider,
   ProviderContext,
+  ProviderSyncStatus,
   TaskListFilters,
   UpdateTaskInput,
 } from './types.ts'
 
 const SYNC_INTERVAL_MS = 30_000
-const WEBHOOK_STRETCH_WINDOW_MS = 5 * 60_000
-const WEBHOOK_STRETCHED_INTERVAL_MS = 5 * 60_000
+const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
-function effectiveSyncInterval(lastWebhookAt: string | null, now: number): number {
-  if (!lastWebhookAt) return SYNC_INTERVAL_MS
-  const lastWebhookMs = Date.parse(lastWebhookAt)
-  if (!Number.isFinite(lastWebhookMs)) return SYNC_INTERVAL_MS
-  return now - lastWebhookMs < WEBHOOK_STRETCH_WINDOW_MS
-    ? WEBHOOK_STRETCHED_INTERVAL_MS
-    : SYNC_INTERVAL_MS
+function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boolean {
+  if (!lastFullSyncAt) return true
+  const lastFullSyncAtMs = Date.parse(lastFullSyncAt)
+  if (!Number.isFinite(lastFullSyncAtMs)) return true
+  return now - lastFullSyncAtMs >= FULL_RECONCILE_INTERVAL_MS
 }
 
 // Default canonical->Jira priority name mapping. A Jira admin may rename
@@ -88,7 +88,6 @@ export interface JiraProviderConfig {
 export class JiraProvider implements KanbanProvider {
   readonly type = 'jira' as const
   private readonly client: JiraClient
-  private projectId: string | null = null
 
   constructor(
     private readonly db: Database,
@@ -109,12 +108,11 @@ export class JiraProvider implements KanbanProvider {
     const meta = loadJiraSyncMeta(this.db)
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
     const now = Date.now()
-    const interval = effectiveSyncInterval(meta.lastWebhookAt, now)
-    if (!force && lastSyncAtMs && now - lastSyncAtMs < interval) return
+    if (!force && lastSyncAtMs && now - lastSyncAtMs < SYNC_INTERVAL_MS) return
+    const fullReconcile = force || shouldRunFullReconcile(meta.lastFullSyncAt, now)
 
     // 1. Resolve project.
     const project = await this.client.getProject(this.config.projectKey)
-    this.projectId = project.id
     saveTeamInfo(this.db, { id: project.id, key: project.key, name: project.name })
 
     // 2. Columns: board path OR status fallback path.
@@ -180,7 +178,7 @@ export class JiraProvider implements KanbanProvider {
     )
 
     // 4. Delta issue fetch (paginated).
-    const since = force ? null : meta.lastIssueUpdatedAt
+    const since = fullReconcile ? null : meta.lastIssueUpdatedAt
     const sinceClause = since ?? '1970-01-01 00:00'
     const jql = `project = ${project.key} AND updated >= "${sinceClause}" ORDER BY updated ASC`
 
@@ -189,6 +187,7 @@ export class JiraProvider implements KanbanProvider {
     let accumulated = 0
     let total = Infinity
     let newestUpdatedAt: string | null = meta.lastIssueUpdatedAt
+    const seenIssueIds = new Set<string>()
     const issueFields = [
       'summary',
       'description',
@@ -233,6 +232,7 @@ export class JiraProvider implements KanbanProvider {
       )
 
       for (const issue of page.issues) {
+        if (fullReconcile) seenIssueIds.add(issue.id)
         if (newestUpdatedAt === null || issue.fields.updated > newestUpdatedAt) {
           newestUpdatedAt = issue.fields.updated
         }
@@ -254,13 +254,21 @@ export class JiraProvider implements KanbanProvider {
       startAt += page.issues.length
     }
 
+    if (fullReconcile) {
+      pruneJiraIssuesMissingUpstream(this.db, project.key, [...seenIssueIds])
+    }
+
     // 5. Save sync meta.
-    saveJiraSyncMeta(this.db, {
+    const nextMeta: Partial<JiraSyncMeta> = {
       projectKey: project.key,
       boardId: this.config.boardId ?? null,
       lastSyncAt: new Date().toISOString(),
       lastIssueUpdatedAt: newestUpdatedAt ?? new Date().toISOString(),
-    })
+    }
+    if (fullReconcile) {
+      nextMeta.lastFullSyncAt = nextMeta.lastSyncAt
+    }
+    saveJiraSyncMeta(this.db, nextMeta)
   }
 
   private resolveColumnId(input: string): string {
@@ -299,6 +307,19 @@ export class JiraProvider implements KanbanProvider {
       provider: 'jira',
       discoveredAssignees,
       discoveredProjects,
+    }
+  }
+
+  async syncCache(): Promise<void> {
+    await this.sync()
+  }
+
+  async getSyncStatus(): Promise<ProviderSyncStatus> {
+    const meta = loadJiraSyncMeta(this.db)
+    return {
+      lastSyncAt: meta.lastSyncAt,
+      lastFullSyncAt: meta.lastFullSyncAt,
+      lastWebhookAt: meta.lastWebhookAt,
     }
   }
 
@@ -743,6 +764,11 @@ export class JiraProvider implements KanbanProvider {
           updatedAt: issue.fields.updated,
         },
       ])
+      if (event === 'jira:issue_updated') {
+        await this.ingestIssueActivity(issue.id).catch((err) => {
+          console.warn(`[jira] activity fetch for webhook issue ${issue.key} failed:`, err)
+        })
+      }
       saveJiraSyncMeta(this.db, { lastWebhookAt: new Date().toISOString() })
       return { handled: true }
     }

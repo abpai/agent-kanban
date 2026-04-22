@@ -26,6 +26,7 @@ import type {
   CreateTaskInput,
   KanbanProvider,
   ProviderContext,
+  ProviderSyncStatus,
   TaskListFilters,
   UpdateTaskInput,
 } from './types.ts'
@@ -177,5 +178,9 @@ export class LocalProvider implements KanbanProvider {
     if (input.projects) config.projects = input.projects
     saveConfig(getConfigPath(this.dbPath), config)
     return this.getConfig()
+  }
+
+  async getSyncStatus(): Promise<ProviderSyncStatus | null> {
+    return null
   }
 }

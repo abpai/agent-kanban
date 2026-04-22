@@ -113,6 +113,10 @@ Unsupported operations return error code `UNSUPPORTED_OPERATION` with exit code 
 Task comments are currently exposed through the REST API and dashboard task
 detail flows rather than dedicated `kanban comment ...` CLI commands.
 
+In Linear and Jira modes, webhooks update the cache immediately when configured,
+and the normal poll loop still runs as a fallback so missed deliveries and
+remote deletions are eventually reconciled.
+
 ## Commands
 
 ### board
@@ -257,7 +261,13 @@ Starts a Bun HTTP server with:
 - **REST API** at `/api/*` — board, tasks, task comments, bootstrap/provider metadata, activity, metrics, config, and webhook endpoints
 - **WebSocket** at `/ws` — push notifications on board mutations (clients receive `task:upsert`, `task:delete`, or a fallback `refresh` event)
 - **Static UI** served from `ui/dist/` (build with `bun run build:ui` or `bun run ui:build`)
-- **Health check** at `/api/health`
+- **Health check** at `/api/health` — cheap process liveness only
+- **Readiness check** at `/api/ready` — reports whether the cache has warmed at least once
+- **Sync status** at `/api/sync-status` — reports background sync state plus provider sync metadata
+
+In `serve` mode, remote providers now warm once on startup and continue syncing
+in the background every 30 seconds. Full reconciliation is still handled by the
+provider-specific logic on top of that steady cadence.
 
 Comment routes:
 

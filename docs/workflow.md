@@ -111,7 +111,9 @@ The server exposes:
 
 - `/api/*` for board, task, task-comment, config, and health routes used by the dashboard
 - `/ws` for mutation notifications (`task:upsert`, `task:delete`, or fallback `refresh`)
-- `/api/health` for a simple health check
+- `/api/health` for cheap liveness
+- `/api/ready` for cache-readiness
+- `/api/sync-status` for background sync state and provider sync timestamps
 
 ## Practical tips
 

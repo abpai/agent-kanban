@@ -27,6 +27,7 @@ import {
   getCachedTasks,
   initLinearCacheSchema,
   loadSyncMeta,
+  pruneLinearIssues,
   replaceStates,
   saveLinearActivity,
   saveSyncMeta,
@@ -41,21 +42,25 @@ import type {
   CreateTaskInput,
   KanbanProvider,
   ProviderContext,
+  ProviderSyncStatus,
   TaskListFilters,
   UpdateTaskInput,
 } from './types.ts'
 
 const SYNC_INTERVAL_MS = 30_000
-const WEBHOOK_STRETCH_WINDOW_MS = 5 * 60_000
-const WEBHOOK_STRETCHED_INTERVAL_MS = 5 * 60_000
+const FULL_RECONCILIATION_INTERVAL_MS = 5 * 60_000
 
-function effectiveSyncInterval(lastWebhookAt: string | null, now: number): number {
-  if (!lastWebhookAt) return SYNC_INTERVAL_MS
-  const lastWebhookMs = Date.parse(lastWebhookAt)
-  if (!Number.isFinite(lastWebhookMs)) return SYNC_INTERVAL_MS
-  return now - lastWebhookMs < WEBHOOK_STRETCH_WINDOW_MS
-    ? WEBHOOK_STRETCHED_INTERVAL_MS
-    : SYNC_INTERVAL_MS
+function parseTimestamp(value: string | null | undefined): number {
+  if (!value) return 0
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function maxTimestamp(a: string | null | undefined, b: string | null | undefined): string | null {
+  const aMs = parseTimestamp(a)
+  const bMs = parseTimestamp(b)
+  if (!aMs && !bMs) return null
+  return aMs >= bMs ? (a ?? null) : (b ?? null)
 }
 
 function toLinearPriority(priority: Task['priority'] | undefined): number | undefined {
@@ -90,18 +95,37 @@ export class LinearProvider implements KanbanProvider {
     return loadSyncMeta(this.db).team?.id ?? this.teamId
   }
 
+  private async getConfiguredTeam(): Promise<{ id: string; key: string; name: string }> {
+    const metaTeam = loadSyncMeta(this.db).team
+    if (metaTeam) return metaTeam
+
+    const team = await this.client.getTeam(this.teamId)
+    const configuredTeam = { id: team.id, key: team.key, name: team.name }
+    saveSyncMeta(this.db, { team: configuredTeam })
+    return configuredTeam
+  }
+
   private async sync(force = false): Promise<void> {
     const meta = loadSyncMeta(this.db)
-    const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
+    const lastSyncAtMs = parseTimestamp(meta.lastSyncAt)
+    const lastFullSyncAtMs = parseTimestamp(meta.lastFullSyncAt)
     const now = Date.now()
-    const interval = effectiveSyncInterval(meta.lastWebhookAt, now)
-    if (!force && lastSyncAtMs && now - lastSyncAtMs < interval) return
+    if (!force && lastSyncAtMs && now - lastSyncAtMs < SYNC_INTERVAL_MS) return
+
+    const shouldFullSync =
+      force ||
+      !lastFullSyncAtMs ||
+      !meta.lastIssueUpdatedAt ||
+      now - lastFullSyncAtMs >= FULL_RECONCILIATION_INTERVAL_MS
 
     const team = await this.client.getTeam(this.teamId)
     const [users, projects, issues] = await Promise.all([
       this.client.listUsers(),
       this.client.listProjects(),
-      this.client.listIssues(team.id, force ? undefined : (meta.lastIssueUpdatedAt ?? undefined)),
+      this.client.listIssues(
+        team.id,
+        shouldFullSync ? undefined : (meta.lastIssueUpdatedAt ?? undefined),
+      ),
     ])
 
     replaceStates(this.db, team.states)
@@ -123,20 +147,28 @@ export class LinearProvider implements KanbanProvider {
         stateName: issue.state.name,
         statePosition: issue.state.position,
         labels: issue.labels ?? [],
-        commentCount: issue.commentCount ?? 0,
+        commentCount: issue.commentCount,
         url: issue.url ?? null,
         createdAt: issue.createdAt,
         updatedAt: issue.updatedAt,
       })),
     )
+    if (shouldFullSync) {
+      pruneLinearIssues(
+        this.db,
+        issues.map((issue) => issue.id),
+      )
+    }
 
-    const newestIssueTimestamp =
+    const newestIssueTimestamp = maxTimestamp(
+      meta.lastIssueUpdatedAt,
       issues.length > 0
         ? issues.reduce(
             (latest, issue) => (issue.updatedAt > latest ? issue.updatedAt : latest),
             issues[0]!.updatedAt,
           )
-        : meta.lastIssueUpdatedAt
+        : null,
+    )
 
     // Best-effort changelog ingest; failures don't fail the main sync.
     await this.ingestTeamHistory(
@@ -146,10 +178,12 @@ export class LinearProvider implements KanbanProvider {
       console.warn('[linear] issueHistory ingest failed:', err)
     })
 
+    const syncedAt = new Date().toISOString()
     saveSyncMeta(this.db, {
       team: { id: team.id, key: team.key, name: team.name },
-      lastSyncAt: new Date().toISOString(),
-      lastIssueUpdatedAt: newestIssueTimestamp ?? new Date().toISOString(),
+      lastSyncAt: syncedAt,
+      lastFullSyncAt: shouldFullSync ? syncedAt : undefined,
+      lastIssueUpdatedAt: newestIssueTimestamp ?? syncedAt,
     })
   }
 
@@ -248,6 +282,19 @@ export class LinearProvider implements KanbanProvider {
     }
   }
 
+  async syncCache(): Promise<void> {
+    await this.sync()
+  }
+
+  async getSyncStatus(): Promise<ProviderSyncStatus> {
+    const meta = loadSyncMeta(this.db)
+    return {
+      lastSyncAt: meta.lastSyncAt,
+      lastFullSyncAt: meta.lastFullSyncAt,
+      lastWebhookAt: meta.lastWebhookAt,
+    }
+  }
+
   async getContext(): Promise<ProviderContext> {
     await this.sync()
     const meta = loadSyncMeta(this.db)
@@ -334,7 +381,7 @@ export class LinearProvider implements KanbanProvider {
         stateName: issue.state.name,
         statePosition: issue.state.position,
         labels: issue.labels ?? [],
-        commentCount: issue.commentCount ?? 0,
+        commentCount: issue.commentCount,
         url: issue.url ?? null,
         createdAt: issue.createdAt,
         updatedAt: issue.updatedAt,
@@ -484,19 +531,21 @@ export class LinearProvider implements KanbanProvider {
       type?: string
       data?: {
         id: string
-        identifier: string
-        title: string
+        identifier?: string
+        title?: string
         description?: string | null
         priority?: number | null
         url?: string | null
-        createdAt: string
-        updatedAt: string
+        createdAt?: string
+        updatedAt?: string
         assignee?: { id: string; name?: string | null } | null
         assigneeId?: string | null
         project?: { id: string; name: string } | null
         projectId?: string | null
         state?: { id: string; name: string; position?: number } | null
         stateId?: string | null
+        team?: { id?: string | null; key?: string | null } | null
+        teamId?: string | null
         labels?: Array<{ id: string; name: string }> | null
         commentCount?: number | null
       }
@@ -519,6 +568,34 @@ export class LinearProvider implements KanbanProvider {
     }
 
     if (body.action === 'create' || body.action === 'update') {
+      const configuredTeam = await this.getConfiguredTeam()
+      const payloadTeamId = data.team?.id ?? data.teamId ?? null
+      if (payloadTeamId && payloadTeamId !== configuredTeam.id) {
+        return {
+          handled: false,
+          message: `Ignoring issue from team '${payloadTeamId}'`,
+        }
+      }
+
+      if (!payloadTeamId) {
+        const issueTeam = await this.client.getIssueTeam(data.id)
+        if (!issueTeam) {
+          return {
+            handled: false,
+            message: `Ignoring issue '${data.id}' because its team could not be verified`,
+          }
+        }
+        if (issueTeam.id !== configuredTeam.id) {
+          return {
+            handled: false,
+            message: `Ignoring issue from team '${issueTeam.key}'`,
+          }
+        }
+      }
+
+      if (!data.identifier || !data.title || !data.createdAt || !data.updatedAt) {
+        return { handled: false, message: 'Missing required issue fields' }
+      }
       const stateId = data.state?.id ?? data.stateId ?? null
       if (!stateId) return { handled: false, message: 'Missing state id' }
       upsertIssues(this.db, [
@@ -536,7 +613,7 @@ export class LinearProvider implements KanbanProvider {
           stateName: data.state?.name ?? '',
           statePosition: data.state?.position ?? 0,
           labels: (data.labels ?? []).map((l) => l.name),
-          commentCount: data.commentCount ?? 0,
+          commentCount: data.commentCount,
           url: data.url ?? null,
           createdAt: data.createdAt,
           updatedAt: data.updatedAt,

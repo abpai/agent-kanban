@@ -88,8 +88,8 @@ The shipped work includes:
 
 1. Single Linear team per instance
 2. API key auth only, with no OAuth flow
-3. Webhook sync is optional; see [Webhooks](#webhooks). Polling remains the
-   fallback.
+3. Webhook sync is optional; see [Webhooks](#webhooks). Polling still runs as
+   the freshness and reconciliation fallback.
 4. Comment bodies are not mirrored into the cached board view. Comment reads
    and writes go straight upstream, while the cached board keeps only
    `comment_count`.
@@ -99,9 +99,12 @@ The shipped work includes:
 
 `agent-kanban` accepts Linear webhooks at `POST /api/webhooks/linear`. The
 handler mirrors Linear's standard payload (`{ action, type, data }`) and
-upserts or deletes the cached issue without waiting for the next poll.
+updates the cache immediately, while normal polling continues so activity
+history, missed deliveries, and upstream deletions can still be reconciled.
 
 Supported events: `Issue.create`, `Issue.update`, `Issue.remove`.
+
+Issue webhooks that do not belong to the configured team are ignored.
 
 ### Signature verification
 

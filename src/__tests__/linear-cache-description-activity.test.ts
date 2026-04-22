@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 
 import {
+  deleteLinearIssue,
   getCachedLinearActivity,
   initLinearCacheSchema,
   upsertIssues,
@@ -107,5 +108,35 @@ describe('upsertIssues description activity', () => {
     expect(row.to_value!.length).toBeLessThanOrEqual(4096)
     expect(row.from_value!.endsWith('…[truncated]')).toBe(true)
     expect(row.to_value!.endsWith('…[truncated]')).toBe(true)
+  })
+
+  test('preserves existing comment_count when an upsert omits it', () => {
+    const db = freshDb()
+    upsertIssues(db, [mkIssue({ commentCount: 4 })])
+    upsertIssues(db, [
+      mkIssue({
+        title: 'Task renamed',
+        commentCount: undefined,
+        updatedAt: '2026-04-19T00:01:00.000Z',
+      }),
+    ])
+
+    const row = db
+      .query('SELECT comment_count, title FROM linear_issues WHERE id = $id')
+      .get({ $id: 'issue-1' }) as { comment_count: number; title: string } | null
+
+    expect(row?.title).toBe('Task renamed')
+    expect(row?.comment_count).toBe(4)
+  })
+
+  test('deleteLinearIssue clears cached activity rows for the deleted issue', () => {
+    const db = freshDb()
+    upsertIssues(db, [mkIssue({ description: 'first' })])
+    upsertIssues(db, [mkIssue({ description: 'second', updatedAt: '2026-04-19T00:01:00.000Z' })])
+
+    expect(getCachedLinearActivity(db, { issueId: 'issue-1' })).toHaveLength(1)
+    deleteLinearIssue(db, 'issue-1')
+
+    expect(getCachedLinearActivity(db, { issueId: 'issue-1' })).toHaveLength(0)
   })
 })

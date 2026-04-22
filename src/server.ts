@@ -10,6 +10,25 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
+const DEFAULT_BACKGROUND_SYNC_INTERVAL_MS = 30_000
+
+interface BackgroundSyncState {
+  enabled: boolean
+  inFlight: boolean
+  warm: boolean
+  lastAttemptAt: string | null
+  lastSuccessAt: string | null
+  lastError: string | null
+}
+
+export interface StartServerOptions {
+  syncIntervalMs?: number
+}
+
+export interface StartedServer {
+  port: number
+  stop(closeActiveConnections?: boolean): void
+}
 
 function broadcast(data: unknown): void {
   const msg = JSON.stringify(data)
@@ -24,11 +43,73 @@ function applyCorsHeaders(response: Response): void {
   }
 }
 
-export function startServer(provider: KanbanProvider, port: number): void {
+function jsonWithCors(body: unknown, status = 200): Response {
+  const response = Response.json(body, { status })
+  applyCorsHeaders(response)
+  return response
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+function nowIso(): string {
+  return new Date().toISOString()
+}
+
+export function startServer(
+  provider: KanbanProvider,
+  port: number,
+  opts: StartServerOptions = {},
+): StartedServer {
   const distDir = join(import.meta.dir, '..', 'ui', 'dist')
   const hasStatic = existsSync(distDir)
+  const syncIntervalMs = opts.syncIntervalMs ?? DEFAULT_BACKGROUND_SYNC_INTERVAL_MS
+  const syncCache = provider.syncCache?.bind(provider)
+  const getSyncStatus = provider.getSyncStatus?.bind(provider)
+  const backgroundSync: BackgroundSyncState = {
+    enabled: typeof syncCache === 'function',
+    inFlight: false,
+    warm: typeof syncCache !== 'function',
+    lastAttemptAt: null,
+    lastSuccessAt: null,
+    lastError: null,
+  }
+  let closed = false
+  let syncTimer: ReturnType<typeof setTimeout> | null = null
 
-  Bun.serve({
+  const runBackgroundSync = async (reason: 'startup' | 'interval'): Promise<void> => {
+    if (!syncCache || backgroundSync.inFlight || closed) return
+    backgroundSync.inFlight = true
+    backgroundSync.lastAttemptAt = nowIso()
+    try {
+      await syncCache()
+      backgroundSync.warm = true
+      backgroundSync.lastSuccessAt = nowIso()
+      backgroundSync.lastError = null
+    } catch (err) {
+      backgroundSync.lastError = errorMessage(err)
+      console.warn(`[server] background ${reason} sync failed:`, err)
+    } finally {
+      backgroundSync.inFlight = false
+    }
+  }
+
+  const scheduleBackgroundSync = (): void => {
+    if (!syncCache || closed) return
+    syncTimer = setTimeout(async () => {
+      await runBackgroundSync('interval')
+      scheduleBackgroundSync()
+    }, syncIntervalMs)
+  }
+
+  if (syncCache) {
+    void runBackgroundSync('startup').finally(() => {
+      scheduleBackgroundSync()
+    })
+  }
+
+  const server = Bun.serve({
     port,
     websocket: {
       open(ws) {
@@ -60,10 +141,38 @@ export function startServer(provider: KanbanProvider, port: number): void {
       }
 
       if (pathname === '/api/health') {
-        const context = await provider.getContext()
-        return Response.json({
+        return jsonWithCors({
           ok: true,
-          data: { status: 'running', wsClients: wsClients.size, provider: context.provider },
+          data: { status: 'running', wsClients: wsClients.size, provider: provider.type },
+        })
+      }
+
+      if (pathname === '/api/ready') {
+        const ready = backgroundSync.warm
+        return jsonWithCors(
+          {
+            ok: ready,
+            data: {
+              ready,
+              provider: provider.type,
+              backgroundSync,
+            },
+          },
+          ready ? 200 : 503,
+        )
+      }
+
+      if (pathname === '/api/sync-status') {
+        const providerSync = (await getSyncStatus?.()) ?? null
+        return jsonWithCors({
+          ok: true,
+          data: {
+            status: 'running',
+            provider: provider.type,
+            wsClients: wsClients.size,
+            backgroundSync,
+            providerSync,
+          },
         })
       }
 
@@ -95,4 +204,16 @@ export function startServer(provider: KanbanProvider, port: number): void {
   })
 
   console.info(`Dashboard running at http://localhost:${port}`)
+
+  return {
+    port: server.port ?? port,
+    stop(closeActiveConnections = true) {
+      closed = true
+      if (syncTimer) {
+        clearTimeout(syncTimer)
+        syncTimer = null
+      }
+      server.stop(closeActiveConnections)
+    },
+  }
 }

@@ -39,7 +39,8 @@ edit against the current body and authoring rules.
 ## Important caveats
 
 - `kanban serve` does not mount this MCP server. The shipped app server exposes
-  the dashboard, `/api/*`, `/api/health`, and `/ws`, but not `/mcp`.
+  the dashboard, `/api/*`, `/api/health`, `/api/ready`, `/api/sync-status`,
+  and `/ws`, but not `/mcp`.
 - The CLI does not currently expose MCP commands.
 - The MCP helpers live under `src/mcp/` and are not yet documented as stable
   package-root exports such as `@andypai/agent-kanban`.

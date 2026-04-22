@@ -14,6 +14,7 @@ export interface LinearStateRow {
 export interface LinearSyncMeta {
   team: ProviderTeamInfo | null
   lastSyncAt: string | null
+  lastFullSyncAt: string | null
   lastIssueUpdatedAt: string | null
   lastWebhookAt: string | null
 }
@@ -143,7 +144,7 @@ export function getCachedLinearActivity(
     .all({ $limit: limit }) as LinearActivityRow[]
 }
 
-export function migrateLinearCacheSchema(db: Database): void {
+function migrateLinearCacheSchema(db: Database): void {
   const cols = db.query('PRAGMA table_info(linear_issues)').all() as { name: string }[]
   if (!cols.some((c) => c.name === 'labels')) {
     db.run("ALTER TABLE linear_issues ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
@@ -171,7 +172,13 @@ function getMeta(db: Database, key: string): string | null {
   return row?.value ?? null
 }
 
-const META_KEYS = ['team', 'lastSyncAt', 'lastIssueUpdatedAt', 'lastWebhookAt'] as const
+const META_KEYS = [
+  'team',
+  'lastSyncAt',
+  'lastFullSyncAt',
+  'lastIssueUpdatedAt',
+  'lastWebhookAt',
+] as const
 type MetaKey = (typeof META_KEYS)[number]
 
 export function saveSyncMeta(db: Database, meta: Partial<LinearSyncMeta>): void {
@@ -197,6 +204,7 @@ export function loadSyncMeta(db: Database): LinearSyncMeta {
   return {
     team: teamRaw ? (JSON.parse(teamRaw) as ProviderTeamInfo) : null,
     lastSyncAt: getMeta(db, 'lastSyncAt'),
+    lastFullSyncAt: getMeta(db, 'lastFullSyncAt'),
     lastIssueUpdatedAt: getMeta(db, 'lastIssueUpdatedAt'),
     lastWebhookAt: getMeta(db, 'lastWebhookAt'),
   }
@@ -311,7 +319,8 @@ export function upsertIssues(
       url, created_at, updated_at
     ) VALUES (
       $id, $identifier, $title, $description, $priority, $assignee_id, $assignee_name,
-      $project_id, $project_name, $state_id, $state_name, $state_position, $labels, $comment_count,
+      $project_id, $project_name, $state_id, $state_name, $state_position, $labels,
+      CASE WHEN $comment_count_provided = 1 THEN $comment_count ELSE 0 END,
       $url, $created_at, $updated_at
     )
     ON CONFLICT(id) DO UPDATE SET
@@ -327,7 +336,10 @@ export function upsertIssues(
       state_name = excluded.state_name,
       state_position = excluded.state_position,
       labels = excluded.labels,
-      comment_count = excluded.comment_count,
+      comment_count = CASE
+        WHEN $comment_count_provided = 1 THEN excluded.comment_count
+        ELSE linear_issues.comment_count
+      END,
       url = excluded.url,
       created_at = excluded.created_at,
       updated_at = excluded.updated_at`,
@@ -343,6 +355,7 @@ export function upsertIssues(
   const run = db.transaction(() => {
     for (const issue of issues) {
       const nextDescription = issue.description ?? ''
+      const hasCommentCount = issue.commentCount !== undefined && issue.commentCount !== null
       const prior = existingDescStmt.get({ $id: issue.id }) as { description: string } | null
       if (prior && prior.description !== nextDescription) {
         activityStmt.run({
@@ -369,6 +382,7 @@ export function upsertIssues(
         $state_position: issue.statePosition,
         $labels: JSON.stringify(issue.labels ?? []),
         $comment_count: issue.commentCount ?? 0,
+        $comment_count_provided: hasCommentCount ? 1 : 0,
         $url: issue.url ?? null,
         $created_at: issue.createdAt,
         $updated_at: issue.updatedAt,
@@ -379,9 +393,32 @@ export function upsertIssues(
 }
 
 export function deleteLinearIssue(db: Database, idOrIdentifier: string): void {
+  db.query(
+    `DELETE FROM linear_activity
+     WHERE issue_id = $value
+        OR issue_id IN (SELECT id FROM linear_issues WHERE identifier = $value)`,
+  ).run({
+    $value: idOrIdentifier,
+  })
   db.query('DELETE FROM linear_issues WHERE id = $v OR identifier = $v').run({
     $v: idOrIdentifier,
   })
+}
+
+export function pruneLinearIssues(db: Database, liveIssueIds: string[]): void {
+  const keep = new Set(liveIssueIds)
+  const staleIssueIds = (db.query('SELECT id FROM linear_issues').all() as { id: string }[])
+    .map((row) => row.id)
+    .filter((issueId) => !keep.has(issueId))
+  if (staleIssueIds.length === 0) return
+
+  const run = db.transaction((issueIds: string[]) => {
+    for (const issueId of issueIds) {
+      deleteLinearIssue(db, issueId)
+    }
+  })
+
+  run(staleIssueIds)
 }
 
 export function adjustLinearIssueCommentCount(

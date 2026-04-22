@@ -136,8 +136,9 @@ to lose those nodes if you round-trip through `agent-kanban`.
    board.
 3. **Basic auth via email + API token only.** No OAuth flow.
 4. **Webhook sync is optional.** The provider accepts Jira webhooks at
-   `POST /api/webhooks/jira` and upserts the cache without waiting for the
-   next poll. Polling stays enabled as a fallback. See [Webhooks](#webhooks).
+   `POST /api/webhooks/jira` and updates the cache immediately, while polling
+   continues as the freshness and reconciliation fallback. See
+   [Webhooks](#webhooks).
 5. **Comment reads and writes are live, comment-body sync is not.** Jira labels
    and a lightweight comment count are mirrored into the local cache and shown
    on the card and detail view. Comment reads and writes go straight upstream,
@@ -154,7 +155,9 @@ to lose those nodes if you round-trip through `agent-kanban`.
 
 `agent-kanban` exposes `POST /api/webhooks/jira` for real-time remote→local
 propagation. The handler accepts the standard Jira webhook payload shape
-(`{ webhookEvent, issue }`) and upserts or deletes the cached issue directly.
+(`{ webhookEvent, issue }`) and updates the cached issue directly, while the
+normal poll loop continues so missed deletes and activity/changelog drift can
+still be repaired.
 
 Supported events: `jira:issue_created`, `jira:issue_updated`,
 `jira:issue_deleted`.
