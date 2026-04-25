@@ -91,6 +91,18 @@ describe('plainTextToAdf / adfToPlainText', () => {
     expect(adfToPlainText(doc)).toBe(input)
   })
 
+  test('garage-baton fenced comment round-trips byte-for-byte', () => {
+    const input =
+      'garage-triage: ✅ Accepted — abpai/garage-band\n\nIncrement SMOKE_TEST_TASK.md from current_count=1 to 2.\n\n```garage-baton\n{"v":1,"accepted":true,"repo":{"owner":"abpai","name":"garage-band"},"questions":[],"summary":"Increment smoke counter."}\n```'
+    const doc = plainTextToAdf(input)
+    const code = doc.content.find((node) => node.type === 'codeBlock') as
+      | { type: string; attrs?: { language?: string } }
+      | undefined
+
+    expect(code?.attrs?.language).toBe('garage-baton')
+    expect(adfToPlainText(doc)).toBe(input)
+  })
+
   test('mixed content (paragraph + list + code block) round-trip', () => {
     const input = 'intro paragraph\n\n- a\n- b\n\n```js\nconsole.log(1)\n```\n\nouttro'
     const doc = plainTextToAdf(input)
