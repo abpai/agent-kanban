@@ -10,6 +10,7 @@
 | 2026-03-08 | shell review             | Used `local path=...` in a zsh function, which clobbered the special `path`/`PATH` lookup                        | Never use `path` as a local variable name in zsh; prefer `worktree_path`, `found_path`, etc.                |
 | 2026-03-26 | open-source prep         | `bun build` defaulted to the browser target and broke the CLI bundle because the entrypoint imports `bun:sqlite` | Set `--target bun` when bundling Bun-native entrypoints, especially before wiring builds into CI            |
 | 2026-04-06 | release prep             | Assumed npm publish would be available locally during release prep                                               | Check `npm whoami` before the final publish step so release work can be staged without blocking on auth     |
+| 2026-04-24 | live Linear smoke        | Linear GraphQL rejected `comments.totalCount` on `CommentConnection`                                             | Query comment nodes only and derive cached issue comment counts from the returned nodes                     |
 
 ## User Preferences
 

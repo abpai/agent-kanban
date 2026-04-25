@@ -57,7 +57,6 @@ interface LinearIssueNode {
   state: { id: string; name: string; position: number }
   labels?: { nodes: Array<{ id: string; name: string }> }
   comments?: {
-    totalCount?: number
     nodes: Array<{ id: string }>
     pageInfo?: { hasNextPage: boolean; endCursor: string | null }
   } | null
@@ -81,7 +80,7 @@ function toLinearIssue(node: LinearIssueNode): LinearIssue {
         }
       : null,
     labels: node.labels?.nodes.map((label) => label.name) ?? [],
-    commentCount: node.comments?.totalCount ?? node.comments?.nodes?.length ?? undefined,
+    commentCount: node.comments?.nodes?.length ?? undefined,
   }
 }
 
@@ -284,7 +283,6 @@ export class LinearClient {
                   nodes { id name }
                 }
                 comments(first: 250) {
-                  totalCount
                   nodes { id }
                   pageInfo { hasNextPage endCursor }
                 }
@@ -335,7 +333,6 @@ export class LinearClient {
               state { id name position }
               labels { nodes { id name } }
               comments(first: 250) {
-                totalCount
                 nodes { id }
                 pageInfo { hasNextPage endCursor }
               }
