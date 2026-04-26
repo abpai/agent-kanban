@@ -1,6 +1,6 @@
 {
   "name": "@andypai/agent-kanban",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Agent-friendly kanban board CLI. Manage tasks via bash commands, parse structured JSON output.",
   "homepage": "https://github.com/abpai/agent-kanban#readme",
   "repository": {

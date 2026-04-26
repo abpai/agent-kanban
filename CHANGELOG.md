@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.1 - 2026-04-26
+
+- Fixed Linear sync against the live GraphQL schema by removing the unsupported
+  `comments.totalCount` query field and deriving cached comment counts from
+  returned comment nodes.
+- Added a Jira ADF regression test for garage-baton fenced comment round-trips.
+- Added shared provider/API vocabulary guidance for agents and contributors.
+- Removed internal `.ts` import specifiers from `src/` and `scripts/`, then
+  dropped the now-unneeded `allowImportingTsExtensions` TypeScript setting.
+- Centralized provider capability defaults and added regression coverage for
+  local versus remote capability surfaces.
+
+## 0.3.0 - 2026-04-22
+
+- Added Jira provider support with changelog-backed activity and webhook-ready
+  server flows.
+- Added provider-native comments support, including comment edit behavior.
+- Added reusable MCP server primitives and a stdio MCP subcommand for local
+  integrations.
+- Improved provider cache reconciliation, Linear description-change activity,
+  exact Linear comment-count preservation, and task-level WebSocket updates.
+- Refreshed MCP, comments, Jira, Linear, and webhook workflow docs.
+- Simplified dashboard filters and cleaned up unused CLI and UI helpers.
+
 ## 0.2.0 - 2026-04-06
 
 - Added a published GitHub Pages marketing site under `site/`.
