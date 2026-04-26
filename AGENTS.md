@@ -6,6 +6,11 @@
 
 agent-kanban is a CLI-first kanban board tool with an optional web dashboard, built on **Bun** (not Node.js). It uses embedded SQLite via `bun:sqlite` — no external database server required.
 
+### Shared vocabulary
+
+Before planning or implementing provider/API work, read `UBIQUITOUS_LANGUAGE.md`.
+Use its canonical terms in public types, CLI output, API responses, tests, and docs.
+
 ### Runtime
 
 - **Bun ≥1.1.0** is the sole runtime. CI pins `1.3.11`. Install via `curl -fsSL https://bun.sh/install | bash`.
