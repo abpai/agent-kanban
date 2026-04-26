@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3 - 2026-04-26
+
+- CLI now exposes task comment list/create/update operations with
+  `kanban comment list`, `kanban comment add`, and `kanban comment update`.
+- Jira ADF round-trip now preserves `expand` (collapsible disclosure) blocks.
+  `plainTextToAdf` recognises a `::: expand` / `:::` fenced-div wire format
+  with an optional `title="..."` attribute (escaped quotes supported);
+  `adfToPlainText` mirrors expand nodes back to the same wrapper. The
+  recursive parser handles arbitrary nested block content (paragraphs, lists,
+  code blocks). Unterminated `::: expand` falls through to a paragraph,
+  consistent with the existing unterminated-fence behaviour.
+
 ## 0.3.2 - 2026-04-26
 
 - Jira ADF round-trip now preserves inline marks. `plainTextToAdf`
