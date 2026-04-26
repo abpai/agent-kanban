@@ -2,14 +2,14 @@
 //
 // This module is intentionally dependency-free: no imports from the rest of the
 // provider stack, no bun:sqlite, no fetch. It models only the subset of ADF
-// that agent-kanban round-trips through plain text:
+// that agent-kanban writes, plus a few Jira nodes it must preserve on read:
 //
-//   doc > { paragraph | bulletList | orderedList | codeBlock | heading }
-//   paragraph / heading / codeBlock > text(inline)
+//   doc > { paragraph | bulletList | orderedList | codeBlock | heading | card }
+//   paragraph / heading / codeBlock > text(inline) | inlineCard | hardBreak
 //   bulletList / orderedList > listItem > paragraph > text
 //
-// Unknown node types are tolerated on the read path (skipped silently) and
-// never emitted on the write path.
+// Other unknown node types are tolerated on the read path (skipped silently)
+// and never emitted on the write path.
 
 export interface AdfDocument {
   version: 1
@@ -17,10 +17,15 @@ export interface AdfDocument {
   content: AdfBlockNode[]
 }
 
+export interface AdfMark {
+  type: string
+  attrs?: Record<string, unknown>
+}
+
 export interface AdfTextNode {
   type: 'text'
   text: string
-  marks?: unknown[]
+  marks?: AdfMark[]
 }
 
 export interface AdfUnknownInlineNode {
@@ -92,7 +97,7 @@ function paragraphFromText(text: string): AdfParagraphNode {
   }
   return {
     type: 'paragraph',
-    content: [{ type: 'text', text }],
+    content: tokenizeInline(text),
   }
 }
 
@@ -101,6 +106,39 @@ function listItemFromText(text: string): AdfListItemNode {
     type: 'listItem',
     content: [paragraphFromText(text)],
   }
+}
+
+const INLINE_MARK = /\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g
+
+function tokenizeInline(text: string): AdfTextNode[] {
+  const out: AdfTextNode[] = []
+  INLINE_MARK.lastIndex = 0
+  let cursor = 0
+  for (const match of text.matchAll(INLINE_MARK)) {
+    const start = match.index ?? 0
+    if (start > cursor) {
+      out.push({ type: 'text', text: text.slice(cursor, start) })
+    }
+    const boldText = match[1]
+    if (boldText !== undefined) {
+      out.push({
+        type: 'text',
+        text: boldText,
+        marks: [{ type: 'strong' }],
+      })
+    } else {
+      out.push({
+        type: 'text',
+        text: match[2]!,
+        marks: [{ type: 'link', attrs: { href: match[3]! } }],
+      })
+    }
+    cursor = start + match[0].length
+  }
+  if (cursor < text.length) {
+    out.push({ type: 'text', text: text.slice(cursor) })
+  }
+  return out
 }
 
 export function plainTextToAdf(text: string): AdfDocument {
@@ -211,16 +249,77 @@ export function plainTextToAdf(text: string): AdfDocument {
   return { version: 1, type: 'doc', content: blocks }
 }
 
-function inlineText(nodes: AdfInlineNode[] | undefined): string {
+function inlineText(
+  nodes: AdfInlineNode[] | undefined,
+  opts: { renderMarks?: boolean } = {},
+): string {
   if (!nodes) return ''
+  const renderMarks = opts.renderMarks ?? true
   let out = ''
-  for (const node of nodes) {
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i]!
     if (node.type === 'text') {
-      out += (node as AdfTextNode).text
+      const textNode = node as AdfTextNode
+      if (!renderMarks) {
+        out += textNode.text
+        continue
+      }
+      const nextNode = nodes[i + 1]
+      const labelColon = readPlainTextLeadingColon(nextNode)
+      if (labelColon && hasMark(textNode, 'strong')) {
+        out += renderTextNode({ ...textNode, text: `${textNode.text}:` })
+        out += labelColon.remainder
+        i += 1
+        continue
+      }
+      out += renderTextNode(textNode)
+      continue
     }
-    // Unknown inline nodes (mentions, emoji, hardBreak, etc.) are skipped.
+    if (node.type === 'inlineCard') {
+      const url = readCardUrl(node)
+      if (url) out += url
+      continue
+    }
+    if (node.type === 'hardBreak') {
+      out += '\n'
+      continue
+    }
+    // Other unknown inline nodes (mentions, emoji, etc.) are skipped.
   }
   return out
+}
+
+function hasMark(node: AdfTextNode, type: string): boolean {
+  return node.marks?.some((m) => m.type === type) ?? false
+}
+
+function readPlainTextLeadingColon(node: AdfInlineNode | undefined): { remainder: string } | null {
+  if (!node || node.type !== 'text') return null
+  const textNode = node as AdfTextNode
+  if (textNode.marks && textNode.marks.length > 0) return null
+  if (!textNode.text.startsWith(':')) return null
+  return { remainder: textNode.text.slice(1) }
+}
+
+function renderTextNode(node: AdfTextNode): string {
+  if (!node.marks || node.marks.length === 0) return node.text
+  const link = node.marks.find((m) => m.type === 'link')
+  let out = node.text
+  if (link) {
+    const href = link.attrs?.['href']
+    if (typeof href === 'string' && href.length > 0) out = `[${out}](${href})`
+  }
+  if (hasMark(node, 'strong')) {
+    out = `**${out}**`
+  }
+  return out
+}
+
+function readCardUrl(node: AdfInlineNode | AdfBlockNode): string | null {
+  const attrs = (node as { attrs?: Record<string, unknown> }).attrs
+  if (!attrs) return null
+  const url = attrs['url']
+  return typeof url === 'string' && url.length > 0 ? url : null
 }
 
 function listItemInnerText(item: AdfListItemNode): string {
@@ -252,12 +351,17 @@ function renderBlock(node: AdfBlockNode): string | null {
     case 'codeBlock': {
       const code = node as AdfCodeBlockNode
       const language = code.attrs?.language ?? ''
-      const body = inlineText(code.content)
+      const body = inlineText(code.content, { renderMarks: false })
       const fence = language.length > 0 ? `\`\`\`${language}` : '```'
       return `${fence}\n${body}\n\`\`\``
     }
     case 'heading':
       return inlineText((node as AdfHeadingNode).content)
+    case 'blockCard':
+    case 'embedCard': {
+      const url = readCardUrl(node)
+      return url ?? null
+    }
     default:
       // Unknown block node — skip entirely, never throw.
       return null

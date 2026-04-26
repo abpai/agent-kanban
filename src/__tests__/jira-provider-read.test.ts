@@ -67,13 +67,14 @@ function makeIssue(opts: {
   updated?: string
   summary?: string
   assignee?: { accountId: string; displayName: string } | null
+  description?: unknown
 }): Record<string, unknown> {
   return {
     id: opts.id,
     key: opts.key,
     fields: {
       summary: opts.summary ?? opts.key,
-      description: null,
+      description: opts.description ?? null,
       status: { id: opts.statusId, name: 'Status ' + opts.statusId },
       issuetype: { id: '10000', name: 'Bug' },
       priority: { id: '2', name: 'High' },
@@ -427,6 +428,51 @@ describe('JiraProvider read path', () => {
     expect(byKey.externalRef).toBe('ENG-1')
     const byPrefixed = await provider.getTask('jira:10001')
     expect(byPrefixed.externalRef).toBe('ENG-1')
+  })
+
+  test('description ADF with an inlineCard smart-link preserves the URL through getTask', async () => {
+    // Regression for the DXS-12 shape: a user pastes
+    // `Repo: https://github.com/abpai/garage-band` in the description, Jira
+    // auto-converts the URL to an inlineCard, and the previous
+    // adfToPlainText silently dropped attrs.url.
+    const description = {
+      version: 1,
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Repo', marks: [{ type: 'strong' }] },
+            { type: 'text', text: ': ' },
+            { type: 'inlineCard', attrs: { url: 'https://github.com/abpai/garage-band' } },
+          ],
+        },
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'Increment SMOKE_TEST_TASK.md by 1.' }],
+        },
+      ],
+    }
+    const searchHandler: StubHandler = () =>
+      jsonResponse({
+        startAt: 0,
+        maxResults: 100,
+        total: 1,
+        issues: [
+          makeIssue({
+            id: '20001',
+            key: 'ENG-12',
+            statusId: '10001',
+            description,
+          }),
+        ],
+      })
+    const { provider } = makeProvider(standardRoutes({ searchHandler }))
+    await provider.getBoard()
+    const task = await provider.getTask('ENG-12')
+    expect(task.description).toContain('Repo:')
+    expect(task.description).toContain('https://github.com/abpai/garage-band')
+    expect(task.description.split('\n')[0]).toBe('**Repo:** https://github.com/abpai/garage-band')
   })
 
   test('getBootstrap returns provider=jira and the adapted BoardConfig', async () => {

@@ -1,5 +1,31 @@
 import { describe, expect, test } from 'bun:test'
-import { adfToPlainText, plainTextToAdf, type AdfDocument } from '../providers/jira-adf'
+import {
+  adfToPlainText,
+  plainTextToAdf,
+  type AdfBulletListNode,
+  type AdfCodeBlockNode,
+  type AdfDocument,
+  type AdfInlineNode,
+  type AdfParagraphNode,
+} from '../providers/jira-adf'
+
+function firstParagraphContent(doc: AdfDocument): AdfInlineNode[] {
+  const paragraph = doc.content[0] as AdfParagraphNode
+  expect(paragraph.type).toBe('paragraph')
+  return paragraph.content ?? []
+}
+
+function firstCodeBlock(doc: AdfDocument): AdfCodeBlockNode {
+  const code = doc.content[0] as AdfCodeBlockNode
+  expect(code.type).toBe('codeBlock')
+  return code
+}
+
+function firstBulletList(doc: AdfDocument): AdfBulletListNode {
+  const list = doc.content[0] as AdfBulletListNode
+  expect(list.type).toBe('bulletList')
+  return list
+}
 
 describe('plainTextToAdf / adfToPlainText', () => {
   test('empty doc round-trip', () => {
@@ -154,7 +180,7 @@ describe('plainTextToAdf / adfToPlainText', () => {
     expect(adfToPlainText(doc)).toBe('before\n\nafter')
   })
 
-  test('inline text marks are stripped on read', () => {
+  test('strong + link marks survive on read as markdown', () => {
     const doc: AdfDocument = {
       version: 1,
       type: 'doc',
@@ -163,12 +189,240 @@ describe('plainTextToAdf / adfToPlainText', () => {
           type: 'paragraph',
           content: [
             { type: 'text', text: 'bold', marks: [{ type: 'strong' }] },
-            { type: 'text', text: ' normal' },
+            { type: 'text', text: ' ' },
+            {
+              type: 'text',
+              text: 'click',
+              marks: [{ type: 'link', attrs: { href: 'https://example.com' } }],
+            },
           ],
         },
       ],
     }
-    expect(adfToPlainText(doc)).toBe('bold normal')
+    expect(adfToPlainText(doc)).toBe('**bold** [click](https://example.com)')
+  })
+
+  test('write path emits **bold** as a strong mark', () => {
+    const input = 'hello **world**'
+    const doc = plainTextToAdf(input)
+    expect(firstParagraphContent(doc)).toEqual([
+      { type: 'text', text: 'hello ' },
+      { type: 'text', text: 'world', marks: [{ type: 'strong' }] },
+    ])
+    expect(adfToPlainText(doc)).toBe(input)
+  })
+
+  test('write path emits [label](https://...) as a link mark', () => {
+    const input = 'see [docs](https://example.com/x)'
+    const doc = plainTextToAdf(input)
+    expect(firstParagraphContent(doc)).toEqual([
+      { type: 'text', text: 'see ' },
+      {
+        type: 'text',
+        text: 'docs',
+        marks: [{ type: 'link', attrs: { href: 'https://example.com/x' } }],
+      },
+    ])
+    expect(adfToPlainText(doc)).toBe(input)
+  })
+
+  test('write path emits side-by-side bold and link as adjacent text nodes', () => {
+    const input = '**PR opened** — [repo#1](https://github.com/o/r/pull/1)'
+    const doc = plainTextToAdf(input)
+    expect(firstParagraphContent(doc)).toEqual([
+      { type: 'text', text: 'PR opened', marks: [{ type: 'strong' }] },
+      { type: 'text', text: ' — ' },
+      {
+        type: 'text',
+        text: 'repo#1',
+        marks: [{ type: 'link', attrs: { href: 'https://github.com/o/r/pull/1' } }],
+      },
+    ])
+    expect(adfToPlainText(doc)).toBe(input)
+  })
+
+  test('write path bolds bullet item field-name prefix', () => {
+    const input = '- **Marker:** drift:HUMAN REVIEW:516652'
+    const doc = plainTextToAdf(input)
+    const list = firstBulletList(doc)
+    const itemParagraph = list.content[0]!.content[0] as AdfParagraphNode
+    const itemContent = itemParagraph.content ?? []
+    expect(itemContent).toEqual([
+      { type: 'text', text: 'Marker:', marks: [{ type: 'strong' }] },
+      { type: 'text', text: ' drift:HUMAN REVIEW:516652' },
+    ])
+    expect(adfToPlainText(doc)).toBe(input)
+  })
+
+  test('inline tokenizer does NOT run inside fenced code blocks', () => {
+    const input = '```ts\nconst s = "**not bold** [x](https://e.com)"\n```'
+    const doc = plainTextToAdf(input)
+    const code = firstCodeBlock(doc)
+    const codeContent = code.content ?? []
+    expect(codeContent).toHaveLength(1)
+    expect(codeContent[0]?.text).toBe('const s = "**not bold** [x](https://e.com)"')
+    expect(codeContent[0]?.marks).toBeUndefined()
+    expect(adfToPlainText(doc)).toBe(input)
+  })
+
+  test('read: code block text marks stay literal', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        {
+          type: 'codeBlock',
+          content: [
+            { type: 'text', text: '**not bold**', marks: [{ type: 'strong' }] },
+            {
+              type: 'text',
+              text: '\nhttps://example.com',
+              marks: [{ type: 'link', attrs: { href: 'https://example.com' } }],
+            },
+          ],
+        },
+      ],
+    }
+    expect(adfToPlainText(doc)).toBe('```\n**not bold**\nhttps://example.com\n```')
+  })
+
+  test('non-http link target is left as literal text (no link mark)', () => {
+    const input = 'see [docs](mailto:dev@example.com)'
+    const doc = plainTextToAdf(input)
+    expect(firstParagraphContent(doc)).toEqual([{ type: 'text', text: input }])
+  })
+
+  test('read: paragraph containing inlineCard emits the URL inline', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Repo: ' },
+            { type: 'inlineCard', attrs: { url: 'https://github.com/abpai/garage-band' } },
+          ],
+        },
+      ],
+    }
+    expect(adfToPlainText(doc)).toBe('Repo: https://github.com/abpai/garage-band')
+  })
+
+  test('read: split strong field label keeps colon inside markdown', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Repo', marks: [{ type: 'strong' }] },
+            { type: 'text', text: ': ' },
+            { type: 'inlineCard', attrs: { url: 'https://github.com/abpai/garage-band' } },
+          ],
+        },
+      ],
+    }
+    expect(adfToPlainText(doc)).toBe('**Repo:** https://github.com/abpai/garage-band')
+  })
+
+  test('read: blockCard renders as a standalone block with the URL', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'before' }] },
+        { type: 'blockCard', attrs: { url: 'https://github.com/abpai/garage-band' } },
+        { type: 'paragraph', content: [{ type: 'text', text: 'after' }] },
+      ],
+    }
+    expect(adfToPlainText(doc)).toBe('before\n\nhttps://github.com/abpai/garage-band\n\nafter')
+  })
+
+  test('read: embedCard also emits its URL', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [{ type: 'embedCard', attrs: { url: 'https://example.com/embed' } }],
+    }
+    expect(adfToPlainText(doc)).toBe('https://example.com/embed')
+  })
+
+  test('read: DXS-12-shaped description preserves smart-link Repo URL', () => {
+    // Captured shape from a real Jira description where a user pasted a URL
+    // and Jira auto-converted it to an inlineCard. Before the fix,
+    // adfToPlainText returned "Repo: " with the URL silently dropped.
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Repo', marks: [{ type: 'strong' }] },
+            { type: 'text', text: ': ' },
+            { type: 'inlineCard', attrs: { url: 'https://github.com/abpai/garage-band' } },
+          ],
+        },
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'Please make one minimal change.' }],
+        },
+        {
+          type: 'heading',
+          attrs: { level: 3 },
+          content: [{ type: 'text', text: 'Acceptance criteria:' }],
+        },
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [{ type: 'text', text: 'Change only SMOKE_TEST_TASK.md.' }],
+                },
+              ],
+            },
+            {
+              type: 'listItem',
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [{ type: 'text', text: 'Increment current_count by exactly one.' }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const out = adfToPlainText(doc)
+    expect(out).toContain('Repo:')
+    expect(out).toContain('https://github.com/abpai/garage-band')
+    // Repo line carries the URL — agents grepping for the URL recover it.
+    const repoLine = out.split('\n').find((l) => l.includes('Repo:'))
+    expect(repoLine).toBe('**Repo:** https://github.com/abpai/garage-band')
+  })
+
+  test('read: hardBreak between text runs emits newline', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'first line' },
+            { type: 'hardBreak' },
+            { type: 'text', text: 'second line' },
+          ],
+        },
+      ],
+    }
+    expect(adfToPlainText(doc)).toBe('first line\nsecond line')
   })
 
   test('bullet item containing digits-dot substring is still a bullet', () => {
