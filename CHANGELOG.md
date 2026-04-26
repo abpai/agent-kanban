@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.2 - 2026-04-26
+
+- Jira ADF round-trip now preserves inline marks. `plainTextToAdf`
+  recognises `**bold**` and `[label](https://…)` (or `http://`) and emits
+  ADF `strong` and `link` marks; `adfToPlainText` mirrors them back to
+  markdown. Code-block content is left literal (the inline tokenizer is
+  scoped to paragraphs and list items).
+- Fixed dropped URLs in description / comment extraction. `adfToPlainText`
+  now reads `inlineCard` and `blockCard` / `embedCard` smart-link nodes
+  (emitting `attrs.url`) and `hardBreak` (emitting `\n`), so pasted URLs
+  that Jira auto-converted to smart links no longer vanish on read.
+  Split Jira field labels like bold `Repo` followed by plain `:` now render as
+  `**Repo:**`, preserving a contiguous `Repo:` label for agent parsers.
+
 ## 0.3.1 - 2026-04-26
 
 - Fixed Linear sync against the live GraphQL schema by removing the unsupported
