@@ -1,5 +1,5 @@
 import { McpError, ErrorCode as JsonRpcErrorCode } from '@modelcontextprotocol/sdk/types.js'
-import { ErrorCode, type ErrorCodeValue, KanbanError } from '../errors.ts'
+import { ErrorCode, type ErrorCodeValue, KanbanError } from '../errors'
 
 export type TrackerMcpErrorCode =
   | 'auth_failed'

@@ -3,9 +3,9 @@ import { Database } from 'bun:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ErrorCode, KanbanError } from '../errors.ts'
-import { run } from '../index.ts'
-import { createProvider } from '../providers/index.ts'
+import { ErrorCode, KanbanError } from '../errors'
+import { run } from '../index'
+import { createProvider } from '../providers/index'
 
 const ENV_KEYS = [
   'KANBAN_PROVIDER',

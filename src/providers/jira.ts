@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import { ErrorCode, KanbanError } from '../errors.ts'
+import { ErrorCode, KanbanError } from '../errors'
 import type {
   ActivityEntry,
   BoardBootstrap,
@@ -10,17 +10,12 @@ import type {
   Priority,
   TaskComment,
   Task,
-} from '../types.ts'
-import {
-  headerLower,
-  verifyHmacSha256,
-  type WebhookRequest,
-  type WebhookResult,
-} from '../webhooks.ts'
-import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf.ts'
-import { JIRA_CAPABILITIES } from './capabilities.ts'
-import { providerUpstreamError, unsupportedOperation } from './errors.ts'
-import { JiraClient, type JiraComment, type JiraIssue } from './jira-client.ts'
+} from '../types'
+import { headerLower, verifyHmacSha256, type WebhookRequest, type WebhookResult } from '../webhooks'
+import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
+import { JIRA_CAPABILITIES } from './capabilities'
+import { providerUpstreamError, unsupportedOperation } from './errors'
+import { JiraClient, type JiraComment, type JiraIssue } from './jira-client'
 import {
   adjustJiraIssueCommentCount,
   decodeColumnStatusIds,
@@ -45,7 +40,7 @@ import {
   upsertJiraUsers,
   type JiraActivityRow,
   type JiraSyncMeta,
-} from './jira-cache.ts'
+} from './jira-cache'
 import type {
   CreateTaskInput,
   KanbanProvider,
@@ -53,7 +48,7 @@ import type {
   ProviderSyncStatus,
   TaskListFilters,
   UpdateTaskInput,
-} from './types.ts'
+} from './types'
 
 const SYNC_INTERVAL_MS = 30_000
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000

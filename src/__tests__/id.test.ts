@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { generateId } from '../id.ts'
+import { generateId } from '../id'
 
 describe('generateId', () => {
   test('generates task IDs with t_ prefix', () => {

@@ -1,10 +1,10 @@
 import type { Database } from 'bun:sqlite'
-import { getDbPath, initSchema, seedDefaultColumns } from '../db.ts'
-import { providerNotConfigured } from './errors.ts'
-import { JiraProvider } from './jira.ts'
-import { LinearProvider } from './linear.ts'
-import { LocalProvider } from './local.ts'
-import type { KanbanProvider } from './types.ts'
+import { getDbPath, initSchema, seedDefaultColumns } from '../db'
+import { providerNotConfigured } from './errors'
+import { JiraProvider } from './jira'
+import { LinearProvider } from './linear'
+import { LocalProvider } from './local'
+import type { KanbanProvider } from './types'
 
 export function createProvider(db: Database, dbPath = getDbPath()): KanbanProvider {
   const providerType = (process.env['KANBAN_PROVIDER'] ?? 'local') as 'local' | 'linear' | 'jira'

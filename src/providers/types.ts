@@ -1,4 +1,4 @@
-import type { WebhookRequest, WebhookResult } from '../webhooks.ts'
+import type { WebhookRequest, WebhookResult } from '../webhooks'
 import type {
   ActivityEntry,
   BoardBootstrap,
@@ -11,7 +11,7 @@ import type {
   ProviderTeamInfo,
   TaskComment,
   Task,
-} from '../types.ts'
+} from '../types'
 
 export interface TaskListFilters {
   column?: string

@@ -1,8 +1,8 @@
 import type { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns, isInitialized, resetBoard } from '../db.ts'
-import { ErrorCode, KanbanError } from '../errors.ts'
-import { success } from '../output.ts'
-import type { CliOutput } from '../types.ts'
+import { initSchema, seedDefaultColumns, isInitialized, resetBoard } from '../db'
+import { ErrorCode, KanbanError } from '../errors'
+import { success } from '../output'
+import type { CliOutput } from '../types'
 
 export function boardInit(db: Database): CliOutput {
   if (isInitialized(db)) {

@@ -6,7 +6,7 @@ import {
   getCachedLinearActivity,
   initLinearCacheSchema,
   upsertIssues,
-} from '../providers/linear-cache.ts'
+} from '../providers/linear-cache'
 
 function mkIssue(overrides: Partial<Parameters<typeof upsertIssues>[1][0]> = {}) {
   return {

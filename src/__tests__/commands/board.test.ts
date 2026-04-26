@@ -1,8 +1,8 @@
 import { describe, expect, test, beforeEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { getBoardView, initSchema, seedDefaultColumns } from '../../db.ts'
-import { boardInit, boardReset } from '../../commands/board.ts'
-import { KanbanError } from '../../errors.ts'
+import { getBoardView, initSchema, seedDefaultColumns } from '../../db'
+import { boardInit, boardReset } from '../../commands/board'
+import { KanbanError } from '../../errors'
 
 let db: Database
 

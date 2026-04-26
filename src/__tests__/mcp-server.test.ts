@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { Client } from '@modelcontextprotocol/sdk/client'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { addTask, initSchema, seedDefaultColumns } from '../db.ts'
-import { createTrackerCore, createTrackerMcpServer, TrackerMcpError } from '../mcp/index.ts'
-import { LocalProvider } from '../providers/local.ts'
+import { addTask, initSchema, seedDefaultColumns } from '../db'
+import { createTrackerCore, createTrackerMcpServer, TrackerMcpError } from '../mcp/index'
+import { LocalProvider } from '../providers/local'
 
 interface TestScope {
   actor: string

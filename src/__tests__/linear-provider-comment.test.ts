@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { LinearProvider } from '../providers/linear.ts'
+import { LinearProvider } from '../providers/linear'
 import {
   initLinearCacheSchema,
   replaceStates,
   saveSyncMeta,
   upsertIssues,
-} from '../providers/linear-cache.ts'
+} from '../providers/linear-cache'
 
 let db: Database
 let originalFetch: typeof fetch

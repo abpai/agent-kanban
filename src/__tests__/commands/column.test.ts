@@ -1,15 +1,15 @@
 import { describe, expect, test, beforeEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns, addTask } from '../../db.ts'
+import { initSchema, seedDefaultColumns, addTask } from '../../db'
 import {
   columnAdd,
   columnList,
   columnRename,
   columnReorder,
   columnDelete,
-} from '../../commands/column.ts'
-import { KanbanError } from '../../errors.ts'
-import type { Column } from '../../types.ts'
+} from '../../commands/column'
+import { KanbanError } from '../../errors'
+import type { Column } from '../../types'
 
 let db: Database
 

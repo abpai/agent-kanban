@@ -1,4 +1,4 @@
-import type { CliOutput, BoardView, Task, TaskWithColumn, Column } from './types.ts'
+import type { CliOutput, BoardView, Task, TaskWithColumn, Column } from './types'
 
 export function success<T>(data: T): CliOutput<T> {
   return { ok: true, data }

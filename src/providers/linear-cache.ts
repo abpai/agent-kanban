@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import type { BoardConfig, BoardView, ProviderTeamInfo, Task } from '../types.ts'
+import type { BoardConfig, BoardView, ProviderTeamInfo, Task } from '../types'
 
 export interface LinearStateRow {
   id: string

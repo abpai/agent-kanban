@@ -115,6 +115,7 @@ export interface ProviderCapabilities {
   taskMove: boolean
   taskDelete: boolean
   comment: boolean
+  /** True when provider-backed bootstrap/dashboard activity is exposed, not merely cached internally. */
   activity: boolean
   metrics: boolean
   columnCrud: boolean

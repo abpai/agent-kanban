@@ -2,9 +2,9 @@
 import { Database } from 'bun:sqlite'
 import { Client } from '@modelcontextprotocol/sdk/client'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { addTask, initSchema, seedDefaultColumns } from '../src/db.ts'
-import { createTrackerCore, createTrackerMcpServer } from '../src/mcp/index.ts'
-import { LocalProvider } from '../src/providers/local.ts'
+import { addTask, initSchema, seedDefaultColumns } from '../src/db'
+import { createTrackerCore, createTrackerMcpServer } from '../src/mcp/index'
+import { LocalProvider } from '../src/providers/local'
 
 const db = new Database(':memory:')
 db.run('PRAGMA foreign_keys = ON')

@@ -3,8 +3,8 @@ import { parseArgs } from 'node:util'
 import { Database } from 'bun:sqlite'
 import { Client } from '@modelcontextprotocol/sdk/client'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { createTrackerCore, createTrackerMcpServer } from '../src/mcp/index.ts'
-import { createProvider } from '../src/providers/index.ts'
+import { createTrackerCore, createTrackerMcpServer } from '../src/mcp/index'
+import { createProvider } from '../src/providers/index'
 
 const { values } = parseArgs({
   args: process.argv.slice(2),

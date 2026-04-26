@@ -13,9 +13,9 @@ import type {
   JsonSchemaValidatorResult,
   JsonSchemaType,
 } from '@modelcontextprotocol/sdk/validation'
-import type { TrackerCore } from './core.ts'
-import { TrackerMcpError, toMcpError, toTrackerMcpError, trackerMcpJsonRpcCode } from './errors.ts'
-import type { TrackerMcpAuthResolver, TrackerMcpServer, TrackerMcpTool } from './types.ts'
+import type { TrackerCore } from './core'
+import { TrackerMcpError, toMcpError, toTrackerMcpError, trackerMcpJsonRpcCode } from './errors'
+import type { TrackerMcpAuthResolver, TrackerMcpServer, TrackerMcpTool } from './types'
 
 const EMPTY_OBJECT_SCHEMA = {
   type: 'object',

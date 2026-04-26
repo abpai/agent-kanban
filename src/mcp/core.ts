@@ -1,7 +1,7 @@
-import type { KanbanProvider } from '../providers/types.ts'
-import type { Task, TaskComment } from '../types.ts'
-import { TrackerMcpError, toTrackerMcpError } from './errors.ts'
-import type { TrackerMcpHooks, TrackerMcpPolicy } from './types.ts'
+import type { KanbanProvider } from '../providers/types'
+import type { Task, TaskComment } from '../types'
+import { TrackerMcpError, toTrackerMcpError } from './errors'
+import type { TrackerMcpHooks, TrackerMcpPolicy } from './types'
 
 export interface TrackerCore<TScope> {
   notifyAuthFailure(input: {

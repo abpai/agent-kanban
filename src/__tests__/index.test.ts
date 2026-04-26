@@ -3,9 +3,9 @@ import { Database } from 'bun:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { ErrorCode, KanbanError, type ErrorCodeValue } from '../errors.ts'
-import type { Task } from '../types.ts'
-import { parseServeArgs, run } from '../index.ts'
+import { ErrorCode, KanbanError, type ErrorCodeValue } from '../errors'
+import type { Task } from '../types'
+import { parseServeArgs, run } from '../index'
 
 async function withTempDb(runTest: (dbPath: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'kanban-run-'))

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { ErrorCode, KanbanError } from '../errors.ts'
-import { JiraClient } from '../providers/jira-client.ts'
-import { JiraProvider, type JiraProviderConfig } from '../providers/jira.ts'
+import { ErrorCode, KanbanError } from '../errors'
+import { JiraClient } from '../providers/jira-client'
+import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
 import {
   getCachedColumns,
   getCachedTasks,
@@ -11,7 +11,7 @@ import {
   saveJiraSyncMeta,
   saveTeamInfo,
   initJiraCacheSchema,
-} from '../providers/jira-cache.ts'
+} from '../providers/jira-cache'
 
 type FetchInit = RequestInit | undefined
 type StubCall = { url: string; init?: FetchInit }
@@ -353,7 +353,7 @@ describe('JiraProvider read path', () => {
     // Sync first (populates statuses-based columns)
     await provider.getBoard()
     // Overwrite with the test-scenario columns + issues directly.
-    const { replaceJiraColumns, upsertJiraIssues } = await import('../providers/jira-cache.ts')
+    const { replaceJiraColumns, upsertJiraIssues } = await import('../providers/jira-cache')
     replaceJiraColumns(db, [
       {
         id: 'board:3:Done',

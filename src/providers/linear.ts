@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import { ErrorCode, KanbanError } from '../errors.ts'
+import { ErrorCode, KanbanError } from '../errors'
 import type {
   ActivityEntry,
   BoardBootstrap,
@@ -8,14 +8,9 @@ import type {
   Column,
   TaskComment,
   Task,
-} from '../types.ts'
-import {
-  headerLower,
-  verifyHmacSha256,
-  type WebhookRequest,
-  type WebhookResult,
-} from '../webhooks.ts'
-import { LINEAR_CAPABILITIES } from './capabilities.ts'
+} from '../types'
+import { headerLower, verifyHmacSha256, type WebhookRequest, type WebhookResult } from '../webhooks'
+import { LINEAR_CAPABILITIES } from './capabilities'
 import {
   adjustLinearIssueCommentCount,
   deleteLinearIssue,
@@ -35,9 +30,9 @@ import {
   upsertProjects,
   upsertUsers,
   type LinearActivityRow,
-} from './linear-cache.ts'
-import { LinearClient, type LinearComment } from './linear-client.ts'
-import { unsupportedOperation } from './errors.ts'
+} from './linear-cache'
+import { LinearClient, type LinearComment } from './linear-client'
+import { unsupportedOperation } from './errors'
 import type {
   CreateTaskInput,
   KanbanProvider,
@@ -45,7 +40,7 @@ import type {
   ProviderSyncStatus,
   TaskListFilters,
   UpdateTaskInput,
-} from './types.ts'
+} from './types'
 
 const SYNC_INTERVAL_MS = 30_000
 const FULL_RECONCILIATION_INTERVAL_MS = 5 * 60_000

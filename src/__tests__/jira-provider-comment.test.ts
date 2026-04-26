@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { JiraClient } from '../providers/jira-client.ts'
-import { JiraProvider, type JiraProviderConfig } from '../providers/jira.ts'
+import { JiraClient } from '../providers/jira-client'
+import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
 import {
   initJiraCacheSchema,
   saveJiraSyncMeta,
   saveTeamInfo,
   upsertJiraIssues,
-} from '../providers/jira-cache.ts'
+} from '../providers/jira-cache'
 
 const baseConfig: JiraProviderConfig = {
   baseUrl: 'https://example.atlassian.net',

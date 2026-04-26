@@ -6,9 +6,9 @@ import {
   type CallToolResult,
 } from '@modelcontextprotocol/sdk/types.js'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv'
-import { createTrackerCore, defaultTools, TrackerMcpError } from '../mcp/index.ts'
-import type { TrackerMcpPolicy, TrackerMcpTool } from '../mcp/index.ts'
-import type { KanbanProvider } from '../providers/types.ts'
+import { createTrackerCore, defaultTools, TrackerMcpError } from '../mcp/index'
+import type { TrackerMcpPolicy, TrackerMcpTool } from '../mcp/index'
+import type { KanbanProvider } from '../providers/types'
 
 type LocalScope = Record<string, never>
 
