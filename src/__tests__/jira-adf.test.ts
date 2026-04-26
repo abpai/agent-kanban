@@ -5,6 +5,7 @@ import {
   type AdfBulletListNode,
   type AdfCodeBlockNode,
   type AdfDocument,
+  type AdfExpandNode,
   type AdfInlineNode,
   type AdfParagraphNode,
 } from '../providers/jira-adf'
@@ -430,5 +431,143 @@ describe('plainTextToAdf / adfToPlainText', () => {
     const doc = plainTextToAdf(input)
     expect(doc.content[0]?.type).toBe('bulletList')
     expect(adfToPlainText(doc)).toBe(input)
+  })
+})
+
+describe('jira-adf expand block', () => {
+  test('write: expand wrapping a fenced code block produces nested ADF', () => {
+    const input =
+      '::: expand title="garage-baton (machine-readable)"\n' +
+      '```garage-baton\n' +
+      '{"v":1}\n' +
+      '```\n' +
+      ':::'
+    const doc = plainTextToAdf(input)
+    expect(doc.content).toHaveLength(1)
+    const expand = doc.content[0] as AdfExpandNode
+    expect(expand.type).toBe('expand')
+    expect(expand.attrs?.title).toBe('garage-baton (machine-readable)')
+    expect(expand.content).toHaveLength(1)
+    const code = expand.content[0] as AdfCodeBlockNode
+    expect(code.type).toBe('codeBlock')
+    expect(code.attrs?.language).toBe('garage-baton')
+    expect(code.content?.[0]).toEqual({ type: 'text', text: '{"v":1}' })
+  })
+
+  test('read: ADF expand wrapping a codeBlock renders back to the wire format', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        {
+          type: 'expand',
+          attrs: { title: 'garage-baton (machine-readable)' },
+          content: [
+            {
+              type: 'codeBlock',
+              attrs: { language: 'garage-baton' },
+              content: [{ type: 'text', text: '{"v":1}' }],
+            },
+          ],
+        },
+      ],
+    }
+    expect(adfToPlainText(doc)).toBe(
+      '::: expand title="garage-baton (machine-readable)"\n' +
+        '```garage-baton\n' +
+        '{"v":1}\n' +
+        '```\n' +
+        ':::',
+    )
+  })
+
+  test('write: bare ::: expand emits empty title', () => {
+    const input = '::: expand\nbody paragraph\n:::'
+    const doc = plainTextToAdf(input)
+    const expand = doc.content[0] as AdfExpandNode
+    expect(expand.type).toBe('expand')
+    expect(expand.attrs?.title).toBe('')
+    expect(expand.content[0]?.type).toBe('paragraph')
+  })
+
+  test('read: bare ::: expand renders without title attribute', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        {
+          type: 'expand',
+          attrs: { title: '' },
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'body' }] }],
+        },
+      ],
+    }
+    expect(adfToPlainText(doc)).toBe('::: expand\nbody\n:::')
+  })
+
+  test('read: expand without attrs renders as a bare expand block', () => {
+    const doc: AdfDocument = {
+      version: 1,
+      type: 'doc',
+      content: [
+        {
+          type: 'expand',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'body' }] }],
+        },
+      ],
+    }
+    expect(adfToPlainText(doc)).toBe('::: expand\nbody\n:::')
+  })
+
+  test('write: unterminated ::: expand falls through to paragraph', () => {
+    const input = '::: expand title="oops"\nstray text without close'
+    const doc = plainTextToAdf(input)
+    // Both lines collapse into a single paragraph; no expand node.
+    expect(doc.content.every((b) => b.type !== 'expand')).toBe(true)
+    expect(doc.content[0]?.type).toBe('paragraph')
+  })
+
+  test('round-trip: typed-comment-shaped string is byte-stable', () => {
+    const input =
+      'garage-triage: **Accepted** — abpai/garage-band\n' +
+      '\n' +
+      'Increment current_count by 1.\n' +
+      '\n' +
+      '**Next:** Handing off to planner.\n' +
+      '\n' +
+      '::: expand title="garage-baton (machine-readable)"\n' +
+      '```garage-baton\n' +
+      '{"v":1,"accepted":true}\n' +
+      '```\n' +
+      ':::'
+    expect(adfToPlainText(plainTextToAdf(input))).toBe(input)
+  })
+
+  test('round-trip: nested paragraph and bullet list inside expand survive', () => {
+    const input =
+      '::: expand title="details"\n' +
+      'first paragraph\n' +
+      '\n' +
+      '- bullet one\n' +
+      '- bullet two\n' +
+      ':::'
+    expect(adfToPlainText(plainTextToAdf(input))).toBe(input)
+  })
+
+  test('write: expand title preserves escaped quote', () => {
+    const input = '::: expand title="quoted \\"title\\""\nx\n:::'
+    const doc = plainTextToAdf(input)
+    const expand = doc.content[0] as AdfExpandNode
+    expect(expand.attrs?.title).toBe('quoted "title"')
+    // Round-trip emits the same escaping.
+    expect(adfToPlainText(doc)).toBe(input)
+  })
+
+  test('write: text followed by ::: expand on the next line is two blocks', () => {
+    const input = 'leading paragraph\n' + '::: expand title="x"\n' + 'inside\n' + ':::'
+    const doc = plainTextToAdf(input)
+    expect(doc.content).toHaveLength(2)
+    expect(doc.content[0]?.type).toBe('paragraph')
+    expect(doc.content[1]?.type).toBe('expand')
   })
 })

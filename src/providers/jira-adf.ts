@@ -68,6 +68,12 @@ export interface AdfHeadingNode {
   content?: AdfInlineNode[]
 }
 
+export interface AdfExpandNode {
+  type: 'expand'
+  attrs?: { title?: string }
+  content: AdfBlockNode[]
+}
+
 export interface AdfUnknownBlockNode {
   type: string
   [key: string]: unknown
@@ -79,6 +85,7 @@ export type AdfBlockNode =
   | AdfOrderedListNode
   | AdfCodeBlockNode
   | AdfHeadingNode
+  | AdfExpandNode
   | AdfUnknownBlockNode
 
 // Public AdfNode union covers every node shape this module recognizes.
@@ -90,6 +97,18 @@ const ORDERED_MARKER = /^(\d+)\. (.*)$/
 // no whitespace before it. Fence must occupy the whole line.
 const FENCE_OPEN = /^```([^\s`]*)$/
 const FENCE_CLOSE = /^```$/
+// Expand wrapper: `::: expand` or `::: expand title="..."`. Quotes and
+// backslashes in the title are escaped with a leading `\`.
+const EXPAND_OPEN = /^::: expand(?: title="((?:\\.|[^"\\])*)")?$/
+const EXPAND_CLOSE = /^:::$/
+
+function unescapeTitle(raw: string): string {
+  return raw.replace(/\\(.)/g, '$1')
+}
+
+function escapeTitle(value: string): string {
+  return value.replace(/(["\\])/g, '\\$1')
+}
 
 function paragraphFromText(text: string): AdfParagraphNode {
   if (text.length === 0) {
@@ -145,18 +164,44 @@ export function plainTextToAdf(text: string): AdfDocument {
   if (text.length === 0) {
     return { version: 1, type: 'doc', content: [] }
   }
-
   const lines = text.split('\n')
-  const blocks: AdfBlockNode[] = []
+  const { blocks } = parseBlocks(lines, 0, () => false)
+  return { version: 1, type: 'doc', content: blocks }
+}
 
-  let i = 0
+interface ParseResult {
+  blocks: AdfBlockNode[]
+  // Index just past the last consumed line. When `stop` matches, this points
+  // at the stop line itself (the caller is responsible for stepping past it).
+  endIndex: number
+}
+
+function parseBlocks(lines: string[], start: number, stop: (line: string) => boolean): ParseResult {
+  const blocks: AdfBlockNode[] = []
+  let i = start
   while (i < lines.length) {
     const line = lines[i] ?? ''
+    if (stop(line)) {
+      return { blocks, endIndex: i }
+    }
 
     // Blank line separates blocks — consume and move on.
     if (line === '') {
       i += 1
       continue
+    }
+
+    // Expand wrapper.
+    const expandOpen = line.match(EXPAND_OPEN)
+    if (expandOpen) {
+      const title = unescapeTitle(expandOpen[1] ?? '')
+      const inner = parseBlocks(lines, i + 1, (l) => EXPAND_CLOSE.test(l))
+      if (inner.endIndex < lines.length) {
+        blocks.push({ type: 'expand', attrs: { title }, content: inner.blocks })
+        i = inner.endIndex + 1
+        continue
+      }
+      // Unterminated `::: expand` — fall through to paragraph.
     }
 
     // Fenced code block.
@@ -227,16 +272,19 @@ export function plainTextToAdf(text: string): AdfDocument {
       continue
     }
 
-    // Paragraph: consume until blank line or a block-starting line.
+    // Paragraph: consume until blank line, stop predicate, or a
+    // block-starting line.
     const paragraphLines: string[] = [line]
     i += 1
     while (i < lines.length) {
       const current = lines[i] ?? ''
       if (
         current === '' ||
+        stop(current) ||
         BULLET_MARKER.test(current) ||
         ORDERED_MARKER.test(current) ||
-        FENCE_OPEN.test(current)
+        FENCE_OPEN.test(current) ||
+        EXPAND_OPEN.test(current)
       ) {
         break
       }
@@ -246,7 +294,7 @@ export function plainTextToAdf(text: string): AdfDocument {
     blocks.push(paragraphFromText(paragraphLines.join('\n')))
   }
 
-  return { version: 1, type: 'doc', content: blocks }
+  return { blocks, endIndex: i }
 }
 
 function inlineText(
@@ -357,6 +405,14 @@ function renderBlock(node: AdfBlockNode): string | null {
     }
     case 'heading':
       return inlineText((node as AdfHeadingNode).content)
+    case 'expand': {
+      const expand = node as AdfExpandNode
+      const title = expand.attrs?.title ?? ''
+      const open = title.length > 0 ? `::: expand title="${escapeTitle(title)}"` : '::: expand'
+      const inner = renderBlocks(expand.content)
+      const body = inner.length > 0 ? `${open}\n${inner}\n:::` : `${open}\n:::`
+      return body
+    }
     case 'blockCard':
     case 'embedCard': {
       const url = readCardUrl(node)
@@ -368,12 +424,16 @@ function renderBlock(node: AdfBlockNode): string | null {
   }
 }
 
-export function adfToPlainText(doc: AdfDocument): string {
-  const rendered: string[] = []
-  for (const block of doc.content) {
+function renderBlocks(nodes: AdfBlockNode[]): string {
+  const out: string[] = []
+  for (const block of nodes) {
     const text = renderBlock(block)
     if (text === null) continue
-    rendered.push(text)
+    out.push(text)
   }
-  return rendered.join('\n\n')
+  return out.join('\n\n')
+}
+
+export function adfToPlainText(doc: AdfDocument): string {
+  return renderBlocks(doc.content)
 }
