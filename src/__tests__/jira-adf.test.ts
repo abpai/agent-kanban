@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { adfToPlainText, plainTextToAdf, type AdfDocument } from '../providers/jira-adf.ts'
+import { adfToPlainText, plainTextToAdf, type AdfDocument } from '../providers/jira-adf'
 
 describe('plainTextToAdf / adfToPlainText', () => {
   test('empty doc round-trip', () => {

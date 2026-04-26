@@ -1,7 +1,7 @@
-export { createTrackerCore } from './core.ts'
-export { createTrackerMcpServer } from './server.ts'
-export { TrackerMcpError, type TrackerMcpErrorCode } from './errors.ts'
-export type { TrackerCore } from './core.ts'
+export { createTrackerCore } from './core'
+export { createTrackerMcpServer } from './server'
+export { TrackerMcpError, type TrackerMcpErrorCode } from './errors'
+export type { TrackerCore } from './core'
 export type {
   TrackerMcpAuthResolver,
   TrackerMcpHooks,
@@ -9,5 +9,5 @@ export type {
   TrackerMcpServer,
   TrackerMcpTool,
   TrackerMcpToolHandlerContext,
-} from './types.ts'
-export { defaultTools } from './server.ts'
+} from './types'
+export { defaultTools } from './server'

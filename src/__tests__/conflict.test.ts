@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns } from '../db.ts'
-import { LocalProvider } from '../providers/local.ts'
-import { ErrorCode, KanbanError } from '../errors.ts'
+import { initSchema, seedDefaultColumns } from '../db'
+import { LocalProvider } from '../providers/local'
+import { ErrorCode, KanbanError } from '../errors'
 
 let db: Database
 let provider: LocalProvider

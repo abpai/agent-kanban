@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
-import type { Priority } from '../src/types.ts'
-import { addTask, listTasks, moveTask, updateTask } from '../src/db.ts'
+import type { Priority } from '../src/types'
+import { addTask, listTasks, moveTask, updateTask } from '../src/db'
 
 interface FixtureTask {
   title: string

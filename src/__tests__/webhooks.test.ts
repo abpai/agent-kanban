@@ -1,10 +1,10 @@
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { createHmac } from 'node:crypto'
-import { verifyHmacSha256 } from '../webhooks.ts'
-import { JiraProvider, type JiraProviderConfig } from '../providers/jira.ts'
-import { JiraClient } from '../providers/jira-client.ts'
-import { LinearProvider } from '../providers/linear.ts'
+import { verifyHmacSha256 } from '../webhooks'
+import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
+import { JiraClient } from '../providers/jira-client'
+import { LinearProvider } from '../providers/linear'
 import {
   getCachedActivity,
   getCachedTasks as getCachedJiraTasks,
@@ -13,7 +13,7 @@ import {
   saveTeamInfo,
   replaceJiraColumns,
   upsertJiraIssues,
-} from '../providers/jira-cache.ts'
+} from '../providers/jira-cache'
 import {
   getCachedTasks as getCachedLinearTasks,
   initLinearCacheSchema,
@@ -21,7 +21,7 @@ import {
   replaceStates,
   saveSyncMeta,
   upsertIssues,
-} from '../providers/linear-cache.ts'
+} from '../providers/linear-cache'
 
 function hmac(secret: string, body: string): string {
   return createHmac('sha256', secret).update(body).digest('hex')

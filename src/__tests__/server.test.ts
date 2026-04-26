@@ -1,13 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type {
-  BoardBootstrap,
-  BoardConfig,
-  BoardMetrics,
-  BoardView,
-  Column,
-  Task,
-} from '../types.ts'
-import { startServer, type StartedServer } from '../server.ts'
+import type { BoardBootstrap, BoardConfig, BoardMetrics, BoardView, Column, Task } from '../types'
+import { startServer, type StartedServer } from '../server'
 import type {
   CreateTaskInput,
   KanbanProvider,
@@ -15,7 +8,7 @@ import type {
   ProviderSyncStatus,
   TaskListFilters,
   UpdateTaskInput,
-} from '../providers/types.ts'
+} from '../providers/types'
 
 const emptyBoard: BoardView = { columns: [] }
 const emptyConfig: BoardConfig = { members: [], projects: [], provider: 'local' }

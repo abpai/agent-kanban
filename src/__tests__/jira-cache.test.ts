@@ -15,7 +15,7 @@ import {
   saveJiraSyncMeta,
   upsertJiraIssues,
   upsertJiraUsers,
-} from '../providers/jira-cache.ts'
+} from '../providers/jira-cache'
 
 let db: Database
 

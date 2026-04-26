@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import type { ActivityEntry, BoardMetrics } from './types.ts'
+import type { ActivityEntry, BoardMetrics } from './types'
 
 function getDistinctTaskFieldValues(db: Database, field: 'assignee' | 'project'): string[] {
   return (

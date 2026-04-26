@@ -2,22 +2,16 @@
 
 import { parseArgs } from 'node:util'
 import { Database } from 'bun:sqlite'
-import { KanbanError, ErrorCode } from './errors.ts'
-import { formatOutput, error, success } from './output.ts'
-import { openDb, getDbPath, initSchema, migrateSchema, seedDefaultColumns } from './db.ts'
-import { boardInit, boardReset } from './commands/board.ts'
-import {
-  columnAdd,
-  columnDelete,
-  columnList,
-  columnRename,
-  columnReorder,
-} from './commands/column.ts'
-import { bulkClearDoneCmd, bulkMoveAllCmd } from './commands/bulk.ts'
-import { getConfigPath, loadConfig, saveConfig } from './config.ts'
-import type { CliOutput, Priority } from './types.ts'
-import { createProvider } from './providers/index.ts'
-import { unsupportedOperation } from './providers/errors.ts'
+import { KanbanError, ErrorCode } from './errors'
+import { formatOutput, error, success } from './output'
+import { openDb, getDbPath, initSchema, migrateSchema, seedDefaultColumns } from './db'
+import { boardInit, boardReset } from './commands/board'
+import { columnAdd, columnDelete, columnList, columnRename, columnReorder } from './commands/column'
+import { bulkClearDoneCmd, bulkMoveAllCmd } from './commands/bulk'
+import { getConfigPath, loadConfig, saveConfig } from './config'
+import type { CliOutput, Priority } from './types'
+import { createProvider } from './providers/index'
+import { unsupportedOperation } from './providers/errors'
 
 interface ParsedArgs {
   values: Record<string, unknown>
@@ -415,7 +409,7 @@ if (import.meta.main) {
     const db = openDb(dbPath)
     migrateSchema(db)
     const provider = createProvider(db, dbPath)
-    const { startStdioMcpServer } = await import('./commands/mcp.ts')
+    const { startStdioMcpServer } = await import('./commands/mcp')
     await startStdioMcpServer(provider)
   } else if (argv[0] === 'serve') {
     const opts = parseServeArgs(argv)
@@ -424,11 +418,11 @@ if (import.meta.main) {
     const db = openDb(dbPath)
     migrateSchema(db)
     const provider = createProvider(db, dbPath)
-    const { startServer } = await import('./server.ts')
+    const { startServer } = await import('./server')
     startServer(provider, opts.port)
 
     if (opts.tunnel) {
-      const { startCloudflareTunnel } = await import('./tunnel.ts')
+      const { startCloudflareTunnel } = await import('./tunnel')
       try {
         const handle = startCloudflareTunnel(opts.port)
         const shutdown = (): void => {

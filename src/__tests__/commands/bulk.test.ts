@@ -1,8 +1,8 @@
 import { describe, expect, test, beforeEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns, addTask, listTasks } from '../../db.ts'
-import { bulkMoveAllCmd, bulkClearDoneCmd } from '../../commands/bulk.ts'
-import { KanbanError } from '../../errors.ts'
+import { initSchema, seedDefaultColumns, addTask, listTasks } from '../../db'
+import { bulkMoveAllCmd, bulkClearDoneCmd } from '../../commands/bulk'
+import { KanbanError } from '../../errors'
 
 let db: Database
 

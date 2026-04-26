@@ -1,6 +1,6 @@
-import { KanbanError, ErrorCode } from './errors.ts'
-import type { BoardConfig, CliOutput, Task } from './types.ts'
-import type { CreateTaskInput, UpdateTaskInput, KanbanProvider } from './providers/types.ts'
+import { KanbanError, ErrorCode } from './errors'
+import type { BoardConfig, CliOutput, Task } from './types'
+import type { CreateTaskInput, UpdateTaskInput, KanbanProvider } from './providers/types'
 
 export type WsEvent =
   | { type: 'task:upsert'; task: Task; columnName: string }

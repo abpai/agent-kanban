@@ -1,7 +1,7 @@
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js'
 import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation'
-import type { TaskComment } from '../types.ts'
-import type { TrackerMcpError, TrackerMcpErrorCode } from './errors.ts'
+import type { TaskComment } from '../types'
+import type { TrackerMcpError, TrackerMcpErrorCode } from './errors'
 
 export type TrackerMcpAuthResolver<TScope> = (ctx: {
   request: Request

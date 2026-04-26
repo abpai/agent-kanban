@@ -1,8 +1,8 @@
 import type { Database } from 'bun:sqlite'
-import { bulkMoveAll, bulkClearDone } from '../db.ts'
-import { ErrorCode, KanbanError } from '../errors.ts'
-import { success } from '../output.ts'
-import type { CliOutput } from '../types.ts'
+import { bulkMoveAll, bulkClearDone } from '../db'
+import { ErrorCode, KanbanError } from '../errors'
+import { success } from '../output'
+import type { CliOutput } from '../types'
 
 export function bulkMoveAllCmd(db: Database, args: { from?: string; to?: string }): CliOutput {
   if (!args.from || !args.to) {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns, addTask } from '../db.ts'
-import { LocalProvider } from '../providers/local.ts'
+import { initSchema, seedDefaultColumns, addTask } from '../db'
+import { LocalProvider } from '../providers/local'
 
 let db: Database
 let provider: LocalProvider

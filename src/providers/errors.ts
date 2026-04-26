@@ -1,4 +1,4 @@
-import { ErrorCode, type ErrorCodeValue, KanbanError } from '../errors.ts'
+import { ErrorCode, type ErrorCodeValue, KanbanError } from '../errors'
 
 export function unsupportedOperation(message: string): never {
   throw new KanbanError(ErrorCode.UNSUPPORTED_OPERATION, message)

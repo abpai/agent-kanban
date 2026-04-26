@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { Buffer } from 'node:buffer'
-import { ErrorCode, KanbanError } from '../errors.ts'
-import { JiraClient } from '../providers/jira-client.ts'
+import { ErrorCode, KanbanError } from '../errors'
+import { JiraClient } from '../providers/jira-client'
 
 const origFetch = globalThis.fetch
 let lastRequest: { url: string; init?: RequestInit } | null = null

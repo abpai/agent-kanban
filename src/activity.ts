@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
-import { generateId } from './id.ts'
-import type { ActivityEntry, ActivityAction } from './types.ts'
+import { generateId } from './id'
+import type { ActivityEntry, ActivityAction } from './types'
 
 export function logActivity(
   db: Database,

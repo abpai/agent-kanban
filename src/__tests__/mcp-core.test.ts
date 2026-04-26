@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { addTask, initSchema, seedDefaultColumns } from '../db.ts'
-import { createTrackerCore } from '../mcp/core.ts'
-import { TrackerMcpError } from '../mcp/errors.ts'
-import { LocalProvider } from '../providers/local.ts'
+import { addTask, initSchema, seedDefaultColumns } from '../db'
+import { createTrackerCore } from '../mcp/core'
+import { TrackerMcpError } from '../mcp/errors'
+import { LocalProvider } from '../providers/local'
 
 interface TestScope {
   actor: string

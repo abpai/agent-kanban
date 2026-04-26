@@ -2,10 +2,10 @@ import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { generateId } from './id.ts'
-import { ErrorCode, KanbanError } from './errors.ts'
-import type { BoardView, Column, Priority, Task, TaskComment, TaskWithColumn } from './types.ts'
-import { logActivity, enterColumn, exitColumn } from './activity.ts'
+import { generateId } from './id'
+import { ErrorCode, KanbanError } from './errors'
+import type { BoardView, Column, Priority, Task, TaskComment, TaskWithColumn } from './types'
+import { logActivity, enterColumn, exitColumn } from './activity'
 
 const DEFAULT_COLUMNS = [
   { name: 'recurring', position: 0 },

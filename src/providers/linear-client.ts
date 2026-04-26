@@ -1,5 +1,5 @@
-import { ErrorCode } from '../errors.ts'
-import { providerUpstreamError } from './errors.ts'
+import { ErrorCode } from '../errors'
+import { providerUpstreamError } from './errors'
 
 interface GraphQLResponse<T> {
   data?: T

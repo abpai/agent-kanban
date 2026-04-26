@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { handleRequest } from './api.ts'
+import { handleRequest } from './api'
 import type { ServerWebSocket } from 'bun'
-import type { KanbanProvider } from './providers/types.ts'
+import type { KanbanProvider } from './providers/types'
 
 const wsClients = new Set<ServerWebSocket<unknown>>()
 const CORS_HEADERS = {

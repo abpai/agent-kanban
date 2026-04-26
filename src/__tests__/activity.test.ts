@@ -9,8 +9,8 @@ import {
   moveTask,
   bulkMoveAll,
   bulkClearDone,
-} from '../db.ts'
-import { listActivity } from '../activity.ts'
+} from '../db'
+import { listActivity } from '../activity'
 
 let db: Database
 

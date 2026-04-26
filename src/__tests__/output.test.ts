@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { success, error, formatOutput } from '../output.ts'
+import { success, error, formatOutput } from '../output'
 
 describe('success', () => {
   test('wraps data in ok envelope', () => {

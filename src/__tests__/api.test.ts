@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns, addTask } from '../db.ts'
-import { handleRequest } from '../api.ts'
-import { createProvider } from '../providers/index.ts'
+import { initSchema, seedDefaultColumns, addTask } from '../db'
+import { handleRequest } from '../api'
+import { createProvider } from '../providers/index'
 
 let db: Database
 let provider: ReturnType<typeof createProvider>

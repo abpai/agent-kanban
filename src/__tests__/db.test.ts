@@ -25,8 +25,8 @@ import {
   bulkClearDone,
   resetBoard,
   migrateSchema,
-} from '../db.ts'
-import { KanbanError } from '../errors.ts'
+} from '../db'
+import { KanbanError } from '../errors'
 
 let db: Database
 let originalCwd: string

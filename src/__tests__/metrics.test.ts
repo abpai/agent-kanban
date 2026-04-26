@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns, addTask } from '../db.ts'
-import { getBoardMetrics } from '../metrics.ts'
+import { initSchema, seedDefaultColumns, addTask } from '../db'
+import { getBoardMetrics } from '../metrics'
 
 let db: Database
 

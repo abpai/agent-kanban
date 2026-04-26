@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import type { BoardView, ProviderTeamInfo, Task } from '../types.ts'
+import type { BoardView, ProviderTeamInfo, Task } from '../types'
 
 // Column ids are prefixed to avoid collisions across sources:
 // - board-sourced columns: 'board:<boardId>:<columnName>'

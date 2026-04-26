@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
-import { listActivity } from '../activity.ts'
-import { getConfigPath, loadConfig, saveConfig } from '../config.ts'
+import { listActivity } from '../activity'
+import { getConfigPath, loadConfig, saveConfig } from '../config'
 import {
   addComment,
   countComments,
@@ -17,11 +17,11 @@ import {
   moveTask,
   updateComment as updateTaskComment,
   updateTask,
-} from '../db.ts'
-import { getBoardMetrics, getDiscoveredAssignees, getDiscoveredProjects } from '../metrics.ts'
-import type { BoardBootstrap, BoardConfig, Task, TaskComment } from '../types.ts'
-import { ErrorCode, KanbanError } from '../errors.ts'
-import { LOCAL_CAPABILITIES } from './capabilities.ts'
+} from '../db'
+import { getBoardMetrics, getDiscoveredAssignees, getDiscoveredProjects } from '../metrics'
+import type { BoardBootstrap, BoardConfig, Task, TaskComment } from '../types'
+import { ErrorCode, KanbanError } from '../errors'
+import { LOCAL_CAPABILITIES } from './capabilities'
 import type {
   CreateTaskInput,
   KanbanProvider,
@@ -29,7 +29,7 @@ import type {
   ProviderSyncStatus,
   TaskListFilters,
   UpdateTaskInput,
-} from './types.ts'
+} from './types'
 
 function buildLocalConfig(
   db: Database,

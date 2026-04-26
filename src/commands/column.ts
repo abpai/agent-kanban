@@ -1,8 +1,8 @@
 import type { Database } from 'bun:sqlite'
-import { addColumn, listColumns, renameColumn, reorderColumn, deleteColumn } from '../db.ts'
-import { ErrorCode, KanbanError } from '../errors.ts'
-import { success } from '../output.ts'
-import type { CliOutput } from '../types.ts'
+import { addColumn, listColumns, renameColumn, reorderColumn, deleteColumn } from '../db'
+import { ErrorCode, KanbanError } from '../errors'
+import { success } from '../output'
+import type { CliOutput } from '../types'
 
 export function columnAdd(
   db: Database,
