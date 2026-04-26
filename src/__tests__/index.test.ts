@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ErrorCode, KanbanError, type ErrorCodeValue } from '../errors'
-import type { Task } from '../types'
+import type { Task, TaskComment } from '../types'
 import { parseServeArgs, run } from '../index'
 
 async function withTempDb(runTest: (dbPath: string) => Promise<void>): Promise<void> {
@@ -234,6 +234,28 @@ describe('run', () => {
     })
   })
 
+  test('runs comment commands through the real CLI path', async () => {
+    await withTempDb(async (dbPath) => {
+      const task = expectOk<Task>(await run(['--db', dbPath, 'task', 'add', 'Comment target']))
+
+      const created = expectOk<TaskComment>(
+        await run(['--db', dbPath, 'comment', 'add', task.id, 'hello', 'from', 'cli']),
+      )
+      expect(created.task_id).toBe(task.id)
+      expect(created.body).toBe('hello from cli')
+
+      const listed = expectOk<TaskComment[]>(
+        await run(['--db', dbPath, 'comment', 'list', task.id]),
+      )
+      expect(listed.map((comment) => comment.id)).toEqual([created.id])
+
+      const updated = expectOk<TaskComment>(
+        await run(['--db', dbPath, 'comment', 'update', task.id, created.id, 'edited', 'comment']),
+      )
+      expect(updated.body).toBe('edited comment')
+    })
+  })
+
   test('raises CLI errors for missing task arguments', async () => {
     await withTempDb(async (dbPath) => {
       const missingTitle = await expectKanbanError(
@@ -247,6 +269,30 @@ describe('run', () => {
         ErrorCode.MISSING_ARGUMENT,
       )
       expect(missingId.message).toContain('Task ID is required')
+    })
+  })
+
+  test('raises CLI errors for missing comment arguments', async () => {
+    await withTempDb(async (dbPath) => {
+      const missingListId = await expectKanbanError(
+        run(['--db', dbPath, 'comment', 'list']),
+        ErrorCode.MISSING_ARGUMENT,
+      )
+      expect(missingListId.message).toContain('Task ID is required')
+
+      const missingAddBody = await expectKanbanError(
+        run(['--db', dbPath, 'comment', 'add', 't_1']),
+        ErrorCode.MISSING_ARGUMENT,
+      )
+      expect(missingAddBody.message).toContain('kanban comment add <task-id> <body>')
+
+      const missingUpdateBody = await expectKanbanError(
+        run(['--db', dbPath, 'comment', 'update', 't_1', 'c_1']),
+        ErrorCode.MISSING_ARGUMENT,
+      )
+      expect(missingUpdateBody.message).toContain(
+        'kanban comment update <task-id> <comment-id> <body>',
+      )
     })
   })
 })

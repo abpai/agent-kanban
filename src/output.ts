@@ -1,4 +1,4 @@
-import type { CliOutput, BoardView, Task, TaskWithColumn, Column } from './types'
+import type { CliOutput, BoardView, Task, TaskWithColumn, TaskComment, Column } from './types'
 
 export function success<T>(data: T): CliOutput<T> {
   return { ok: true, data }
@@ -25,11 +25,15 @@ function formatPrettyData(data: unknown): string {
   if (Array.isArray(data)) {
     if (data.length === 0) return 'No items found.'
     if ('column_id' in data[0]) return data.map(formatTaskLine).join('\n')
+    if ('task_id' in data[0]) return data.map(formatCommentLine).join('\n')
     if ('position' in data[0]) return data.map(formatColumnLine).join('\n')
     return JSON.stringify(data, null, 2)
   }
   if (data && typeof data === 'object' && 'column_id' in data) {
     return formatTaskDetail(data as TaskWithColumn)
+  }
+  if (data && typeof data === 'object' && 'task_id' in data) {
+    return formatCommentDetail(data as TaskComment)
   }
   if (data && typeof data === 'object' && 'moved' in data) {
     return `Moved ${(data as { moved: number }).moved} task(s).`
@@ -76,6 +80,23 @@ function formatTaskDetail(task: Task): string {
   if (task.url) lines.push(`URL: ${task.url}`)
   lines.push(`Created: ${task.created_at}`)
   lines.push(`Updated: ${task.updated_at}`)
+  return lines.join('\n')
+}
+
+function formatCommentLine(comment: TaskComment): string {
+  const author = comment.author ? ` @${comment.author}` : ''
+  return `  ${comment.id}${author}  ${comment.body}`
+}
+
+function formatCommentDetail(comment: TaskComment): string {
+  const lines = [
+    `Comment: ${comment.id}`,
+    `Task: ${comment.task_id}`,
+    ...(comment.author ? [`Author: ${comment.author}`] : []),
+    `Body: ${comment.body}`,
+    `Created: ${comment.created_at}`,
+    `Updated: ${comment.updated_at}`,
+  ]
   return lines.join('\n')
 }
 

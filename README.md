@@ -127,8 +127,8 @@ surface.
 
 Unsupported operations return error code `UNSUPPORTED_OPERATION` with exit code 1.
 
-Task comments are currently exposed through the REST API and dashboard task
-detail flows rather than dedicated `kanban comment ...` CLI commands.
+Task comments are exposed through the CLI, REST API, MCP, and dashboard task
+detail flows.
 
 In Linear and Jira modes, webhooks update the cache immediately when configured,
 and the normal poll loop still runs as a fallback so missed deliveries and
@@ -191,6 +191,14 @@ Default columns: `recurring`, `backlog`, `in-progress`, `review`, `done`.
 | `-a <user>`        | New assignee    |
 | `--project <name>` | New project     |
 | `-m <json>`        | New metadata    |
+
+### comment
+
+| Command                                               | Description           |
+| ----------------------------------------------------- | --------------------- |
+| `kanban comment list <task-id>`                       | List task comments    |
+| `kanban comment add <task-id> <body>`                 | Create a task comment |
+| `kanban comment update <task-id> <comment-id> <body>` | Update a task comment |
 
 ### column
 

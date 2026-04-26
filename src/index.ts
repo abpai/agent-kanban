@@ -139,6 +139,45 @@ async function routeTask(
   }
 }
 
+async function routeComment(
+  provider: ReturnType<typeof createProvider>,
+  action: string | undefined,
+  positionals: string[],
+): Promise<CliOutput> {
+  switch (action) {
+    case 'list': {
+      const id = positionals[2]
+      if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
+      return success(await provider.listComments(id))
+    }
+    case 'add': {
+      const id = positionals[2]
+      const body = positionals.slice(3).join(' ')
+      if (!id || !body) {
+        throw new KanbanError(
+          ErrorCode.MISSING_ARGUMENT,
+          'Usage: kanban comment add <task-id> <body>',
+        )
+      }
+      return success(await provider.comment(id, body))
+    }
+    case 'update': {
+      const id = positionals[2]
+      const commentId = positionals[3]
+      const body = positionals.slice(4).join(' ')
+      if (!id || !commentId || !body) {
+        throw new KanbanError(
+          ErrorCode.MISSING_ARGUMENT,
+          'Usage: kanban comment update <task-id> <comment-id> <body>',
+        )
+      }
+      return success(await provider.updateComment(id, commentId, body))
+    }
+    default:
+      throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown comment command '${action}'`)
+  }
+}
+
 function routeColumn(
   db: Database,
   providerType: string,
@@ -298,6 +337,9 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
       case 'task':
         output = await routeTask(provider, action, positionals, values)
         break
+      case 'comment':
+        output = await routeComment(provider, action, positionals)
+        break
       case 'column':
         output = routeColumn(db, provider.type, action, positionals, values)
         break
@@ -334,6 +376,11 @@ Commands:
   task move <id> <column>     Move task to column
   task assign <id> <user>     Assign task
   task prioritize <id> <lvl>  Set priority
+
+  comment list <task-id>      List comments on a task
+  comment add <task-id> <body> Create a comment
+  comment update <task-id> <comment-id> <body>
+                              Update a comment
 
   column add <name>           Add column [--position n] [--color hex]
   column list                 List columns
