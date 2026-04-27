@@ -49,8 +49,8 @@ import type {
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
+import { resolvePollingSyncIntervalMs } from '../sync-config'
 
-const SYNC_INTERVAL_MS = 30_000
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
 function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boolean {
@@ -78,11 +78,13 @@ export interface JiraProviderConfig {
   projectKey: string
   boardId?: number
   defaultIssueType?: string
+  pollingSyncIntervalMs?: number
 }
 
 export class JiraProvider implements KanbanProvider {
   readonly type = 'jira' as const
   private readonly client: JiraClient
+  private readonly pollingSyncIntervalMs: number
 
   constructor(
     private readonly db: Database,
@@ -90,6 +92,7 @@ export class JiraProvider implements KanbanProvider {
     client?: JiraClient,
   ) {
     initJiraCacheSchema(db)
+    this.pollingSyncIntervalMs = config.pollingSyncIntervalMs ?? resolvePollingSyncIntervalMs()
     this.client =
       client ??
       new JiraClient({
@@ -103,7 +106,7 @@ export class JiraProvider implements KanbanProvider {
     const meta = loadJiraSyncMeta(this.db)
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
     const now = Date.now()
-    if (!force && lastSyncAtMs && now - lastSyncAtMs < SYNC_INTERVAL_MS) return
+    if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
     const fullReconcile = force || shouldRunFullReconcile(meta.lastFullSyncAt, now)
 
     // 1. Resolve project.

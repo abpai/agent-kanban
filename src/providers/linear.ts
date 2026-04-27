@@ -41,8 +41,8 @@ import type {
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
+import { resolvePollingSyncIntervalMs } from '../sync-config'
 
-const SYNC_INTERVAL_MS = 30_000
 const FULL_RECONCILIATION_INTERVAL_MS = 5 * 60_000
 
 function parseTimestamp(value: string | null | undefined): number {
@@ -81,6 +81,7 @@ export class LinearProvider implements KanbanProvider {
     private readonly db: Database,
     private readonly teamId: string,
     apiKey: string,
+    private readonly pollingSyncIntervalMs = resolvePollingSyncIntervalMs(),
   ) {
     initLinearCacheSchema(db)
     this.client = new LinearClient(apiKey)
@@ -105,7 +106,7 @@ export class LinearProvider implements KanbanProvider {
     const lastSyncAtMs = parseTimestamp(meta.lastSyncAt)
     const lastFullSyncAtMs = parseTimestamp(meta.lastFullSyncAt)
     const now = Date.now()
-    if (!force && lastSyncAtMs && now - lastSyncAtMs < SYNC_INTERVAL_MS) return
+    if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
 
     const shouldFullSync =
       force ||

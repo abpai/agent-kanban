@@ -485,4 +485,81 @@ describe('LinearProvider sync', () => {
 
     expect(issueQueries).toBe(1)
   })
+
+  test('custom polling sync interval refreshes before the default 30 seconds', async () => {
+    let issueQueries = 0
+
+    saveSyncMeta(db, {
+      team: { id: 'team-1', key: 'R2P', name: 'R2pi' },
+      lastSyncAt: '2026-01-01T00:00:00.000Z',
+      lastFullSyncAt: '2026-01-01T00:00:00.000Z',
+      lastIssueUpdatedAt: '2026-01-01T00:00:00.000Z',
+    })
+
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string
+        variables: Record<string, unknown>
+      }
+
+      if (body.query.includes('query TeamSnapshot')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              team: {
+                id: 'team-1',
+                key: 'R2P',
+                name: 'R2pi',
+                states: { nodes: [{ id: 'state-1', name: 'Todo', position: 0 }] },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+
+      if (body.query.includes('query Users')) {
+        return new Response(JSON.stringify({ data: { users: { nodes: [] } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      if (body.query.includes('query Projects')) {
+        return new Response(JSON.stringify({ data: { projects: { nodes: [] } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      if (body.query.includes('query Issues')) {
+        issueQueries += 1
+        return new Response(
+          JSON.stringify({
+            data: {
+              issues: {
+                nodes: [],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const originalDateNow = Date.now
+    Date.now = () => Date.parse('2026-01-01T00:00:06.000Z')
+
+    try {
+      const provider = new LinearProvider(db, 'R2P', 'lin_api_test', 5_000)
+      await provider.getBoard()
+    } finally {
+      Date.now = originalDateNow
+    }
+
+    expect(issueQueries).toBe(1)
+  })
 })

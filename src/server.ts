@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { handleRequest } from './api'
 import type { ServerWebSocket } from 'bun'
 import type { KanbanProvider } from './providers/types'
+import { resolvePollingSyncIntervalMs } from './sync-config'
 
 const wsClients = new Set<ServerWebSocket<unknown>>()
 const CORS_HEADERS = {
@@ -10,8 +11,6 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
-const DEFAULT_BACKGROUND_SYNC_INTERVAL_MS = 30_000
-
 interface BackgroundSyncState {
   enabled: boolean
   inFlight: boolean
@@ -64,7 +63,7 @@ export function startServer(
 ): StartedServer {
   const distDir = join(import.meta.dir, '..', 'ui', 'dist')
   const hasStatic = existsSync(distDir)
-  const syncIntervalMs = opts.syncIntervalMs ?? DEFAULT_BACKGROUND_SYNC_INTERVAL_MS
+  const syncIntervalMs = opts.syncIntervalMs ?? resolvePollingSyncIntervalMs()
   const syncCache = provider.syncCache?.bind(provider)
   const getSyncStatus = provider.getSyncStatus?.bind(provider)
   const backgroundSync: BackgroundSyncState = {

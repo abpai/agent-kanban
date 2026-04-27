@@ -5,6 +5,7 @@ import { JiraProvider } from './jira'
 import { LinearProvider } from './linear'
 import { LocalProvider } from './local'
 import type { KanbanProvider } from './types'
+import { resolvePollingSyncIntervalMs } from '../sync-config'
 
 export function createProvider(db: Database, dbPath = getDbPath()): KanbanProvider {
   const providerType = (process.env['KANBAN_PROVIDER'] ?? 'local') as 'local' | 'linear' | 'jira'
@@ -17,7 +18,7 @@ export function createProvider(db: Database, dbPath = getDbPath()): KanbanProvid
         'LINEAR_API_KEY and LINEAR_TEAM_ID are required when KANBAN_PROVIDER=linear',
       )
     }
-    return new LinearProvider(db, teamId!, apiKey!)
+    return new LinearProvider(db, teamId!, apiKey!, resolvePollingSyncIntervalMs())
   }
 
   if (providerType === 'jira') {
@@ -45,6 +46,7 @@ export function createProvider(db: Database, dbPath = getDbPath()): KanbanProvid
       projectKey: projectKey!,
       boardId: Number.isFinite(boardId) ? boardId : undefined,
       defaultIssueType,
+      pollingSyncIntervalMs: resolvePollingSyncIntervalMs(),
     })
   }
 

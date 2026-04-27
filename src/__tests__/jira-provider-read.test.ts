@@ -240,6 +240,28 @@ describe('JiraProvider read path', () => {
     }
   })
 
+  test('custom polling sync interval refreshes before the default 30 seconds', async () => {
+    const { fn, calls } = jiraFetchStub(standardRoutes({}))
+    globalThis.fetch = fn
+    const client = new JiraClient({
+      baseUrl: baseConfig.baseUrl,
+      email: baseConfig.email,
+      apiToken: baseConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, { ...baseConfig, pollingSyncIntervalMs: 5_000 }, client)
+    saveJiraSyncMeta(db, {
+      projectKey: 'ENG',
+      lastSyncAt: '2026-01-01T00:00:00.000Z',
+      lastFullSyncAt: '2026-01-01T00:00:00.000Z',
+      lastIssueUpdatedAt: '2026-01-01T00:00:00.000Z',
+    })
+    Date.now = () => Date.parse('2026-01-01T00:00:06.000Z')
+
+    await provider.listTasks()
+
+    expect(calls.some((call) => call.url.includes('/rest/api/3/search/jql'))).toBe(true)
+  })
+
   test('sync delta JQL is exactly project = KEY AND updated >= "<ts>" ORDER BY updated ASC', async () => {
     const capturedJql: string[] = []
     // First sync: one issue returned so lastIssueUpdatedAt is set.

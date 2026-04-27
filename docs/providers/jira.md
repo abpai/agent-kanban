@@ -43,14 +43,15 @@ The provider is selected at startup via `KANBAN_PROVIDER=jira`. Only Jira Cloud
 
 ## Environment variables
 
-| Variable           | Default | Required                             | Description                                                                         |
-| ------------------ | ------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
-| `JIRA_BASE_URL`    | —       | Required when `KANBAN_PROVIDER=jira` | Atlassian site base URL, no trailing slash (e.g. `https://acme.atlassian.net`).     |
-| `JIRA_EMAIL`       | —       | Required when `KANBAN_PROVIDER=jira` | Atlassian account email used for HTTP Basic auth together with the API token.       |
-| `JIRA_API_TOKEN`   | —       | Required when `KANBAN_PROVIDER=jira` | Atlassian API token. See the Prerequisites section for the creation link.           |
-| `JIRA_PROJECT_KEY` | —       | Required when `KANBAN_PROVIDER=jira` | Project key that scopes the kanban board (e.g. `ENG`).                              |
-| `JIRA_BOARD_ID`    | —       | Optional when `KANBAN_PROVIDER=jira` | Agile board id for ordered kanban columns. Falls back to project statuses if unset. |
-| `JIRA_ISSUE_TYPE`  | `Task`  | Optional when `KANBAN_PROVIDER=jira` | Default issue type for newly created tasks.                                         |
+| Variable                  | Default | Required                             | Description                                                                         |
+| ------------------------- | ------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
+| `JIRA_BASE_URL`           | —       | Required when `KANBAN_PROVIDER=jira` | Atlassian site base URL, no trailing slash (e.g. `https://acme.atlassian.net`).     |
+| `JIRA_EMAIL`              | —       | Required when `KANBAN_PROVIDER=jira` | Atlassian account email used for HTTP Basic auth together with the API token.       |
+| `JIRA_API_TOKEN`          | —       | Required when `KANBAN_PROVIDER=jira` | Atlassian API token. See the Prerequisites section for the creation link.           |
+| `JIRA_PROJECT_KEY`        | —       | Required when `KANBAN_PROVIDER=jira` | Project key that scopes the kanban board (e.g. `ENG`).                              |
+| `JIRA_BOARD_ID`           | —       | Optional when `KANBAN_PROVIDER=jira` | Agile board id for ordered kanban columns. Falls back to project statuses if unset. |
+| `JIRA_ISSUE_TYPE`         | `Task`  | Optional when `KANBAN_PROVIDER=jira` | Default issue type for newly created tasks.                                         |
+| `KANBAN_SYNC_INTERVAL_MS` | `30000` | Optional                             | Polling sync interval in milliseconds. Must be an integer >= 1000.                  |
 
 Authentication uses HTTP Basic auth: the `JIRA_EMAIL` + `JIRA_API_TOKEN` pair is
 base64 encoded in the `Authorization` header on every request.

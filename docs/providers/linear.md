@@ -25,6 +25,10 @@ KanbanProvider
 `KANBAN_PROVIDER` selects the backend at startup. Linear mode requires
 `LINEAR_API_KEY` and `LINEAR_TEAM_ID`.
 
+Set `KANBAN_SYNC_INTERVAL_MS` to tune the polling sync interval for Linear remote
+reads and `kanban serve` background sync. It defaults to 30000 milliseconds and
+must be an integer >= 1000.
+
 ## What shipped
 
 Provider support lives in `src/providers/`:

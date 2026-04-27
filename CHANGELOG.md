@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4 - 2026-04-27
+
+- Added `KANBAN_SYNC_INTERVAL_MS` to tune remote provider polling sync cadence
+  for Jira and Linear. The default remains 30 seconds, and values must be
+  integer milliseconds >= 1000.
+- `kanban serve` uses the same sync interval for its background cache warmup
+  loop, keeping CLI/API provider reads and dashboard refresh behavior aligned.
+
 ## 0.3.3 - 2026-04-26
 
 - CLI now exposes task comment list/create/update operations with

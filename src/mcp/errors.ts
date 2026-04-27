@@ -39,6 +39,7 @@ function providerError(code: ErrorCodeValue): TrackerMcpErrorCode {
     case ErrorCode.INVALID_METADATA:
     case ErrorCode.INVALID_POSITION:
     case ErrorCode.INVALID_PRIORITY:
+    case ErrorCode.INVALID_CONFIG:
     case ErrorCode.MISSING_ARGUMENT:
     case ErrorCode.UNSUPPORTED_OPERATION:
     case ErrorCode.CONFLICT:
