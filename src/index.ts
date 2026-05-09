@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util'
 import { Database } from 'bun:sqlite'
 import { KanbanError, ErrorCode } from './errors'
 import { formatOutput, error, success } from './output'
-import { openDb, getDbPath, initSchema, migrateSchema, seedDefaultColumns } from './db'
+import { getDbPath, initSchema, seedDefaultColumns } from './db'
 import { boardInit, boardReset } from './commands/board'
 import { columnAdd, columnDelete, columnList, columnRename, columnReorder } from './commands/column'
 import { bulkClearDoneCmd, bulkMoveAllCmd } from './commands/bulk'
@@ -12,6 +12,7 @@ import { getConfigPath, loadConfig, saveConfig } from './config'
 import type { CliOutput, Priority } from './types'
 import { createProvider } from './providers/index'
 import { unsupportedOperation } from './providers/errors'
+import { openKanbanRuntime } from './provider-runtime'
 
 interface ParsedArgs {
   values: Record<string, unknown>
@@ -316,23 +317,29 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
     return { output: { ok: true, data: { message: HELP_TEXT } }, exitCode: 0 }
   }
 
-  const dbPath = (values.db as string | undefined) ?? getDbPath()
-  const db = openDb(dbPath)
-  migrateSchema(db)
+  const runtime = await openKanbanRuntime({
+    dbPath: (values.db as string | undefined) ?? getDbPath(),
+  })
 
   try {
-    const provider = createProvider(db, dbPath)
+    const { provider, sqliteDb, dbPath } = runtime
     const group = positionals[0]
     const action = positionals[1]
 
     if (!group) {
-      return { output: await routeBoard(db, provider, undefined), exitCode: 0 }
+      if (sqliteDb) return { output: await routeBoard(sqliteDb, provider, undefined), exitCode: 0 }
+      return { output: success(await provider.getBoard()), exitCode: 0 }
     }
 
     let output: CliOutput
     switch (group) {
       case 'board':
-        output = await routeBoard(db, provider, action)
+        if (sqliteDb) {
+          output = await routeBoard(sqliteDb, provider, action)
+        } else {
+          if (action === 'view' || action === undefined) output = success(await provider.getBoard())
+          else unsupportedOperation(`board ${action} is not available with KANBAN_STORAGE=postgres`)
+        }
         break
       case 'task':
         output = await routeTask(provider, action, positionals, values)
@@ -341,13 +348,24 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
         output = await routeComment(provider, action, positionals)
         break
       case 'column':
-        output = routeColumn(db, provider.type, action, positionals, values)
+        if (!sqliteDb)
+          unsupportedOperation('Column commands are not available with KANBAN_STORAGE=postgres')
+        output = routeColumn(sqliteDb, provider.type, action, positionals, values)
         break
       case 'bulk':
-        output = routeBulk(db, provider.type, action, positionals)
+        if (!sqliteDb)
+          unsupportedOperation('Bulk commands are not available with KANBAN_STORAGE=postgres')
+        output = routeBulk(sqliteDb, provider.type, action, positionals)
         break
       case 'config':
-        output = await routeConfig(provider, dbPath, action, positionals, values)
+        if (sqliteDb) {
+          output = await routeConfig(provider, dbPath, action, positionals, values)
+        } else {
+          if (action === 'show' || action === undefined)
+            output = success(await provider.getConfig())
+          else
+            unsupportedOperation(`config ${action} is not available with KANBAN_STORAGE=postgres`)
+        }
         break
       default:
         throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown command group '${group}'`)
@@ -355,7 +373,7 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
 
     return { output, exitCode: 0 }
   } finally {
-    db.close()
+    await runtime.close()
   }
 }
 
@@ -452,21 +470,19 @@ if (import.meta.main) {
 
   if (argv[0] === 'mcp') {
     const opts = parseMcpArgs(argv)
-    const dbPath = opts.db ?? getDbPath()
-    const db = openDb(dbPath)
-    migrateSchema(db)
-    const provider = createProvider(db, dbPath)
+    const runtime = await openKanbanRuntime({ dbPath: opts.db ?? getDbPath() })
     const { startStdioMcpServer } = await import('./commands/mcp')
-    await startStdioMcpServer(provider)
+    try {
+      await startStdioMcpServer(runtime.provider)
+    } finally {
+      await runtime.close()
+    }
   } else if (argv[0] === 'serve') {
     const opts = parseServeArgs(argv)
 
-    const dbPath = opts.db ?? getDbPath()
-    const db = openDb(dbPath)
-    migrateSchema(db)
-    const provider = createProvider(db, dbPath)
+    const runtime = await openKanbanRuntime({ dbPath: opts.db ?? getDbPath() })
     const { startServer } = await import('./server')
-    startServer(provider, opts.port)
+    startServer(runtime.provider, opts.port)
 
     if (opts.tunnel) {
       const { startCloudflareTunnel } = await import('./tunnel')
