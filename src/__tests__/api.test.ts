@@ -3,17 +3,17 @@ import { Database } from 'bun:sqlite'
 import { initSchema, seedDefaultColumns, addTask } from '../db'
 import { handleRequest } from '../api'
 import { createProvider } from '../providers/index'
+import type { KanbanProvider } from '../providers/types'
 
 let db: Database
-let provider: ReturnType<typeof createProvider>
+let provider: KanbanProvider
 
 beforeEach(() => {
-  process.env['KANBAN_PROVIDER'] = 'local'
   db = new Database(':memory:')
   db.run('PRAGMA foreign_keys = ON')
   initSchema(db)
   seedDefaultColumns(db)
-  provider = createProvider(db, ':memory:')
+  provider = createProvider(db, { provider: 'local' }, ':memory:')
 })
 
 describe('handleRequest', () => {

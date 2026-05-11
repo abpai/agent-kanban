@@ -62,21 +62,26 @@ Running `kanban` with no arguments is equivalent to `kanban board view`.
 
 All operations route through a provider backend. Set `KANBAN_PROVIDER` to choose one.
 
-| Variable                  | Default       | Description                                                              |
-| ------------------------- | ------------- | ------------------------------------------------------------------------ |
-| `KANBAN_PROVIDER`         | `local`       | `local`, `linear`, or `jira`                                             |
-| `KANBAN_DB_PATH`          | auto-resolved | SQLite database path                                                     |
-| `KANBAN_SYNC_INTERVAL_MS` | `30000`       | Polling sync interval for remote providers; integer milliseconds >= 1000 |
-| `LINEAR_API_KEY`          | —             | Required when `KANBAN_PROVIDER=linear`                                   |
-| `LINEAR_TEAM_ID`          | —             | Required when `KANBAN_PROVIDER=linear`                                   |
-| `JIRA_BASE_URL`           | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `https://acme.atlassian.net`) |
-| `JIRA_EMAIL`              | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian account email)           |
-| `JIRA_API_TOKEN`          | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian API token)               |
-| `JIRA_PROJECT_KEY`        | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `ENG`)                        |
-| `JIRA_BOARD_ID`           | —             | Optional when `KANBAN_PROVIDER=jira` (Agile board id for column order)   |
-| `JIRA_ISSUE_TYPE`         | `Task`        | Optional when `KANBAN_PROVIDER=jira` (default issue type for new tasks)  |
+| Variable                     | Default       | Description                                                              |
+| ---------------------------- | ------------- | ------------------------------------------------------------------------ |
+| `KANBAN_PROVIDER`            | `local`       | `local`, `linear`, or `jira`                                             |
+| `KANBAN_STORAGE`             | `sqlite`      | `sqlite` or `postgres`                                                   |
+| `KANBAN_DATABASE_URL`        | —             | Required when `KANBAN_STORAGE=postgres`                                  |
+| `KANBAN_DB_PATH`             | auto-resolved | SQLite database path                                                     |
+| `KANBAN_DEFAULT_COLUMNS`     | —             | Optional bootstrap column names for local/Postgres caches                |
+| `KANBAN_DEFAULT_TASK_COLUMN` | —             | Optional created-task column override for local/Postgres caches          |
+| `KANBAN_SYNC_INTERVAL_MS`    | `30000`       | Polling sync interval for remote providers; integer milliseconds >= 1000 |
+| `LINEAR_API_KEY`             | —             | Required when `KANBAN_PROVIDER=linear`                                   |
+| `LINEAR_TEAM_ID`             | —             | Required when `KANBAN_PROVIDER=linear`                                   |
+| `JIRA_BASE_URL`              | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `https://acme.atlassian.net`) |
+| `JIRA_EMAIL`                 | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian account email)           |
+| `JIRA_API_TOKEN`             | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian API token)               |
+| `JIRA_PROJECT_KEY`           | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `ENG`)                        |
+| `JIRA_BOARD_ID`              | —             | Optional when `KANBAN_PROVIDER=jira` (Agile board id for column order)   |
+| `JIRA_ISSUE_TYPE`            | `Task`        | Optional when `KANBAN_PROVIDER=jira` (default issue type for new tasks)  |
 
-Without `KANBAN_DB_PATH`, the local provider resolves the database in this order:
+When `KANBAN_STORAGE=sqlite` and `KANBAN_DB_PATH` is unset, the local provider
+resolves the database in this order:
 
 1. `./.kanban/board.db` if it exists in the current working directory
 2. `~/.kanban/board.db` if it exists
@@ -246,6 +251,7 @@ Default columns: `recurring`, `backlog`, `in-progress`, `review`, `done`.
 ```bash
 kanban serve            # default port 3000
 kanban serve --port 8080
+kanban serve --sync-interval-ms 300000
 kanban serve --tunnel   # optional public URL for webhook testing
 ```
 
@@ -301,8 +307,9 @@ Starts a Bun HTTP server with:
 - **Readiness check** at `/api/ready` — reports whether the cache has warmed at least once
 - **Sync status** at `/api/sync-status` — reports background sync state plus provider sync metadata
 
-In `serve` mode, remote providers now warm once on startup and continue syncing
-in the background every `KANBAN_SYNC_INTERVAL_MS` milliseconds. Full
+In `serve` mode, remote providers warm once on startup and continue syncing in
+the background on the runtime's configured polling cadence. Use
+`KANBAN_SYNC_INTERVAL_MS` or `kanban serve --sync-interval-ms` to tune it. Full
 reconciliation is still handled by the provider-specific logic on top of that
 steady cadence.
 

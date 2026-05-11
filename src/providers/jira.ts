@@ -49,7 +49,7 @@ import type {
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
-import { resolvePollingSyncIntervalMs } from '../sync-config'
+import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
@@ -92,7 +92,7 @@ export class JiraProvider implements KanbanProvider {
     client?: JiraClient,
   ) {
     initJiraCacheSchema(db)
-    this.pollingSyncIntervalMs = config.pollingSyncIntervalMs ?? resolvePollingSyncIntervalMs()
+    this.pollingSyncIntervalMs = config.pollingSyncIntervalMs ?? DEFAULT_POLLING_SYNC_INTERVAL_MS
     this.client =
       client ??
       new JiraClient({

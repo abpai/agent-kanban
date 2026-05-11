@@ -9,7 +9,8 @@ this file before introducing a new public term.
 | **Provider**       | Concrete tracker implementation: local, Linear, or Jira.                                                                  | adapter, backend                                      |
 | **Task**           | Provider-normalized work item returned through the public API.                                                            | issue, ticket, card, unless translating provider APIs |
 | **Column**         | Provider-normalized workflow state a task can move to.                                                                    | status, state, lane, unless translating provider APIs |
-| **Cache**          | Local SQLite projection of provider data used for reads, dashboard, and reconciliation.                                   | source of truth                                       |
+| **Cache**          | Local SQLite or shared Postgres projection of provider data used for reads, dashboard, and reconciliation.                | source of truth                                       |
+| **Storage mode**   | Runtime choice of SQLite or Postgres for Agent Kanban's board/cache persistence.                                          | provider, cache                                       |
 | **Webhook**        | Provider push event used as the fast path for cache updates.                                                              | sync, poll                                            |
 | **Polling sync**   | Scheduled provider pull used to refresh normal task data.                                                                 | webhook repair                                        |
 | **Full reconcile** | Periodic provider pull that repairs stale cache rows, deletions, and derived activity/history.                            | poll, webhook                                         |

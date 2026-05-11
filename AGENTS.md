@@ -4,7 +4,10 @@
 
 ### Overview
 
-agent-kanban is a CLI-first kanban board tool with an optional web dashboard, built on **Bun** (not Node.js). It uses embedded SQLite via `bun:sqlite` — no external database server required.
+agent-kanban is a CLI-first kanban board tool with an optional web dashboard,
+built on **Bun** (not Node.js). SQLite via `bun:sqlite` remains the default
+local storage mode; Postgres is available for shared Garage Band deployments
+through `KANBAN_STORAGE=postgres` and `KANBAN_DATABASE_URL`.
 
 ### Shared vocabulary
 
