@@ -170,12 +170,10 @@ Supported events: `jira:issue_created`, `jira:issue_updated`,
 
 ### Optional HMAC verification
 
-Jira Cloud's native webhooks do not sign payloads with a shared secret. If
-you front the endpoint with a proxy (Cloudflare Worker, Atlassian Connect
-JWT, etc.) that injects an HMAC-SHA256 of the raw body, set
-`JIRA_WEBHOOK_SECRET` and the signature will be verified from the
-`X-Hub-Signature-256` header (`sha256=<hex>` prefix is optional). Requests
-with a missing or mismatched signature return HTTP 401.
+Jira Cloud admin webhooks can sign payloads with a shared secret. Set
+`JIRA_WEBHOOK_SECRET` to the webhook secret and the signature will be verified
+from Jira's `X-Hub-Signature` header (`sha256=<hex>`). Requests with a missing
+or mismatched signature return HTTP 401.
 
 If `JIRA_WEBHOOK_SECRET` is unset the endpoint is open — put it behind a
 trusted network boundary.

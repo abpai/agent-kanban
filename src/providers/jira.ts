@@ -11,7 +11,12 @@ import type {
   TaskComment,
   Task,
 } from '../types'
-import { headerLower, verifyHmacSha256, type WebhookRequest, type WebhookResult } from '../webhooks'
+import {
+  headerLower,
+  verifySha256HmacSignatureHeader,
+  type WebhookRequest,
+  type WebhookResult,
+} from '../webhooks'
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
 import { JIRA_CAPABILITIES } from './capabilities'
 import { providerUpstreamError, unsupportedOperation } from './errors'
@@ -712,8 +717,8 @@ export class JiraProvider implements KanbanProvider {
   async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
     const secret = process.env['JIRA_WEBHOOK_SECRET']
     if (secret) {
-      const sig = headerLower(payload.headers, 'x-hub-signature-256')
-      if (!verifyHmacSha256(secret, payload.rawBody, sig)) {
+      const sig = headerLower(payload.headers, 'x-hub-signature')
+      if (!verifySha256HmacSignatureHeader(secret, payload.rawBody, sig)) {
         return { handled: false, unauthorized: true, message: 'Invalid signature' }
       }
     }
