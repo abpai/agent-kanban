@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.6 - 2026-05-11
+
+- Jira webhook verification now uses Jira's native `X-Hub-Signature:
+sha256=<hex>` header when `JIRA_WEBHOOK_SECRET` is configured.
+- Retired the custom `X-Hub-Signature-256` Jira webhook compatibility path, so
+  signed Jira webhooks use the same header shape Jira emits.
+
+## 0.3.5 - 2026-05-11
+
+- Added Postgres-backed provider storage for local, Jira, and Linear providers,
+  including runtime storage configuration and provider-runtime wiring.
+- Added Postgres provider contract coverage for task, comment, and cache-backed
+  Jira/Linear flows.
+
 ## 0.3.4 - 2026-04-27
 
 - Added `KANBAN_SYNC_INTERVAL_MS` to tune remote provider polling sync cadence
