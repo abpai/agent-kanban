@@ -27,7 +27,7 @@ export function verifyHmacSha256(
   return timingSafeEqual(macBuf, expBuf)
 }
 
-export function verifyHmacSignature(
+export function verifySha256HmacSignatureHeader(
   secret: string,
   rawBody: string,
   providedSignature: string | undefined | null,

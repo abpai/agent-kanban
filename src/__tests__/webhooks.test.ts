@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { createHmac } from 'node:crypto'
-import { verifyHmacSha256, verifyHmacSignature } from '../webhooks'
+import { verifyHmacSha256, verifySha256HmacSignatureHeader } from '../webhooks'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
 import { JiraClient } from '../providers/jira-client'
 import { LinearProvider } from '../providers/linear'
@@ -57,17 +57,17 @@ describe('verifyHmacSha256', () => {
   })
 })
 
-describe('verifyHmacSignature', () => {
+describe('verifySha256HmacSignatureHeader', () => {
   test('accepts Jira WebSub-style sha256 signatures', () => {
     const body = '{"hello":"world"}'
     const sig = hmac('s3cr3t', body)
-    expect(verifyHmacSignature('s3cr3t', body, `sha256=${sig}`)).toBe(true)
+    expect(verifySha256HmacSignatureHeader('s3cr3t', body, `sha256=${sig}`)).toBe(true)
   })
 
   test('rejects missing method prefix', () => {
     const body = '{"hello":"world"}'
     const sig = hmac('s3cr3t', body)
-    expect(verifyHmacSignature('s3cr3t', body, sig)).toBe(false)
+    expect(verifySha256HmacSignatureHeader('s3cr3t', body, sig)).toBe(false)
   })
 })
 

@@ -30,7 +30,7 @@ import type {
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 import {
   headerLower,
-  verifyHmacSignature,
+  verifySha256HmacSignatureHeader,
   type WebhookRequest,
   type WebhookResult,
 } from '../webhooks'
@@ -1130,7 +1130,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     const secret = process.env['JIRA_WEBHOOK_SECRET']
     if (secret) {
       const sig = headerLower(payload.headers, 'x-hub-signature')
-      if (!verifyHmacSignature(secret, payload.rawBody, sig)) {
+      if (!verifySha256HmacSignatureHeader(secret, payload.rawBody, sig)) {
         return { handled: false, unauthorized: true, message: 'Invalid signature' }
       }
     }
