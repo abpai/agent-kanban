@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { createHmac } from 'node:crypto'
-import { verifyHmacSha256 } from '../webhooks'
+import { verifyHmacSha256, verifyHmacSignature } from '../webhooks'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
 import { JiraClient } from '../providers/jira-client'
 import { LinearProvider } from '../providers/linear'
@@ -54,6 +54,20 @@ describe('verifyHmacSha256', () => {
 
   test('rejects missing signature', () => {
     expect(verifyHmacSha256('s3cr3t', 'a', undefined)).toBe(false)
+  })
+})
+
+describe('verifyHmacSignature', () => {
+  test('accepts Jira WebSub-style sha256 signatures', () => {
+    const body = '{"hello":"world"}'
+    const sig = hmac('s3cr3t', body)
+    expect(verifyHmacSignature('s3cr3t', body, `sha256=${sig}`)).toBe(true)
+  })
+
+  test('rejects missing method prefix', () => {
+    const body = '{"hello":"world"}'
+    const sig = hmac('s3cr3t', body)
+    expect(verifyHmacSignature('s3cr3t', body, sig)).toBe(false)
   })
 })
 
@@ -181,7 +195,7 @@ describe('Jira webhook', () => {
       issue: { id: '300', key: 'ENG-300', fields: {} },
     })
     const result = await provider.handleWebhook({
-      headers: { 'x-hub-signature-256': 'sha256=deadbeef' },
+      headers: { 'x-hub-signature': 'sha256=deadbeef' },
       rawBody: body,
     })
     expect(result.unauthorized).toBe(true)
@@ -214,10 +228,32 @@ describe('Jira webhook', () => {
     })
     const sig = hmac('topsecret', body)
     const result = await provider.handleWebhook({
-      headers: { 'x-hub-signature-256': sig },
+      headers: { 'x-hub-signature': `sha256=${sig}` },
       rawBody: body,
     })
     expect(result.handled).toBe(true)
+  })
+
+  test('rejects the old custom x-hub-signature-256 header when secret is configured', async () => {
+    const db = new Database(':memory:')
+    seedJira(db)
+    process.env['JIRA_WEBHOOK_SECRET'] = 'topsecret'
+    const client = new JiraClient({
+      baseUrl: jiraConfig.baseUrl,
+      email: jiraConfig.email,
+      apiToken: jiraConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, jiraConfig, client)
+    const body = JSON.stringify({
+      webhookEvent: 'jira:issue_created',
+      issue: { id: '401', key: 'ENG-401', fields: {} },
+    })
+    const sig = hmac('topsecret', body)
+    const result = await provider.handleWebhook({
+      headers: { 'x-hub-signature-256': `sha256=${sig}` },
+      rawBody: body,
+    })
+    expect(result.unauthorized).toBe(true)
   })
 
   test('ignores issue updates from other projects', async () => {

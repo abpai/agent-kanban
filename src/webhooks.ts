@@ -27,6 +27,20 @@ export function verifyHmacSha256(
   return timingSafeEqual(macBuf, expBuf)
 }
 
+export function verifyHmacSignature(
+  secret: string,
+  rawBody: string,
+  providedSignature: string | undefined | null,
+): boolean {
+  if (!providedSignature) return false
+  const eq = providedSignature.indexOf('=')
+  if (eq === -1) return false
+  const method = providedSignature.slice(0, eq).toLowerCase()
+  const signature = providedSignature.slice(eq + 1)
+  if (method !== 'sha256') return false
+  return verifyHmacSha256(secret, rawBody, signature)
+}
+
 export function headerLower(headers: Record<string, string>, name: string): string | undefined {
   const target = name.toLowerCase()
   for (const [k, v] of Object.entries(headers)) {

@@ -28,7 +28,12 @@ import type {
   UpdateTaskInput,
 } from './types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
-import { headerLower, verifyHmacSha256, type WebhookRequest, type WebhookResult } from '../webhooks'
+import {
+  headerLower,
+  verifyHmacSignature,
+  type WebhookRequest,
+  type WebhookResult,
+} from '../webhooks'
 
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
@@ -1124,8 +1129,8 @@ export class PostgresJiraProvider implements KanbanProvider {
   async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
     const secret = process.env['JIRA_WEBHOOK_SECRET']
     if (secret) {
-      const sig = headerLower(payload.headers, 'x-hub-signature-256')
-      if (!verifyHmacSha256(secret, payload.rawBody, sig)) {
+      const sig = headerLower(payload.headers, 'x-hub-signature')
+      if (!verifyHmacSignature(secret, payload.rawBody, sig)) {
         return { handled: false, unauthorized: true, message: 'Invalid signature' }
       }
     }
