@@ -222,14 +222,12 @@ describe('postgres linear provider', () => {
       KANBAN_PROVIDER: process.env['KANBAN_PROVIDER'],
       LINEAR_API_KEY: process.env['LINEAR_API_KEY'],
       LINEAR_TEAM_ID: process.env['LINEAR_TEAM_ID'],
-      KANBAN_SYNC_INTERVAL_MS: process.env['KANBAN_SYNC_INTERVAL_MS'],
     }
     process.env['KANBAN_STORAGE'] = 'postgres'
     process.env['KANBAN_DATABASE_URL'] = databaseUrl
     process.env['KANBAN_PROVIDER'] = 'linear'
     process.env['LINEAR_API_KEY'] = 'linear-key'
     process.env['LINEAR_TEAM_ID'] = 'GB'
-    process.env['KANBAN_SYNC_INTERVAL_MS'] = '1000'
 
     if (databaseUrl) {
       sql = postgres(databaseUrl, { max: 1, onnotice: () => {} })

@@ -27,7 +27,7 @@ import type {
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
-import { resolvePollingSyncIntervalMs } from '../sync-config'
+import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 import { headerLower, verifyHmacSha256, type WebhookRequest, type WebhookResult } from '../webhooks'
 
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
@@ -140,7 +140,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     client?: JiraClient,
   ) {
     this.ready = this.ensureSchema()
-    this.pollingSyncIntervalMs = config.pollingSyncIntervalMs ?? resolvePollingSyncIntervalMs()
+    this.pollingSyncIntervalMs = config.pollingSyncIntervalMs ?? DEFAULT_POLLING_SYNC_INTERVAL_MS
     this.client =
       client ??
       new JiraClient({

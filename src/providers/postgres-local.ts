@@ -23,6 +23,7 @@ import type {
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
+import type { LocalTrackerConfig } from '../tracker-config'
 
 const DEFAULT_COLUMNS = [
   { name: 'recurring', position: 0 },
@@ -62,14 +63,14 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
-function defaultColumns(): Array<{ name: string; position: number }> {
-  const raw = process.env['KANBAN_DEFAULT_COLUMNS']?.trim()
-  const names = raw
-    ? raw
-        .split(',')
-        .map((name) => name.trim())
-        .filter(Boolean)
-    : DEFAULT_COLUMNS.map((column) => column.name)
+function defaultColumns(config: Pick<LocalTrackerConfig, 'defaultColumns'>): Array<{
+  name: string
+  position: number
+}> {
+  const names =
+    config.defaultColumns && config.defaultColumns.length > 0
+      ? config.defaultColumns
+      : DEFAULT_COLUMNS.map((column) => column.name)
   return names.map((name, position) => ({ name, position }))
 }
 
@@ -93,7 +94,10 @@ export class PostgresLocalProvider implements KanbanProvider {
   readonly type = 'local' as const
   private readonly ready: Promise<void>
 
-  constructor(private readonly sql: Sql) {
+  constructor(
+    private readonly sql: Sql,
+    private readonly config: Pick<LocalTrackerConfig, 'defaultColumns' | 'defaultTaskColumn'> = {},
+  ) {
     this.ready = this.ensureSchema().then(() => this.seedDefaultColumns())
   }
 
@@ -175,7 +179,7 @@ export class PostgresLocalProvider implements KanbanProvider {
     >`SELECT COUNT(*) AS count FROM columns`
     if (Number(row?.count ?? 0) > 0) return
 
-    for (const column of defaultColumns()) {
+    for (const column of defaultColumns(this.config)) {
       await this.sql`
         INSERT INTO columns (id, name, position, created_at, updated_at)
         VALUES (${generateId('c')}, ${column.name}, ${column.position}, ${nowIso()}, ${nowIso()})
@@ -221,7 +225,7 @@ export class PostgresLocalProvider implements KanbanProvider {
   }
 
   private async resolveDefaultTaskColumn(): Promise<Column> {
-    const configured = process.env['KANBAN_DEFAULT_TASK_COLUMN']?.trim()
+    const configured = this.config.defaultTaskColumn?.trim()
     if (configured) return this.resolveColumn(configured)
 
     await this.ready

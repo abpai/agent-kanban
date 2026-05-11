@@ -41,7 +41,7 @@ import type {
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
-import { resolvePollingSyncIntervalMs } from '../sync-config'
+import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 
 const FULL_RECONCILIATION_INTERVAL_MS = 5 * 60_000
 
@@ -81,7 +81,7 @@ export class LinearProvider implements KanbanProvider {
     private readonly db: Database,
     private readonly teamId: string,
     apiKey: string,
-    private readonly pollingSyncIntervalMs = resolvePollingSyncIntervalMs(),
+    private readonly pollingSyncIntervalMs = DEFAULT_POLLING_SYNC_INTERVAL_MS,
   ) {
     initLinearCacheSchema(db)
     this.client = new LinearClient(apiKey)

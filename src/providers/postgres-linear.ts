@@ -12,7 +12,7 @@ import type {
   Task,
   TaskComment,
 } from '../types'
-import { resolvePollingSyncIntervalMs } from '../sync-config'
+import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 import { headerLower, verifyHmacSha256, type WebhookRequest, type WebhookResult } from '../webhooks'
 import { LINEAR_CAPABILITIES } from './capabilities'
 import { unsupportedOperation } from './errors'
@@ -167,7 +167,7 @@ export class PostgresLinearProvider implements KanbanProvider {
     private readonly sql: Sql,
     private readonly teamId: string,
     apiKey: string,
-    private readonly pollingSyncIntervalMs = resolvePollingSyncIntervalMs(),
+    private readonly pollingSyncIntervalMs = DEFAULT_POLLING_SYNC_INTERVAL_MS,
     client?: LinearClient,
   ) {
     this.ready = this.ensureSchema()

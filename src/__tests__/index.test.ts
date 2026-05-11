@@ -59,8 +59,28 @@ describe('parseServeArgs', () => {
   })
 
   test('--tunnel opts in; --port and --db override', () => {
-    const opts = parseServeArgs(['serve', '--tunnel', '--port', '5050', '--db', '/tmp/b.db'])
-    expect(opts).toEqual({ db: '/tmp/b.db', port: 5050, tunnel: true })
+    const opts = parseServeArgs([
+      'serve',
+      '--tunnel',
+      '--port',
+      '5050',
+      '--db',
+      '/tmp/b.db',
+      '--sync-interval-ms',
+      '600000',
+    ])
+    expect(opts).toEqual({
+      db: '/tmp/b.db',
+      port: 5050,
+      syncIntervalMs: 600_000,
+      tunnel: true,
+    })
+  })
+
+  test('--sync-interval-ms rejects invalid values', () => {
+    for (const raw of ['999', '0']) {
+      expect(() => parseServeArgs(['serve', '--sync-interval-ms', raw])).toThrow(KanbanError)
+    }
   })
 })
 

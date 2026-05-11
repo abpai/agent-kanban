@@ -2,106 +2,93 @@ import { Database } from 'bun:sqlite'
 import postgres from 'postgres'
 
 import { getDbPath, migrateSchema, openDb } from './db'
-import { providerNotConfigured, unsupportedOperation } from './providers/errors'
+import { unsupportedOperation } from './providers/errors'
 import { createProvider } from './providers/index'
 import { PostgresJiraProvider } from './providers/postgres-jira'
 import { PostgresLinearProvider } from './providers/postgres-linear'
 import { PostgresLocalProvider } from './providers/postgres-local'
 import type { KanbanProvider } from './providers/types'
 import { resolveKanbanStorageConfig } from './storage-config'
-import { resolvePollingSyncIntervalMs } from './sync-config'
+import type { KanbanStorageConfig } from './storage-config'
+import { trackerConfigFromEnv, type TrackerConfig } from './tracker-config'
 
 export interface KanbanRuntime {
   provider: KanbanProvider
   dbPath: string
+  trackerConfig: TrackerConfig
   sqliteDb?: Database
+  syncIntervalMs?: number
   close(): Promise<void>
 }
 
-export async function openKanbanRuntime(opts: { dbPath?: string } = {}): Promise<KanbanRuntime> {
+export async function openKanbanRuntime(
+  opts: { dbPath?: string; storage?: KanbanStorageConfig; tracker?: TrackerConfig } = {},
+): Promise<KanbanRuntime> {
   const dbPath = opts.dbPath ?? getDbPath()
-  const storage = resolveKanbanStorageConfig(process.env, { defaultSqlitePath: dbPath })
+  const storage =
+    opts.storage ?? resolveKanbanStorageConfig(process.env, { defaultSqlitePath: dbPath })
+  const trackerConfig = opts.tracker ?? trackerConfigFromEnv(process.env)
 
   if (storage.mode === 'postgres') {
-    const providerType = (process.env['KANBAN_PROVIDER'] ?? 'local').trim().toLowerCase()
     const sql = postgres(storage.databaseUrl, { max: 5, onnotice: () => {} })
-    if (providerType === 'local') {
-      const provider = new PostgresLocalProvider(sql)
+    if (trackerConfig.provider === 'local') {
+      const provider = new PostgresLocalProvider(sql, trackerConfig)
       await provider.initialize()
       return {
         provider,
         dbPath,
+        trackerConfig,
+        syncIntervalMs: trackerConfig.syncIntervalMs,
         async close() {
           await sql.end({ timeout: 1 })
         },
       }
     }
-    if (providerType === 'jira') {
-      const baseUrl = process.env['JIRA_BASE_URL']
-      const email = process.env['JIRA_EMAIL']
-      const apiToken = process.env['JIRA_API_TOKEN']
-      const projectKey = process.env['JIRA_PROJECT_KEY']
-      const missing: string[] = []
-      if (!baseUrl) missing.push('JIRA_BASE_URL')
-      if (!email) missing.push('JIRA_EMAIL')
-      if (!apiToken) missing.push('JIRA_API_TOKEN')
-      if (!projectKey) missing.push('JIRA_PROJECT_KEY')
-      if (missing.length > 0) {
-        providerNotConfigured(
-          `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required when KANBAN_PROVIDER=jira`,
-        )
-      }
-      const boardIdRaw = process.env['JIRA_BOARD_ID']
-      const boardId = boardIdRaw ? Number.parseInt(boardIdRaw, 10) : undefined
-      const defaultIssueType = process.env['JIRA_ISSUE_TYPE'] ?? 'Task'
+    if (trackerConfig.provider === 'jira') {
       const provider = new PostgresJiraProvider(sql, {
-        baseUrl: baseUrl!,
-        email: email!,
-        apiToken: apiToken!,
-        projectKey: projectKey!,
-        boardId: Number.isFinite(boardId) ? boardId : undefined,
-        defaultIssueType,
-        pollingSyncIntervalMs: resolvePollingSyncIntervalMs(),
+        baseUrl: trackerConfig.baseUrl,
+        email: trackerConfig.email,
+        apiToken: trackerConfig.apiToken,
+        projectKey: trackerConfig.projectKey,
+        ...(trackerConfig.boardId !== undefined ? { boardId: trackerConfig.boardId } : {}),
+        defaultIssueType: trackerConfig.defaultIssueType ?? 'Task',
+        pollingSyncIntervalMs: trackerConfig.syncIntervalMs,
       })
       await provider.initialize()
       return {
         provider,
         dbPath,
+        trackerConfig,
+        syncIntervalMs: trackerConfig.syncIntervalMs,
         async close() {
           await sql.end({ timeout: 1 })
         },
       }
     }
-    if (providerType === 'linear') {
-      const apiKey = process.env['LINEAR_API_KEY']
-      const teamId = process.env['LINEAR_TEAM_ID']
-      const missing: string[] = []
-      if (!apiKey) missing.push('LINEAR_API_KEY')
-      if (!teamId) missing.push('LINEAR_TEAM_ID')
-      if (missing.length > 0) {
-        providerNotConfigured(
-          `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required when KANBAN_PROVIDER=linear`,
-        )
-      }
+    if (trackerConfig.provider === 'linear') {
       const provider = new PostgresLinearProvider(
         sql,
-        teamId!,
-        apiKey!,
-        resolvePollingSyncIntervalMs(),
+        trackerConfig.teamId,
+        trackerConfig.apiKey,
+        trackerConfig.syncIntervalMs,
       )
       await provider.initialize()
       return {
         provider,
         dbPath,
+        trackerConfig,
+        syncIntervalMs: trackerConfig.syncIntervalMs,
         async close() {
           await sql.end({ timeout: 1 })
         },
       }
     }
     try {
+      const _exhaustive: never = trackerConfig
       unsupportedOperation(
-        `KANBAN_STORAGE=postgres currently supports KANBAN_PROVIDER=local, linear, or jira in agent-kanban. ${providerType} support is the next storage slice.`,
+        `KANBAN_STORAGE=postgres currently supports KANBAN_PROVIDER=local, linear, or jira in agent-kanban.`,
       )
+      void _exhaustive
     } catch (err) {
       await sql.end({ timeout: 1 })
       throw err
@@ -111,9 +98,11 @@ export async function openKanbanRuntime(opts: { dbPath?: string } = {}): Promise
   const db = openDb(storage.sqlitePath)
   migrateSchema(db)
   return {
-    provider: createProvider(db, storage.sqlitePath),
+    provider: createProvider(db, trackerConfig, storage.sqlitePath),
     dbPath: storage.sqlitePath,
+    trackerConfig,
     sqliteDb: db,
+    syncIntervalMs: trackerConfig.syncIntervalMs,
     async close() {
       db.close()
     },

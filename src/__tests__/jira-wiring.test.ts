@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { ErrorCode, KanbanError } from '../errors'
 import { run } from '../index'
 import { createProvider } from '../providers/index'
+import { trackerConfigFromEnv } from '../tracker-config'
 
 const ENV_KEYS = [
   'KANBAN_PROVIDER',
@@ -17,6 +18,7 @@ const ENV_KEYS = [
   'JIRA_ISSUE_TYPE',
   'LINEAR_API_KEY',
   'LINEAR_TEAM_ID',
+  'KANBAN_SYNC_INTERVAL_MS',
 ] as const
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'jira-wiring-'))
@@ -75,17 +77,16 @@ describe('jira-wiring', () => {
     }
   })
 
-  test('createProvider throws PROVIDER_NOT_CONFIGURED listing missing JIRA_API_TOKEN', () => {
-    const { db, dbPath } = makeDb()
+  test('trackerConfigFromEnv throws PROVIDER_NOT_CONFIGURED listing missing JIRA_API_TOKEN', () => {
     process.env['KANBAN_PROVIDER'] = 'jira'
     process.env['JIRA_BASE_URL'] = 'https://example.atlassian.net'
     process.env['JIRA_EMAIL'] = 'a@example.com'
     delete process.env['JIRA_API_TOKEN']
     process.env['JIRA_PROJECT_KEY'] = 'ENG'
 
-    expect(() => createProvider(db, dbPath)).toThrow(KanbanError)
+    expect(() => trackerConfigFromEnv()).toThrow(KanbanError)
     try {
-      createProvider(db, dbPath)
+      trackerConfigFromEnv()
     } catch (err) {
       expect((err as KanbanError).code).toBe(ErrorCode.PROVIDER_NOT_CONFIGURED)
       expect((err as Error).message).toContain('JIRA_API_TOKEN')
@@ -93,8 +94,7 @@ describe('jira-wiring', () => {
     }
   })
 
-  test('createProvider throws PROVIDER_NOT_CONFIGURED listing multiple missing vars', () => {
-    const { db, dbPath } = makeDb()
+  test('trackerConfigFromEnv throws PROVIDER_NOT_CONFIGURED listing multiple missing vars', () => {
     process.env['KANBAN_PROVIDER'] = 'jira'
     process.env['JIRA_BASE_URL'] = 'https://example.atlassian.net'
     delete process.env['JIRA_EMAIL']
@@ -104,7 +104,7 @@ describe('jira-wiring', () => {
     let msg = ''
     let code: string | undefined
     try {
-      createProvider(db, dbPath)
+      trackerConfigFromEnv()
     } catch (err) {
       msg = (err as Error).message
       code = (err as KanbanError).code
@@ -118,17 +118,42 @@ describe('jira-wiring', () => {
 
   test('createProvider builds JiraProvider when all four required vars are set', () => {
     const { db, dbPath } = makeDb()
-    setJiraRequiredEnv()
-    const provider = createProvider(db, dbPath)
+    const provider = createProvider(
+      db,
+      {
+        provider: 'jira',
+        baseUrl: 'https://example.atlassian.net',
+        email: 'a@example.com',
+        apiToken: 'tok-test',
+        projectKey: 'ENG',
+      },
+      dbPath,
+    )
     expect(provider.type).toBe('jira')
   })
 
-  test('JIRA_BOARD_ID non-numeric falls back to undefined', () => {
-    const { db, dbPath } = makeDb()
+  test('JIRA_BOARD_ID non-numeric falls back to undefined in env loader', () => {
     setJiraRequiredEnv()
     process.env['JIRA_BOARD_ID'] = 'notanumber'
-    const provider = createProvider(db, dbPath)
-    expect(provider.type).toBe('jira')
+    const config = trackerConfigFromEnv()
+    expect(config.provider).toBe('jira')
+    expect(config).not.toHaveProperty('boardId')
+  })
+
+  test('trackerConfigFromEnv carries remote polling sync interval', () => {
+    setJiraRequiredEnv()
+    process.env['KANBAN_SYNC_INTERVAL_MS'] = '60000'
+
+    const jiraConfig = trackerConfigFromEnv()
+    expect(jiraConfig.provider).toBe('jira')
+    expect(jiraConfig.syncIntervalMs).toBe(60_000)
+
+    process.env['KANBAN_PROVIDER'] = 'linear'
+    process.env['LINEAR_API_KEY'] = 'lin_api_test'
+    process.env['LINEAR_TEAM_ID'] = 'team-test'
+    const linearConfig = trackerConfigFromEnv()
+    expect(linearConfig.provider).toBe('linear')
+    expect(linearConfig.syncIntervalMs).toBe(60_000)
   })
 
   test('kanban column add under KANBAN_PROVIDER=jira exits with UNSUPPORTED_OPERATION', async () => {
@@ -178,10 +203,15 @@ describe('jira-wiring', () => {
 
   test('KANBAN_PROVIDER=linear still builds LinearProvider (regression guard)', () => {
     const { db, dbPath } = makeDb()
-    process.env['KANBAN_PROVIDER'] = 'linear'
-    process.env['LINEAR_API_KEY'] = 'lin_api_test'
-    process.env['LINEAR_TEAM_ID'] = 'team-test'
-    const provider = createProvider(db, dbPath)
+    const provider = createProvider(
+      db,
+      {
+        provider: 'linear',
+        apiKey: 'lin_api_test',
+        teamId: 'team-test',
+      },
+      dbPath,
+    )
     expect(provider.type).toBe('linear')
   })
 })

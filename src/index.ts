@@ -10,9 +10,11 @@ import { columnAdd, columnDelete, columnList, columnRename, columnReorder } from
 import { bulkClearDoneCmd, bulkMoveAllCmd } from './commands/bulk'
 import { getConfigPath, loadConfig, saveConfig } from './config'
 import type { CliOutput, Priority } from './types'
-import { createProvider } from './providers/index'
 import { unsupportedOperation } from './providers/errors'
 import { openKanbanRuntime } from './provider-runtime'
+import { trackerConfigFromEnv } from './tracker-config'
+import type { KanbanProvider } from './providers/types'
+import { resolvePollingSyncIntervalMs } from './sync-config'
 
 interface ParsedArgs {
   values: Record<string, unknown>
@@ -49,7 +51,7 @@ function requireLocalProvider(providerType: string, feature: string): void {
 }
 
 async function routeTask(
-  provider: ReturnType<typeof createProvider>,
+  provider: KanbanProvider,
   action: string | undefined,
   positionals: string[],
   values: Record<string, unknown>,
@@ -141,7 +143,7 @@ async function routeTask(
 }
 
 async function routeComment(
-  provider: ReturnType<typeof createProvider>,
+  provider: KanbanProvider,
   action: string | undefined,
   positionals: string[],
 ): Promise<CliOutput> {
@@ -225,7 +227,7 @@ function routeBulk(
 }
 
 async function routeConfig(
-  provider: ReturnType<typeof createProvider>,
+  provider: KanbanProvider,
   dbPath: string,
   action: string | undefined,
   positionals: string[],
@@ -289,7 +291,7 @@ async function routeConfig(
 
 async function routeBoard(
   db: Database,
-  provider: ReturnType<typeof createProvider>,
+  provider: KanbanProvider,
   action: string | undefined,
 ): Promise<CliOutput> {
   switch (action) {
@@ -415,18 +417,19 @@ Commands:
   config add-project <name>   Add project
   config remove-project <name> Remove project
 
-  serve                       Start web dashboard [--port 3000]
+  serve                       Start web dashboard [--port 3000] [--sync-interval-ms ms]
   mcp                         Run as an MCP server over stdio (for Claude Desktop, etc.)
 
 Options:
   --pretty      Human-readable output (default: JSON)
-  --db <path>   Database path (default: local ./.kanban if present, else ~/.kanban if present, else create ./.kanban)
+  --db <path>   SQLite database path (default: local ./.kanban if present, else ~/.kanban if present, else create ./.kanban)
   --project <n> Filter/set project
   -h, --help    Show this help`
 
 export interface ServeOptions {
   db?: string
   port: number
+  syncIntervalMs?: number
   tunnel: boolean
 }
 
@@ -436,6 +439,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
     options: {
       db: { type: 'string' },
       port: { type: 'string' },
+      'sync-interval-ms': { type: 'string' },
       tunnel: { type: 'boolean', default: false },
     },
     strict: false,
@@ -447,8 +451,15 @@ export function parseServeArgs(argv: string[]): ServeOptions {
   return {
     db: values.db as string | undefined,
     port,
+    ...(values['sync-interval-ms']
+      ? { syncIntervalMs: parseSyncIntervalMs(values['sync-interval-ms'] as string) }
+      : {}),
     tunnel: Boolean(values.tunnel),
   }
+}
+
+function parseSyncIntervalMs(raw: string): number {
+  return resolvePollingSyncIntervalMs(raw, { label: '--sync-interval-ms' })
 }
 
 export interface McpOptions {
@@ -480,9 +491,19 @@ if (import.meta.main) {
   } else if (argv[0] === 'serve') {
     const opts = parseServeArgs(argv)
 
-    const runtime = await openKanbanRuntime({ dbPath: opts.db ?? getDbPath() })
+    const runtime = await openKanbanRuntime({
+      dbPath: opts.db ?? getDbPath(),
+      ...(opts.syncIntervalMs !== undefined
+        ? {
+            tracker: {
+              ...trackerConfigFromEnv(process.env),
+              syncIntervalMs: opts.syncIntervalMs,
+            },
+          }
+        : {}),
+    })
     const { startServer } = await import('./server')
-    startServer(runtime.provider, opts.port)
+    startServer(runtime.provider, opts.port, { syncIntervalMs: runtime.syncIntervalMs })
 
     if (opts.tunnel) {
       const { startCloudflareTunnel } = await import('./tunnel')

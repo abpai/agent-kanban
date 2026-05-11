@@ -229,7 +229,6 @@ describe('postgres jira provider', () => {
       JIRA_EMAIL: process.env['JIRA_EMAIL'],
       JIRA_API_TOKEN: process.env['JIRA_API_TOKEN'],
       JIRA_PROJECT_KEY: process.env['JIRA_PROJECT_KEY'],
-      KANBAN_SYNC_INTERVAL_MS: process.env['KANBAN_SYNC_INTERVAL_MS'],
     }
 
     process.env['KANBAN_STORAGE'] = 'postgres'
@@ -239,7 +238,6 @@ describe('postgres jira provider', () => {
     process.env['JIRA_EMAIL'] = 'user@example.com'
     process.env['JIRA_API_TOKEN'] = 'token'
     process.env['JIRA_PROJECT_KEY'] = 'ENG'
-    process.env['KANBAN_SYNC_INTERVAL_MS'] = '1000'
 
     if (databaseUrl) {
       sql = postgres(databaseUrl, { max: 1, onnotice: () => {} })
