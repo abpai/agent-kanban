@@ -139,6 +139,45 @@ describe('Jira webhook', () => {
     expect(tasks.find((t) => t.externalRef === 'ENG-100')?.title).toBe('New issue')
   })
 
+  test('issue_created accepts Jira webhook string descriptions', async () => {
+    const db = new Database(':memory:')
+    seedJira(db)
+    delete process.env['JIRA_WEBHOOK_SECRET']
+    const client = new JiraClient({
+      baseUrl: jiraConfig.baseUrl,
+      email: jiraConfig.email,
+      apiToken: jiraConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, jiraConfig, client)
+    const description = '*Repo:* https://github.com/abpai/smoke-test\n\nString webhook body.'
+    const body = JSON.stringify({
+      webhookEvent: 'jira:issue_created',
+      issue: {
+        id: '101',
+        key: 'ENG-101',
+        fields: {
+          summary: 'String description issue',
+          description,
+          status: { id: '1', name: 'To Do' },
+          issuetype: { id: '10000', name: 'Task' },
+          assignee: null,
+          labels: ['alpha'],
+          comment: { total: 0 },
+          created: '2025-02-01T00:00:00.000Z',
+          updated: '2025-02-01T00:00:00.000Z',
+          project: { id: '1', key: 'ENG' },
+        },
+      },
+    })
+
+    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+
+    expect(result.handled).toBe(true)
+    expect(getCachedJiraTasks(db).find((t) => t.externalRef === 'ENG-101')?.description).toBe(
+      description,
+    )
+  })
+
   test('issue_deleted removes the task', async () => {
     const db = new Database(':memory:')
     seedJira(db)
