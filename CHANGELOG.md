@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7 - 2026-05-12
+
+- Fixed Jira webhook ingestion for SMTS payloads whose `issue.fields.description`
+  arrives as a plain string instead of an ADF document, preventing
+  `/api/webhooks/jira` from returning 500 on normal issue updates.
+- Added Jira webhook and ADF regression coverage for string descriptions.
+
 ## 0.3.6 - 2026-05-11
 
 - Jira webhook verification now uses Jira's native `X-Hub-Signature:
