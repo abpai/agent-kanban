@@ -181,6 +181,13 @@ describe('plainTextToAdf / adfToPlainText', () => {
     expect(adfToPlainText(doc)).toBe('before\n\nafter')
   })
 
+  test('Jira webhook plain string descriptions pass through unchanged', () => {
+    const description =
+      '*Repo:* https://github.com/abpai/smoke-test\n\nPlease make one minimal change.'
+
+    expect(adfToPlainText(description)).toBe(description)
+  })
+
   test('strong + link marks survive on read as markdown', () => {
     const doc: AdfDocument = {
       version: 1,

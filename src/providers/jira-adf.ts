@@ -434,6 +434,8 @@ function renderBlocks(nodes: AdfBlockNode[]): string {
   return out.join('\n\n')
 }
 
-export function adfToPlainText(doc: AdfDocument): string {
+export function adfToPlainText(doc: AdfDocument | string | null | undefined): string {
+  if (typeof doc === 'string') return doc
+  if (!doc || !Array.isArray(doc.content)) return ''
   return renderBlocks(doc.content)
 }
