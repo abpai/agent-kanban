@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Postgres providers now record a best-effort receipt into a new `webhook_events`
+  table on every received webhook (`provider`, `event_type`, `external_ref`,
+  `status` of `accepted`/`skipped`/`error`, plus a `detail` jsonb that only
+  carries `{ error }` on failures). The table is created on provider bootstrap,
+  the write never fails or slows a webhook, and the whole feature no-ops when
+  `KANBAN_WEBHOOK_EVENTS` is set to `0`/`false`/`off`/`no`. It is not used by
+  agent-kanban itself — it lets an external consumer (e.g. Garage Band's Studio
+  view) see whether the sidecar received/processed a tracker webhook. See
+  `docs/webhook-events.md`.
+
 ## 0.3.7 - 2026-05-12
 
 - Fixed Jira webhook ingestion for SMTS payloads whose `issue.fields.description`
