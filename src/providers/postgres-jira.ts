@@ -34,6 +34,12 @@ import {
   type WebhookRequest,
   type WebhookResult,
 } from '../webhooks'
+import {
+  ensureWebhookEventsSchema,
+  extractWebhookMeta,
+  recordWebhookEvent,
+  webhookEventStatus,
+} from '../webhook-events'
 
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
@@ -230,6 +236,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     await this.sql`
       CREATE INDEX IF NOT EXISTS jira_activity_created_at_idx ON jira_activity(created_at DESC)
     `
+    await ensureWebhookEventsSchema(this.sql)
   }
 
   private async setMeta(key: string, value: string): Promise<void> {
@@ -1127,6 +1134,28 @@ export class PostgresJiraProvider implements KanbanProvider {
   }
 
   async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
+    const meta = extractWebhookMeta('jira', payload.rawBody)
+    let result: WebhookResult
+    try {
+      result = await this.handleWebhookInner(payload)
+    } catch (err) {
+      void recordWebhookEvent(this.sql, {
+        provider: 'jira',
+        ...meta,
+        status: 'error',
+        detail: { error: err instanceof Error ? err.message : String(err) },
+      })
+      throw err
+    }
+    void recordWebhookEvent(this.sql, {
+      provider: 'jira',
+      ...meta,
+      status: webhookEventStatus(result),
+    })
+    return result
+  }
+
+  private async handleWebhookInner(payload: WebhookRequest): Promise<WebhookResult> {
     const secret = process.env['JIRA_WEBHOOK_SECRET']
     if (secret) {
       const sig = headerLower(payload.headers, 'x-hub-signature')

@@ -14,6 +14,12 @@ import type {
 } from '../types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 import { headerLower, verifyHmacSha256, type WebhookRequest, type WebhookResult } from '../webhooks'
+import {
+  ensureWebhookEventsSchema,
+  extractWebhookMeta,
+  recordWebhookEvent,
+  webhookEventStatus,
+} from '../webhook-events'
 import { LINEAR_CAPABILITIES } from './capabilities'
 import { unsupportedOperation } from './errors'
 import { LinearClient, type LinearComment } from './linear-client'
@@ -255,6 +261,7 @@ export class PostgresLinearProvider implements KanbanProvider {
     await this.sql`
       CREATE INDEX IF NOT EXISTS linear_activity_created_at_idx ON linear_activity(created_at DESC)
     `
+    await ensureWebhookEventsSchema(this.sql)
   }
 
   private async setMeta(key: string, value: string): Promise<void> {
@@ -979,6 +986,28 @@ export class PostgresLinearProvider implements KanbanProvider {
   }
 
   async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
+    const meta = extractWebhookMeta('linear', payload.rawBody)
+    let result: WebhookResult
+    try {
+      result = await this.handleWebhookInner(payload)
+    } catch (err) {
+      void recordWebhookEvent(this.sql, {
+        provider: 'linear',
+        ...meta,
+        status: 'error',
+        detail: { error: err instanceof Error ? err.message : String(err) },
+      })
+      throw err
+    }
+    void recordWebhookEvent(this.sql, {
+      provider: 'linear',
+      ...meta,
+      status: webhookEventStatus(result),
+    })
+    return result
+  }
+
+  private async handleWebhookInner(payload: WebhookRequest): Promise<WebhookResult> {
     const secret = process.env['LINEAR_WEBHOOK_SECRET']
     if (secret) {
       const sig = headerLower(payload.headers, 'linear-signature')
