@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-05-12
 
 - Postgres providers now record a best-effort receipt into a new `webhook_events`
   table on every received webhook (`provider`, `event_type`, `external_ref`,
