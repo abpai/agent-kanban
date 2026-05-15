@@ -3,6 +3,7 @@ import postgres from 'postgres'
 
 import { run } from '../index'
 import type { Task } from '../types'
+import { PostgresJiraProvider } from '../providers/postgres-jira'
 
 const databaseUrl = process.env['KANBAN_PG_TEST_URL'] ?? process.env['DATABASE_URL']
 const pgTest = databaseUrl ? test : test.skip
@@ -43,6 +44,7 @@ function makeIssue(
     id: string
     key: string
     summary: string
+    labels: string[]
     updated: string
   }> = {},
 ): Record<string, unknown> {
@@ -56,7 +58,7 @@ function makeIssue(
       issuetype: { id: '10000', name: 'Task' },
       priority: { id: '2', name: 'High' },
       assignee: { accountId: 'a1', displayName: 'Alice' },
-      labels: ['garage'],
+      labels: overrides.labels ?? ['garage'],
       comment: { total: 0 },
       created: '2026-01-01T00:00:00Z',
       updated: overrides.updated ?? '2026-01-02T00:00:00Z',
@@ -114,12 +116,13 @@ function standardRoutes(): StubRoute[] {
       match: (url) => url.endsWith('/rest/api/3/issue'),
       handler: async (_url, init) => {
         const body = JSON.parse(String(init?.body ?? '{}')) as {
-          fields?: { summary?: string }
+          fields?: { labels?: string[]; summary?: string }
         }
         const issue = makeIssue({
           id: '10002',
           key: 'ENG-2',
           summary: body.fields?.summary ?? 'Created issue',
+          labels: body.fields?.labels,
           updated: '2026-01-03T00:00:00Z',
         })
         issues.push(issue)
@@ -301,6 +304,34 @@ describe('postgres jira provider', () => {
 
     const comments = expectOk(await run(['comment', 'list', 'ENG-2']))
     expect(comments).toHaveLength(1)
+  })
+
+  pgTest('passes labels when creating Jira tasks through Postgres storage', async () => {
+    expect(sql).not.toBeNull()
+    if (!sql) throw new Error('expected postgres test connection')
+    const stub = jiraFetchStub(standardRoutes())
+    globalThis.fetch = stub.fn
+    const provider = new PostgresJiraProvider(sql, {
+      baseUrl: 'https://example.atlassian.net',
+      email: 'user@example.com',
+      apiToken: 'token',
+      projectKey: 'ENG',
+    })
+
+    const created = await provider.createTask({
+      title: 'Created with labels',
+      labels: ['garage-smoke', 'garage-owner-local'],
+    })
+
+    expect(created.labels).toEqual(['garage-smoke', 'garage-owner-local'])
+    const postCall = stub.calls.find(
+      (call) => call.init?.method === 'POST' && call.url.endsWith('/rest/api/3/issue'),
+    )
+    expect(postCall).toBeDefined()
+    const body = JSON.parse(String(postCall?.init?.body ?? '{}')) as {
+      fields?: Record<string, unknown>
+    }
+    expect(body.fields?.labels).toEqual(['garage-smoke', 'garage-owner-local'])
   })
 
   pgTest('moves Jira tasks through Postgres storage', async () => {

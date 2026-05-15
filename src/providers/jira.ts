@@ -488,6 +488,8 @@ export class JiraProvider implements KanbanProvider {
         accountId: this.resolveAssigneeAccountId(input.assignee),
       }
     }
+    const labels = normalizeLabels(input.labels)
+    if (labels.length > 0) fields['labels'] = labels
     // Column at create-time is intentionally unsupported in Jira mode: new
     // issues land in the project workflow's default start state. Use
     // `moveTask` after create to change status.
@@ -778,4 +780,8 @@ export class JiraProvider implements KanbanProvider {
 
     return { handled: false, message: `Unsupported event: ${event}` }
   }
+}
+
+function normalizeLabels(labels: string[] | undefined): string[] {
+  return (labels ?? []).map((label) => label.trim()).filter(Boolean)
 }

@@ -948,6 +948,8 @@ export class PostgresJiraProvider implements KanbanProvider {
     if (input.assignee) {
       fields['assignee'] = { accountId: await this.resolveAssigneeAccountId(input.assignee) }
     }
+    const labels = normalizeLabels(input.labels)
+    if (labels.length > 0) fields['labels'] = labels
     const created = await this.client.createIssue({ fields })
     await this.sync(true)
     const fresh = await this.getCachedTask(created.key)
@@ -1219,4 +1221,8 @@ export class PostgresJiraProvider implements KanbanProvider {
 
     return { handled: false, message: `Unsupported event: ${event}` }
   }
+}
+
+function normalizeLabels(labels: string[] | undefined): string[] {
+  return (labels ?? []).map((label) => label.trim()).filter(Boolean)
 }

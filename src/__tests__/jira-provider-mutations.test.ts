@@ -352,6 +352,7 @@ describe('JiraProvider mutations', () => {
       description: 'hello\n- item',
       priority: 'high',
       assignee: 'Alice',
+      labels: ['garage-smoke', 'garage-owner-local'],
     })
 
     expect(task.externalRef).toBe('ENG-10')
@@ -365,6 +366,7 @@ describe('JiraProvider mutations', () => {
     expect((body.fields.priority as { name: string }).name).toBe('High')
     expect((body.fields.assignee as { accountId: string }).accountId).toBe('a-1')
     expect((body.fields.project as { key: string }).key).toBe('ENG')
+    expect(body.fields.labels).toEqual(['garage-smoke', 'garage-owner-local'])
     const desc = body.fields.description as {
       version: number
       type: string

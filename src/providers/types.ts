@@ -29,6 +29,7 @@ export interface CreateTaskInput {
   priority?: Priority
   assignee?: string
   project?: string
+  labels?: string[]
   metadata?: string
 }
 
