@@ -43,6 +43,11 @@ export interface LinearComment {
   user?: { id: string; name?: string | null; displayName?: string | null } | null
 }
 
+export interface LinearIssueLabel {
+  id: string
+  name: string
+}
+
 interface LinearIssueNode {
   id: string
   identifier: string
@@ -232,6 +237,40 @@ export class LinearClient {
     return data.projects.nodes
   }
 
+  async listIssueLabels(): Promise<LinearIssueLabel[]> {
+    let after: string | null = null
+    const labels: LinearIssueLabel[] = []
+
+    do {
+      const data: {
+        issueLabels: {
+          nodes: LinearIssueLabel[]
+          pageInfo: PageInfo
+        }
+      } = await this.query(
+        `
+          query IssueLabels($after: String) {
+            issueLabels(first: 100, after: $after) {
+              nodes {
+                id
+                name
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        `,
+        { after },
+      )
+      labels.push(...data.issueLabels.nodes)
+      after = data.issueLabels.pageInfo.hasNextPage ? data.issueLabels.pageInfo.endCursor : null
+    } while (after)
+
+    return labels
+  }
+
   async listIssues(teamId: string, updatedAfter?: string): Promise<LinearIssue[]> {
     let after: string | null = null
     const issues: LinearIssue[] = []
@@ -311,6 +350,7 @@ export class LinearClient {
     priority?: number
     assigneeId?: string
     projectId?: string
+    labelIds?: string[]
   }): Promise<{ success: boolean; issue: LinearIssue | null }> {
     const data = await this.query<{
       issueCreate: { success: boolean; issue: LinearIssueNode | null }
@@ -349,6 +389,7 @@ export class LinearClient {
           priority: input.priority,
           assigneeId: input.assigneeId,
           projectId: input.projectId,
+          labelIds: input.labelIds,
         },
       },
     )
@@ -566,4 +607,57 @@ export class LinearClient {
       comment: data.commentUpdate.comment,
     }
   }
+}
+
+export function resolveLinearLabelIds(
+  inputLabels: string[] | undefined,
+  availableLabels: LinearIssueLabel[],
+): string[] | undefined {
+  const requested = normalizeLabels(inputLabels)
+  if (requested.length === 0) return undefined
+
+  const byName = new Map(
+    availableLabels.map((label) => [label.name.trim().toLowerCase(), label.id]),
+  )
+  const byId = new Map(availableLabels.map((label) => [label.id, label.id]))
+  const ids: string[] = []
+  const missing: string[] = []
+
+  for (const label of requested) {
+    const id =
+      byName.get(label.toLowerCase()) ??
+      byId.get(label) ??
+      (looksLikeUuid(label) ? label : undefined)
+    if (!id) {
+      missing.push(label)
+      continue
+    }
+    if (!ids.includes(id)) ids.push(id)
+  }
+
+  if (missing.length > 0) {
+    providerUpstreamError(
+      `Linear label${missing.length === 1 ? '' : 's'} not found: ${missing.join(', ')}`,
+    )
+  }
+
+  return ids.length > 0 ? ids : undefined
+}
+
+function normalizeLabels(labels: string[] | undefined): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const label of labels ?? []) {
+    const trimmed = label.trim()
+    if (!trimmed) continue
+    const key = trimmed.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(trimmed)
+  }
+  return out
+}
+
+function looksLikeUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }

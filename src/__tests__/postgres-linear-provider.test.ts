@@ -3,6 +3,7 @@ import postgres from 'postgres'
 
 import { run } from '../index'
 import type { Task, TaskComment } from '../types'
+import { PostgresLinearProvider } from '../providers/postgres-linear'
 
 const databaseUrl = process.env['KANBAN_PG_TEST_URL'] ?? process.env['DATABASE_URL']
 const pgTest = databaseUrl ? test : test.skip
@@ -30,6 +31,8 @@ type StubComment = {
   updatedAt: string
   user: { id: string; name: string; displayName: string }
 }
+
+type LinearStubCall = { query: string; variables: Record<string, unknown> }
 
 function expectOk<T>(result: Awaited<ReturnType<typeof run>>): T {
   expect(result.exitCode).toBe(0)
@@ -64,7 +67,7 @@ function makeIssue(overrides: Partial<StubIssue> = {}): StubIssue {
   }
 }
 
-function linearFetchStub(): typeof fetch {
+function linearFetchStub(calls: LinearStubCall[] = []): typeof fetch {
   const commentsByIssue = new Map<string, StubComment[]>()
   const issues: StubIssue[] = [makeIssue()]
   const states = [
@@ -83,6 +86,12 @@ function linearFetchStub(): typeof fetch {
       { id: 'proj-1', name: 'Garage', url: 'https://linear.app/project/garage', state: 'started' },
     ],
   }
+  const labels = {
+    nodes: [
+      { id: 'label-smoke', name: 'garage-smoke' },
+      { id: 'label-owner', name: 'garage-owner-local' },
+    ],
+  }
 
   return (async (_input: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? '{}')) as {
@@ -91,6 +100,7 @@ function linearFetchStub(): typeof fetch {
     }
     const query = body.query
     const variables = body.variables ?? {}
+    calls.push({ query, variables })
 
     if (query.includes('query TeamSnapshot')) {
       return Response.json({ data: { team } })
@@ -100,6 +110,16 @@ function linearFetchStub(): typeof fetch {
     }
     if (query.includes('query Projects')) {
       return Response.json({ data: { projects } })
+    }
+    if (query.includes('query IssueLabels')) {
+      return Response.json({
+        data: {
+          issueLabels: {
+            ...labels,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      })
     }
     if (query.includes('query Issues')) {
       return Response.json({
@@ -119,8 +139,10 @@ function linearFetchStub(): typeof fetch {
         stateId?: string
         assigneeId?: string
         projectId?: string
+        labelIds?: string[]
       }
       const state = states.find((candidate) => candidate.id === input.stateId) ?? states[0]!
+      const issueLabels = labels.nodes.filter((label) => input.labelIds?.includes(label.id))
       const issue = makeIssue({
         id: 'lin-2',
         identifier: 'GB-2',
@@ -130,6 +152,7 @@ function linearFetchStub(): typeof fetch {
         state,
         assignee: users.nodes.find((user) => user.id === input.assigneeId) ?? null,
         project: projects.nodes.find((project) => project.id === input.projectId) ?? null,
+        labels: { nodes: issueLabels },
         updatedAt: '2026-01-03T00:00:00.000Z',
       })
       issues.push(issue)
@@ -305,5 +328,27 @@ describe('postgres linear provider', () => {
 
     const comments = expectOk<TaskComment[]>(await run(['comment', 'list', 'GB-2']))
     expect(comments).toHaveLength(1)
+  })
+
+  pgTest('passes labels when creating Linear tasks through Postgres storage', async () => {
+    expect(sql).not.toBeNull()
+    if (!sql) throw new Error('expected postgres test connection')
+
+    const calls: LinearStubCall[] = []
+    globalThis.fetch = linearFetchStub(calls)
+    const provider = new PostgresLinearProvider(sql, 'GB', 'linear-key')
+
+    const created = await provider.createTask({
+      title: 'Created with labels',
+      labels: ['garage-smoke', 'garage-owner-local'],
+    })
+
+    expect(created.labels).toEqual(['garage-smoke', 'garage-owner-local'])
+    const createCall = calls.find((call) => call.query.includes('mutation CreateIssue'))
+    expect(createCall).toBeDefined()
+    expect((createCall?.variables.input as { labelIds?: string[] })?.labelIds).toEqual([
+      'label-smoke',
+      'label-owner',
+    ])
   })
 })

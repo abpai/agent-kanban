@@ -133,15 +133,32 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
     })
 
-    let createIssueTeamId: string | null = null
+    const createIssueInput: { current?: { labelIds?: string[]; teamId?: string } } = {}
     globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as {
         query: string
-        variables: { input?: { teamId?: string } }
+        variables: { input?: { labelIds?: string[]; teamId?: string } }
+      }
+
+      if (body.query.includes('query IssueLabels')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issueLabels: {
+                nodes: [
+                  { id: 'label-smoke', name: 'garage-smoke' },
+                  { id: 'label-owner', name: 'garage-owner-local' },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
       }
 
       if (body.query.includes('mutation CreateIssue')) {
-        createIssueTeamId = body.variables.input?.teamId ?? null
+        createIssueInput.current = body.variables.input
         return new Response(
           JSON.stringify({
             data: {
@@ -159,7 +176,12 @@ describe('LinearProvider sync', () => {
                   assignee: null,
                   project: null,
                   state: { id: 'state-1', name: 'Todo', position: 0 },
-                  labels: { nodes: [] },
+                  labels: {
+                    nodes: [
+                      { id: 'label-smoke', name: 'garage-smoke' },
+                      { id: 'label-owner', name: 'garage-owner-local' },
+                    ],
+                  },
                   comments: {
                     nodes: [],
                     pageInfo: { hasNextPage: false, endCursor: null },
@@ -176,10 +198,15 @@ describe('LinearProvider sync', () => {
     }) as unknown as typeof fetch
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
-    const created = await provider.createTask({ title: 'Hello' })
+    const created = await provider.createTask({
+      title: 'Hello',
+      labels: ['garage-smoke', 'garage-owner-local'],
+    })
 
-    expect(String(createIssueTeamId)).toBe('3ca24047-e954-44e8-b266-c7182410befb')
+    expect(createIssueInput.current?.teamId).toBe('3ca24047-e954-44e8-b266-c7182410befb')
+    expect(createIssueInput.current?.labelIds).toEqual(['label-smoke', 'label-owner'])
     expect(created.externalRef).toBe('R2P-1')
+    expect(created.labels).toEqual(['garage-smoke', 'garage-owner-local'])
   })
 
   test('periodic full sync prunes cached issues missing from upstream', async () => {
