@@ -1,6 +1,7 @@
 import { KanbanError, ErrorCode } from './errors'
 import type { BoardConfig, CliOutput, Task } from './types'
 import type { CreateTaskInput, UpdateTaskInput, KanbanProvider } from './providers/types'
+import { normalizeLabels } from './labels'
 
 export type WsEvent =
   | { type: 'task:upsert'; task: Task; columnName: string }
@@ -146,6 +147,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
         priority: body.priority,
         assignee: body.assignee,
         project: body.project,
+        labels: normalizeLabels(body.labels),
         metadata: body.metadata,
       })
       return { ok: true, data: created }

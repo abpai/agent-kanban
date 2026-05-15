@@ -16,7 +16,7 @@ import type {
 import { JIRA_CAPABILITIES } from './capabilities'
 import { decodeColumnStatusIds, type JiraActivityRow, type JiraColumnRow } from './jira-cache'
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
-import { JiraClient, type JiraComment, type JiraIssue } from './jira-client'
+import { JiraClient, normalizeJiraLabels, type JiraComment, type JiraIssue } from './jira-client'
 import type { JiraProviderConfig } from './jira'
 import { providerUpstreamError, unsupportedOperation } from './errors'
 import type {
@@ -948,7 +948,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     if (input.assignee) {
       fields['assignee'] = { accountId: await this.resolveAssigneeAccountId(input.assignee) }
     }
-    const labels = normalizeLabels(input.labels)
+    const labels = normalizeJiraLabels(input.labels)
     if (labels.length > 0) fields['labels'] = labels
     const created = await this.client.createIssue({ fields })
     await this.sync(true)
@@ -1221,8 +1221,4 @@ export class PostgresJiraProvider implements KanbanProvider {
 
     return { handled: false, message: `Unsupported event: ${event}` }
   }
-}
-
-function normalizeLabels(labels: string[] | undefined): string[] {
-  return (labels ?? []).map((label) => label.trim()).filter(Boolean)
 }

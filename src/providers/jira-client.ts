@@ -388,3 +388,7 @@ export class JiraClient {
     })
   }
 }
+
+export function normalizeJiraLabels(labels: string[] | undefined): string[] {
+  return (labels ?? []).map((label) => label.trim()).filter(Boolean)
+}

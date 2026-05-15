@@ -20,7 +20,7 @@ import {
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
 import { JIRA_CAPABILITIES } from './capabilities'
 import { providerUpstreamError, unsupportedOperation } from './errors'
-import { JiraClient, type JiraComment, type JiraIssue } from './jira-client'
+import { JiraClient, normalizeJiraLabels, type JiraComment, type JiraIssue } from './jira-client'
 import {
   adjustJiraIssueCommentCount,
   decodeColumnStatusIds,
@@ -488,7 +488,7 @@ export class JiraProvider implements KanbanProvider {
         accountId: this.resolveAssigneeAccountId(input.assignee),
       }
     }
-    const labels = normalizeLabels(input.labels)
+    const labels = normalizeJiraLabels(input.labels)
     if (labels.length > 0) fields['labels'] = labels
     // Column at create-time is intentionally unsupported in Jira mode: new
     // issues land in the project workflow's default start state. Use
@@ -780,8 +780,4 @@ export class JiraProvider implements KanbanProvider {
 
     return { handled: false, message: `Unsupported event: ${event}` }
   }
-}
-
-function normalizeLabels(labels: string[] | undefined): string[] {
-  return (labels ?? []).map((label) => label.trim()).filter(Boolean)
 }

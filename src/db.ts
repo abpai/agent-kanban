@@ -6,6 +6,7 @@ import { generateId } from './id'
 import { ErrorCode, KanbanError } from './errors'
 import type { BoardView, Column, Priority, Task, TaskComment, TaskWithColumn } from './types'
 import { logActivity, enterColumn, exitColumn } from './activity'
+import { normalizeLabels, parseStoredLabels } from './labels'
 
 const DEFAULT_COLUMNS = [
   { name: 'recurring', position: 0 },
@@ -63,6 +64,7 @@ export function initSchema(db: Database): void {
       priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low','medium','high','urgent')),
       assignee TEXT NOT NULL DEFAULT '',
       project TEXT NOT NULL DEFAULT '',
+      labels TEXT NOT NULL DEFAULT '[]',
       metadata TEXT NOT NULL DEFAULT '{}',
       revision INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -123,6 +125,10 @@ export function migrateSchema(db: Database): void {
   const hasProject = columns.some((c) => c.name === 'project')
   if (!hasProject) {
     db.run("ALTER TABLE tasks ADD COLUMN project TEXT NOT NULL DEFAULT ''")
+  }
+  const hasLabels = columns.some((c) => c.name === 'labels')
+  if (!hasLabels) {
+    db.run("ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
   }
   const hasRevision = columns.some((c) => c.name === 'revision')
   if (!hasRevision) {
@@ -276,6 +282,7 @@ export function addTask(
     priority?: Priority
     assignee?: string
     project?: string
+    labels?: string[]
     metadata?: string
   } = {},
 ): TaskWithColumn {
@@ -297,13 +304,14 @@ export function addTask(
   }
 
   const id = generateId('t')
+  const labels = normalizeLabels(opts.labels)
   const maxPos = db
     .query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
     .get({ $col: column.id }) as { next: number }
 
   db.query(
-    `INSERT INTO tasks (id, title, description, column_id, position, priority, assignee, project, metadata)
-     VALUES ($id, $title, $desc, $col, $pos, $pri, $assignee, $project, $meta)`,
+    `INSERT INTO tasks (id, title, description, column_id, position, priority, assignee, project, labels, metadata)
+     VALUES ($id, $title, $desc, $col, $pos, $pri, $assignee, $project, $labels, $meta)`,
   ).run({
     $id: id,
     $title: title,
@@ -313,6 +321,7 @@ export function addTask(
     $pri: opts.priority ?? 'medium',
     $assignee: opts.assignee ?? '',
     $project: opts.project ?? '',
+    $labels: JSON.stringify(labels),
     $meta: opts.metadata ?? '{}',
   })
   logActivity(db, id, 'created', { new_value: title })
@@ -330,7 +339,7 @@ export function getTask(db: Database, id: string): TaskWithColumn {
   if (!task) {
     throw new KanbanError(ErrorCode.TASK_NOT_FOUND, `No task with id '${id}'`)
   }
-  return task
+  return hydrateTask(task)
 }
 
 export function listTasks(
@@ -384,7 +393,8 @@ export function listTasks(
        JOIN columns c ON t.column_id = c.id
        ${where} ORDER BY ${orderBy} ${limitClause}`,
     )
-    .all(params as Record<string, string>) as TaskWithColumn[]
+    .all(params as Record<string, string>)
+    .map((task) => hydrateTask(task as TaskWithColumn))
 }
 
 export function updateTask(
@@ -630,9 +640,16 @@ export function getBoardView(db: Database): BoardView {
       ...col,
       tasks: db
         .query('SELECT * FROM tasks WHERE column_id = $col ORDER BY position')
-        .all({ $col: col.id }) as Task[],
+        .all({ $col: col.id })
+        .map((task) => hydrateTask(task as Task)),
     })),
   }
+}
+
+function hydrateTask<T extends { labels?: unknown }>(
+  task: T,
+): Omit<T, 'labels'> & { labels: string[] } {
+  return { ...task, labels: parseStoredLabels(task.labels) }
 }
 
 // --- Bulk ---

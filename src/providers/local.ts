@@ -56,13 +56,14 @@ export class LocalProvider implements KanbanProvider {
   private enrichTask(task: Task, commentCount?: number): Task {
     const revision = task.revision ?? 0
     const assignees = task.assignee ? [task.assignee] : []
+    const labels = Array.isArray(task.labels) ? task.labels : []
     return {
       ...task,
       providerId: task.id,
       externalRef: task.id,
       url: null,
       assignees,
-      labels: [],
+      labels,
       comment_count: commentCount ?? countComments(this.db, task.id),
       version: String(revision),
       source_updated_at: null,

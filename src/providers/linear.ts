@@ -31,7 +31,7 @@ import {
   upsertUsers,
   type LinearActivityRow,
 } from './linear-cache'
-import { LinearClient, resolveLinearLabelIds, type LinearComment } from './linear-client'
+import { LinearClient, resolveLabelIdsForCreate, type LinearComment } from './linear-client'
 import { unsupportedOperation } from './errors'
 import type {
   CreateTaskInput,
@@ -349,7 +349,7 @@ export class LinearProvider implements KanbanProvider {
   async createTask(input: CreateTaskInput) {
     await this.sync()
     const state = input.column ? this.resolveState(input.column) : undefined
-    const labelIds = await this.resolveLabelIds(input.labels)
+    const labelIds = await resolveLabelIdsForCreate(this.client, input.labels)
     const result = await this.client.createIssue({
       teamId: this.resolvedTeamId(),
       stateId: state?.id,
@@ -386,11 +386,6 @@ export class LinearProvider implements KanbanProvider {
       },
     ])
     return this.resolveTask(issue.id)
-  }
-
-  private async resolveLabelIds(labels: string[] | undefined): Promise<string[] | undefined> {
-    if (!labels?.some((label) => label.trim())) return undefined
-    return resolveLinearLabelIds(labels, await this.client.listIssueLabels())
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput) {

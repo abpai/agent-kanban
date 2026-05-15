@@ -165,6 +165,10 @@ describe('run', () => {
           'alice',
           '--project',
           'Platform',
+          '--label',
+          'garage-smoke',
+          '--label',
+          'garage-owner-local,smoke-run',
           '-m',
           '{"sprint":5}',
         ]),
@@ -174,6 +178,7 @@ describe('run', () => {
       expect(created.priority).toBe('high')
       expect(created.assignee).toBe('alice')
       expect(created.project).toBe('Platform')
+      expect(created.labels).toEqual(['garage-smoke', 'garage-owner-local', 'smoke-run'])
       expect(created.metadata).toBe('{"sprint":5}')
 
       const listed = expectOk<Task[]>(

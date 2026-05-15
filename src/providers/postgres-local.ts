@@ -24,6 +24,7 @@ import type {
   UpdateTaskInput,
 } from './types'
 import type { LocalTrackerConfig } from '../tracker-config'
+import { normalizeLabels, parseStoredLabels } from '../labels'
 
 const DEFAULT_COLUMNS = [
   { name: 'recurring', position: 0 },
@@ -43,6 +44,7 @@ interface TaskRow {
   priority: Priority
   assignee: string
   project: string
+  labels: string
   metadata: string
   revision: number
   created_at: string
@@ -126,6 +128,7 @@ export class PostgresLocalProvider implements KanbanProvider {
         priority TEXT NOT NULL DEFAULT 'medium',
         assignee TEXT NOT NULL DEFAULT '',
         project TEXT NOT NULL DEFAULT '',
+        labels TEXT NOT NULL DEFAULT '[]',
         metadata TEXT NOT NULL DEFAULT '{}',
         revision INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -162,6 +165,7 @@ export class PostgresLocalProvider implements KanbanProvider {
         exited_at TEXT
       )
     `
+    await this.sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS labels TEXT NOT NULL DEFAULT '[]'`
     await this.sql`CREATE INDEX IF NOT EXISTS idx_tasks_column_id ON tasks(column_id)`
     await this.sql`CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)`
     await this.sql`CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)`
@@ -194,7 +198,7 @@ export class PostgresLocalProvider implements KanbanProvider {
       externalRef: row.id,
       url: null,
       assignees: row.assignee ? [row.assignee] : [],
-      labels: [],
+      labels: parseStoredLabels(row.labels),
       comment_count: commentCount,
       version: String(row.revision ?? 0),
       source_updated_at: null,
@@ -352,6 +356,7 @@ export class PostgresLocalProvider implements KanbanProvider {
     const priority = input.priority ?? 'medium'
     assertPriority(priority)
     const metadata = parseMetadata(input.metadata)
+    const labels = normalizeLabels(input.labels)
     const column = input.column
       ? await this.resolveColumn(input.column)
       : await this.resolveDefaultTaskColumn()
@@ -362,12 +367,12 @@ export class PostgresLocalProvider implements KanbanProvider {
     const timestamp = nowIso()
     await this.sql`
       INSERT INTO tasks (
-        id, title, description, column_id, position, priority, assignee, project, metadata,
+        id, title, description, column_id, position, priority, assignee, project, labels, metadata,
         revision, created_at, updated_at
       )
       VALUES (
         ${id}, ${input.title}, ${input.description ?? ''}, ${column.id}, ${Number(positionRow?.next ?? 0)},
-        ${priority}, ${input.assignee ?? ''}, ${input.project ?? ''}, ${metadata},
+        ${priority}, ${input.assignee ?? ''}, ${input.project ?? ''}, ${JSON.stringify(labels)}, ${metadata},
         0, ${timestamp}, ${timestamp}
       )
     `

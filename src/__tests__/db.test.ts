@@ -79,7 +79,7 @@ describe('schema', () => {
     expect(listColumns(db)).toHaveLength(5)
   })
 
-  test('migrateSchema adds project column and index to legacy tasks table', () => {
+  test('migrateSchema adds project and labels columns to legacy tasks table', () => {
     const legacy = new Database(':memory:')
     legacy.run(
       `CREATE TABLE tasks (
@@ -102,6 +102,7 @@ describe('schema', () => {
     const indexes = legacy.query('PRAGMA index_list(tasks)').all() as { name: string }[]
 
     expect(columns.some((c) => c.name === 'project')).toBe(true)
+    expect(columns.some((c) => c.name === 'labels')).toBe(true)
     expect(indexes.some((i) => i.name === 'idx_tasks_project')).toBe(true)
   })
 

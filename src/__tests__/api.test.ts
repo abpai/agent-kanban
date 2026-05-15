@@ -41,12 +41,18 @@ describe('handleRequest', () => {
     const req = new Request('http://localhost/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Created via API' }),
+      body: JSON.stringify({ title: 'Created via API', labels: ['garage-smoke', 'api-smoke'] }),
     })
     const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as {
+      ok: boolean
+      data: { labels: string[] }
+    }
 
     expect(result.response.status).toBe(200)
     expect(result.mutated).toBe(true)
+    expect(body.ok).toBe(true)
+    expect(body.data.labels).toEqual(['garage-smoke', 'api-smoke'])
   })
 
   test('marks successful task delete as mutated', async () => {

@@ -22,7 +22,7 @@ import {
 } from '../webhook-events'
 import { LINEAR_CAPABILITIES } from './capabilities'
 import { unsupportedOperation } from './errors'
-import { LinearClient, resolveLinearLabelIds, type LinearComment } from './linear-client'
+import { LinearClient, resolveLabelIdsForCreate, type LinearComment } from './linear-client'
 import type {
   CreateTaskInput,
   KanbanProvider,
@@ -822,7 +822,7 @@ export class PostgresLinearProvider implements KanbanProvider {
   async createTask(input: CreateTaskInput): Promise<Task> {
     await this.sync()
     const state = input.column ? await this.resolveState(input.column) : undefined
-    const labelIds = await this.resolveLabelIds(input.labels)
+    const labelIds = await resolveLabelIdsForCreate(this.client, input.labels)
     const result = await this.client.createIssue({
       teamId: await this.resolvedTeamId(),
       stateId: state?.id,
@@ -859,11 +859,6 @@ export class PostgresLinearProvider implements KanbanProvider {
       },
     ])
     return this.resolveTask(issue.id)
-  }
-
-  private async resolveLabelIds(labels: string[] | undefined): Promise<string[] | undefined> {
-    if (!labels?.some((label) => label.trim())) return undefined
-    return resolveLinearLabelIds(labels, await this.client.listIssueLabels())
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task> {

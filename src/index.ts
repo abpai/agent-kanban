@@ -15,6 +15,7 @@ import { openKanbanRuntime } from './provider-runtime'
 import { trackerConfigFromEnv } from './tracker-config'
 import type { KanbanProvider } from './providers/types'
 import { resolvePollingSyncIntervalMs } from './sync-config'
+import { normalizeLabels } from './labels'
 
 interface ParsedArgs {
   values: Record<string, unknown>
@@ -34,6 +35,8 @@ function parseCliArgs(argv: string[]): ParsedArgs {
       a: { type: 'string' },
       m: { type: 'string' },
       l: { type: 'string' },
+      label: { type: 'string', multiple: true },
+      labels: { type: 'string', multiple: true },
       sort: { type: 'string' },
       title: { type: 'string' },
       position: { type: 'string' },
@@ -68,6 +71,7 @@ async function routeTask(
           priority: values.p as Priority | undefined,
           assignee: values.a as string | undefined,
           project: values.project as string | undefined,
+          labels: normalizeLabels([values.label, values.labels]),
           metadata: values.m as string | undefined,
         }),
       )
@@ -388,7 +392,7 @@ Commands:
   board view                  View full board (default)
   board reset                 Reset board to defaults
 
-  task add <title>            Add a task [-d desc] [-c column] [-p priority] [-a assignee] [--project name] [-m json]
+  task add <title>            Add a task [-d desc] [-c column] [-p priority] [-a assignee] [--project name] [--label name] [-m json]
   task list                   List tasks [-c column] [-p priority] [-a assignee] [--project name] [-l limit] [--sort field]
   task view <id>              View task details
   task update <id>            Update task [--title] [-d] [-p] [-a] [--project name] [-m]

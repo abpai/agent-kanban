@@ -609,25 +609,30 @@ export class LinearClient {
   }
 }
 
+export async function resolveLabelIdsForCreate(
+  client: LinearClient,
+  inputLabels: string[] | undefined,
+): Promise<string[] | undefined> {
+  if (!inputLabels?.some((label) => label.trim())) return undefined
+  return resolveLinearLabelIds(inputLabels, await client.listIssueLabels())
+}
+
 export function resolveLinearLabelIds(
   inputLabels: string[] | undefined,
   availableLabels: LinearIssueLabel[],
 ): string[] | undefined {
-  const requested = normalizeLabels(inputLabels)
+  const requested = dedupeLabelQueries(inputLabels)
   if (requested.length === 0) return undefined
 
   const byName = new Map(
     availableLabels.map((label) => [label.name.trim().toLowerCase(), label.id]),
   )
-  const byId = new Map(availableLabels.map((label) => [label.id, label.id]))
+  const knownIds = new Set(availableLabels.map((label) => label.id))
   const ids: string[] = []
   const missing: string[] = []
 
   for (const label of requested) {
-    const id =
-      byName.get(label.toLowerCase()) ??
-      byId.get(label) ??
-      (looksLikeUuid(label) ? label : undefined)
+    const id = byName.get(label.toLowerCase()) ?? (knownIds.has(label) ? label : undefined)
     if (!id) {
       missing.push(label)
       continue
@@ -644,7 +649,7 @@ export function resolveLinearLabelIds(
   return ids.length > 0 ? ids : undefined
 }
 
-function normalizeLabels(labels: string[] | undefined): string[] {
+function dedupeLabelQueries(labels: string[] | undefined): string[] {
   const out: string[] = []
   const seen = new Set<string>()
   for (const label of labels ?? []) {
@@ -656,8 +661,4 @@ function normalizeLabels(labels: string[] | undefined): string[] {
     out.push(trimmed)
   }
   return out
-}
-
-function looksLikeUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }

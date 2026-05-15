@@ -78,6 +78,10 @@ describe('postgres local provider', () => {
         'garage',
         '--project',
         'Dispatch',
+        '--label',
+        'garage-smoke',
+        '--label',
+        'postgres-local',
         '-m',
         '{"storage":"postgres"}',
       ]),
@@ -85,6 +89,7 @@ describe('postgres local provider', () => {
 
     expect(created.title).toBe('Postgres-backed task')
     expect(created.column_name).toBe('recurring')
+    expect(created.labels).toEqual(['garage-smoke', 'postgres-local'])
     expect(created.version).toBe('0')
 
     const listed = expectOk<Task[]>(await run(['task', 'list', '-c', 'recurring']))
