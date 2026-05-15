@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 - 2026-05-15
+
+- Tasks can now carry labels end to end. The local provider stores a JSON
+  `labels` column (added to both bun:sqlite and Postgres tasks tables via
+  migration), `kanban task add` accepts repeated `--label` flags (each value
+  may be comma-separated), and `POST /api/tasks` accepts a `labels` array.
+- Jira and Linear `createTask` now forward `labels`. For Linear the names are
+  resolved to label IDs against the workspace catalog before the GraphQL
+  mutation; unknown names raise a clear upstream error.
+
 ## 0.4.0 - 2026-05-12
 
 - Postgres providers now record a best-effort receipt into a new `webhook_events`
