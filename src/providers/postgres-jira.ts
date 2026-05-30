@@ -14,7 +14,12 @@ import type {
   TaskComment,
 } from '../types'
 import { JIRA_CAPABILITIES } from './capabilities'
-import { decodeColumnStatusIds, type JiraActivityRow, type JiraColumnRow } from './jira-cache'
+import {
+  decodeColumnStatusIds,
+  jiraBoardColumnRows,
+  type JiraActivityRow,
+  type JiraColumnRow,
+} from './jira-cache'
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
 import { JiraClient, normalizeJiraLabels, type JiraComment, type JiraIssue } from './jira-client'
 import type { JiraProviderConfig } from './jira'
@@ -605,15 +610,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     if (this.config.boardId !== undefined) {
       const boardCfg = await this.client.getBoardColumns(this.config.boardId)
       const boardId = this.config.boardId
-      await this.replaceColumns(
-        boardCfg.columnConfig.columns.map((column, index) => ({
-          id: `board:${boardId}:${column.name}`,
-          name: column.name,
-          position: index,
-          statusIds: column.statuses.map((status) => status.id),
-          source: 'board' as const,
-        })),
-      )
+      await this.replaceColumns(jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns))
     } else {
       const statusCats = await this.client.getProjectStatuses(project.key)
       const seen = new Set<string>()
@@ -745,8 +742,16 @@ export class PostgresJiraProvider implements KanbanProvider {
     const byId = columns.find((column) => column.id === input)
     if (byId) return byId.id
     const lower = input.toLowerCase()
-    const byName = columns.find((column) => column.name.toLowerCase() === lower)
-    if (byName) return byName.id
+    const byName = columns.filter((column) => column.name.toLowerCase() === lower)
+    if (byName.length === 1) return byName[0]!.id
+    if (byName.length > 1) {
+      throw new KanbanError(
+        ErrorCode.COLUMN_NOT_FOUND,
+        `Jira column name '${input}' is ambiguous; use one of these column ids: ${byName
+          .map((column) => column.id)
+          .join(', ')}`,
+      )
+    }
     const byStatus = columns.find((column) => decodeColumnStatusIds(column).includes(input))
     if (byStatus) return byStatus.id
     throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No Jira column matching '${input}'`)

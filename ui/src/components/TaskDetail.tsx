@@ -23,11 +23,13 @@ export function TaskDetail() {
 
   let task = null
   let columnName = ''
+  let columnId = ''
   for (const col of board.columns) {
     const found = col.tasks.find((t) => t.id === selectedTaskId)
     if (found) {
       task = found
       columnName = col.name
+      columnId = col.id
       break
     }
   }
@@ -42,7 +44,7 @@ export function TaskDetail() {
   ].sort()
 
   const handleMove = async (newColumn: string) => {
-    if (newColumn && newColumn !== columnName) {
+    if (newColumn && newColumn !== columnId) {
       await moveTask(task!.id, newColumn)
     }
   }
@@ -349,11 +351,11 @@ export function TaskDetail() {
           {capabilities.taskMove && (
             <select
               className="detailSelect"
-              value={columnName}
+              value={columnId}
               onChange={(e) => handleMove(e.target.value)}
             >
               {board.columns.map((col) => (
-                <option key={col.id} value={col.name}>
+                <option key={col.id} value={col.id}>
                   {col.name}
                 </option>
               ))}

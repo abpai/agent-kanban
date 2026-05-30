@@ -32,6 +32,7 @@ import {
   getCachedTask,
   getCachedTasks,
   initJiraCacheSchema,
+  jiraBoardColumnRows,
   loadJiraSyncMeta,
   loadTeamInfo,
   pruneJiraIssuesMissingUpstream,
@@ -122,13 +123,7 @@ export class JiraProvider implements KanbanProvider {
     if (this.config.boardId !== undefined) {
       const boardCfg = await this.client.getBoardColumns(this.config.boardId)
       const boardId = this.config.boardId
-      const rows = boardCfg.columnConfig.columns.map((col, i) => ({
-        id: `board:${boardId}:${col.name}`,
-        name: col.name,
-        position: i,
-        statusIds: col.statuses.map((s) => s.id),
-        source: 'board' as const,
-      }))
+      const rows = jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns)
       replaceJiraColumns(this.db, rows)
     } else {
       const statusCats = await this.client.getProjectStatuses(project.key)
@@ -281,8 +276,16 @@ export class JiraProvider implements KanbanProvider {
     if (byId) return byId.id
     // Priority 2: case-insensitive name.
     const lower = input.toLowerCase()
-    const byName = columns.find((c) => c.name.toLowerCase() === lower)
-    if (byName) return byName.id
+    const byName = columns.filter((c) => c.name.toLowerCase() === lower)
+    if (byName.length === 1) return byName[0]!.id
+    if (byName.length > 1) {
+      throw new KanbanError(
+        ErrorCode.COLUMN_NOT_FOUND,
+        `Jira column name '${input}' is ambiguous; use one of these column ids: ${byName
+          .map((c) => c.id)
+          .join(', ')}`,
+      )
+    }
     // Priority 3: status_ids containment (raw status id).
     const byStatus = columns.find((c) => decodeColumnStatusIds(c).includes(input))
     if (byStatus) return byStatus.id

@@ -104,8 +104,9 @@ export function replaceTask(board: BoardView, oldId: string, next: Task): BoardV
   }
 }
 
-export function moveTaskInBoard(board: BoardView, id: string, toColumnName: string): BoardView {
-  const target = board.columns.find((c) => c.name.toLowerCase() === toColumnName.toLowerCase())
+export function moveTaskInBoard(board: BoardView, id: string, toColumn: string): BoardView {
+  const lower = toColumn.toLowerCase()
+  const target = board.columns.find((c) => c.id === toColumn || c.name.toLowerCase() === lower)
   if (!target) return board
   let moving: Task | null = null
   const stripped = board.columns.map((column) => {
@@ -122,9 +123,10 @@ export function moveTaskInBoard(board: BoardView, id: string, toColumnName: stri
   }
 }
 
-export function insertTask(board: BoardView, task: Task, columnName: string): BoardView {
+export function insertTask(board: BoardView, task: Task, column: string): BoardView {
+  const lower = column.toLowerCase()
   const targetIdx = board.columns.findIndex(
-    (c) => c.name.toLowerCase() === columnName.toLowerCase(),
+    (c) => c.id === column || c.name.toLowerCase() === lower,
   )
   if (targetIdx === -1) return board
   return {

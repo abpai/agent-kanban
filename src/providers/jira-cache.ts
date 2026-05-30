@@ -2,7 +2,8 @@ import type { Database } from 'bun:sqlite'
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
 
 // Column ids are prefixed to avoid collisions across sources:
-// - board-sourced columns: 'board:<boardId>:<columnName>'
+// - board-sourced columns: 'board:<boardId>:<columnName>' with an index suffix
+//   only when Jira returns duplicate board column names
 // - status-fallback columns: 'status:<statusId>'
 // The provider (T04) picks ONE source per sync, so mixed-source boards
 // do not occur in practice.
@@ -28,6 +29,44 @@ export interface JiraCacheConfig {
   users: Array<{ accountId: string; displayName: string }>
   priorities: Array<{ id: string; name: string }>
   issueTypes: Array<{ id: string; name: string }>
+}
+
+export interface JiraBoardColumnInput {
+  name: string
+  statuses: Array<{ id: string }>
+}
+
+export function jiraBoardColumnRows(
+  boardId: number,
+  columns: JiraBoardColumnInput[],
+): Array<{
+  id: string
+  name: string
+  position: number
+  statusIds: string[]
+  source: 'board'
+}> {
+  const seen = new Set<string>()
+  return columns.map((column, index) => {
+    const baseId = `board:${boardId}:${column.name}`
+    let id = baseId
+    if (seen.has(id)) {
+      id = `${baseId}:${index}`
+      let suffix = 2
+      while (seen.has(id)) {
+        id = `${baseId}:${index}:${suffix}`
+        suffix += 1
+      }
+    }
+    seen.add(id)
+    return {
+      id,
+      name: column.name,
+      position: index,
+      statusIds: column.statuses.map((status) => status.id),
+      source: 'board',
+    }
+  })
 }
 
 interface JiraIssueRow {

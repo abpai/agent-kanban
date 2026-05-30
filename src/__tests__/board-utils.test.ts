@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { replaceTask, upsertTaskInColumn } from '../../ui/src/components/boardUtils'
+import {
+  moveTaskInBoard,
+  replaceTask,
+  upsertTaskInColumn,
+} from '../../ui/src/components/boardUtils'
 import type { BoardView, Task } from '../../ui/src/types'
 
 function makeTask(
@@ -96,5 +100,37 @@ describe('boardUtils', () => {
 
     expect(nextBoard.columns[0]!.tasks.map((task) => task.id)).toEqual(['t-1', 'tmp-1', 't-2'])
     expect(nextBoard.columns[0]!.tasks[0]!.title).toBe('First edited')
+  })
+
+  test('moveTaskInBoard accepts a column id when column names repeat', () => {
+    const board: BoardView = {
+      columns: [
+        {
+          id: 'board:1006:Backlog',
+          name: 'Backlog',
+          position: 0,
+          color: null,
+          created_at: '',
+          updated_at: '',
+          tasks: [
+            makeTask({ id: 't-1', title: 'First', column_id: 'board:1006:Backlog', position: 0 }),
+          ],
+        },
+        {
+          id: 'board:1006:Backlog:1',
+          name: 'Backlog',
+          position: 1,
+          color: null,
+          created_at: '',
+          updated_at: '',
+          tasks: [],
+        },
+      ],
+    }
+
+    const nextBoard = moveTaskInBoard(board, 't-1', 'board:1006:Backlog:1')
+
+    expect(nextBoard.columns[0]!.tasks).toEqual([])
+    expect(nextBoard.columns[1]!.tasks.map((task) => task.id)).toEqual(['t-1'])
   })
 })
