@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 - 2026-05-30
+
+- Fixed Jira board cache sync when Jira returns duplicate board column names.
+  Board-sourced cache ids remain unchanged for unique names and gain a
+  positional suffix only for duplicate names, preventing Postgres and SQLite
+  `jira_columns` primary-key collisions during sync.
+
 ## 0.5.0 - 2026-05-15
 
 - Tasks can now carry labels end to end. The local provider stores a JSON

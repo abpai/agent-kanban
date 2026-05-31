@@ -32,6 +32,8 @@ import {
   getCachedTask,
   getCachedTasks,
   initJiraCacheSchema,
+  jiraBoardColumnRows,
+  resolveJiraColumnId,
   loadJiraSyncMeta,
   loadTeamInfo,
   pruneJiraIssuesMissingUpstream,
@@ -122,13 +124,7 @@ export class JiraProvider implements KanbanProvider {
     if (this.config.boardId !== undefined) {
       const boardCfg = await this.client.getBoardColumns(this.config.boardId)
       const boardId = this.config.boardId
-      const rows = boardCfg.columnConfig.columns.map((col, i) => ({
-        id: `board:${boardId}:${col.name}`,
-        name: col.name,
-        position: i,
-        statusIds: col.statuses.map((s) => s.id),
-        source: 'board' as const,
-      }))
+      const rows = jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns)
       replaceJiraColumns(this.db, rows)
     } else {
       const statusCats = await this.client.getProjectStatuses(project.key)
@@ -275,18 +271,7 @@ export class JiraProvider implements KanbanProvider {
   }
 
   private resolveColumnId(input: string): string {
-    const columns = getCachedColumns(this.db)
-    // Priority 1: exact id.
-    const byId = columns.find((c) => c.id === input)
-    if (byId) return byId.id
-    // Priority 2: case-insensitive name.
-    const lower = input.toLowerCase()
-    const byName = columns.find((c) => c.name.toLowerCase() === lower)
-    if (byName) return byName.id
-    // Priority 3: status_ids containment (raw status id).
-    const byStatus = columns.find((c) => decodeColumnStatusIds(c).includes(input))
-    if (byStatus) return byStatus.id
-    throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No Jira column matching '${input}'`)
+    return resolveJiraColumnId(getCachedColumns(this.db), input)
   }
 
   private async buildBoardConfig(): Promise<BoardConfig> {

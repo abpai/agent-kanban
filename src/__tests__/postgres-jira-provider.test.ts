@@ -67,7 +67,7 @@ function makeIssue(
   }
 }
 
-function standardRoutes(): StubRoute[] {
+function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
   const issues = [makeIssue()]
   const comments: Record<
     string,
@@ -99,6 +99,19 @@ function standardRoutes(): StubRoute[] {
     {
       match: (url) => url.includes('/rest/api/3/project/ENG'),
       handler: () => jsonResponse(projectFixture),
+    },
+    {
+      match: (url) => url.includes('/rest/agile/1.0/board/'),
+      handler: () =>
+        jsonResponse(
+          opts.boardCfg ?? {
+            id: 1006,
+            name: 'ENG Board',
+            columnConfig: {
+              columns: [{ name: 'Done', statuses: [{ id: '10' }, { id: '20' }] }],
+            },
+          },
+        ),
     },
     {
       match: (url) => url.includes('/rest/api/3/user/assignable/search'),
@@ -332,6 +345,51 @@ describe('postgres jira provider', () => {
       fields?: Record<string, unknown>
     }
     expect(body.fields?.labels).toEqual(['garage-smoke', 'garage-owner-local'])
+  })
+
+  pgTest('keeps duplicate Jira board column names as distinct cached columns', async () => {
+    expect(sql).not.toBeNull()
+    if (!sql) throw new Error('expected postgres test connection')
+    const stub = jiraFetchStub(
+      standardRoutes({
+        boardCfg: {
+          id: 1006,
+          name: 'ENG Board',
+          columnConfig: {
+            columns: [
+              { name: 'Backlog', statuses: [{ id: '10' }] },
+              { name: 'Backlog', statuses: [{ id: '20' }] },
+            ],
+          },
+        },
+      }),
+    )
+    globalThis.fetch = stub.fn
+    const provider = new PostgresJiraProvider(sql, {
+      baseUrl: 'https://example.atlassian.net',
+      email: 'user@example.com',
+      apiToken: 'token',
+      projectKey: 'ENG',
+      boardId: 1006,
+    })
+
+    const board = await provider.getBoard()
+
+    expect(board.columns.map((column) => column.id)).toEqual([
+      'board:1006:Backlog',
+      'board:1006:Backlog:1',
+    ])
+    expect(board.columns.map((column) => column.tasks.map((task) => task.externalRef))).toEqual([
+      ['ENG-1'],
+      [],
+    ])
+    await expect(provider.listTasks({ column: 'Backlog' })).rejects.toMatchObject({
+      code: 'COLUMN_NOT_FOUND',
+      message: expect.stringContaining('ambiguous'),
+    })
+    expect(
+      (await provider.listTasks({ column: 'board:1006:Backlog' })).map((task) => task.id),
+    ).toEqual(['jira:10001'])
   })
 
   pgTest('moves Jira tasks through Postgres storage', async () => {

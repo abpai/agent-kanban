@@ -83,7 +83,7 @@ export function Board() {
                     type="button"
                     className="mobileGroupAdd"
                     aria-label={`Add task to ${col.name}`}
-                    onClick={() => setShowNewTaskModal(true, col.name)}
+                    onClick={() => setShowNewTaskModal(true, col.id)}
                   >
                     +
                   </button>

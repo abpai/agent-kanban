@@ -1,8 +1,10 @@
 import type { Database } from 'bun:sqlite'
+import { ErrorCode, KanbanError } from '../errors'
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
 
 // Column ids are prefixed to avoid collisions across sources:
-// - board-sourced columns: 'board:<boardId>:<columnName>'
+// - board-sourced columns: 'board:<boardId>:<columnName>' with an index suffix
+//   only when Jira returns duplicate board column names
 // - status-fallback columns: 'status:<statusId>'
 // The provider (T04) picks ONE source per sync, so mixed-source boards
 // do not occur in practice.
@@ -28,6 +30,67 @@ export interface JiraCacheConfig {
   users: Array<{ accountId: string; displayName: string }>
   priorities: Array<{ id: string; name: string }>
   issueTypes: Array<{ id: string; name: string }>
+}
+
+export interface JiraBoardColumnInput {
+  name: string
+  statuses: Array<{ id: string }>
+}
+
+export function jiraBoardColumnRows(
+  boardId: number,
+  columns: JiraBoardColumnInput[],
+): Array<{
+  id: string
+  name: string
+  position: number
+  statusIds: string[]
+  source: 'board'
+}> {
+  const seen = new Set<string>()
+  return columns.map((column, index) => {
+    const baseId = `board:${boardId}:${column.name}`
+    let id = baseId
+    if (seen.has(id)) {
+      id = `${baseId}:${index}`
+      let suffix = 2
+      while (seen.has(id)) {
+        id = `${baseId}:${index}:${suffix}`
+        suffix += 1
+      }
+    }
+    seen.add(id)
+    return {
+      id,
+      name: column.name,
+      position: index,
+      statusIds: column.statuses.map((status) => status.id),
+      source: 'board',
+    }
+  })
+}
+
+// Resolves a user-supplied column reference to a cached column id, trying
+// (1) exact id, (2) case-insensitive name, (3) raw status id containment.
+// A name that matches multiple columns (possible when Jira returns duplicate
+// board column names) is rejected as ambiguous so the caller picks an id.
+export function resolveJiraColumnId(columns: JiraColumnRow[], input: string): string {
+  const byId = columns.find((column) => column.id === input)
+  if (byId) return byId.id
+  const lower = input.toLowerCase()
+  const byName = columns.filter((column) => column.name.toLowerCase() === lower)
+  if (byName.length === 1) return byName[0]!.id
+  if (byName.length > 1) {
+    throw new KanbanError(
+      ErrorCode.COLUMN_NOT_FOUND,
+      `Jira column name '${input}' is ambiguous; use one of these column ids: ${byName
+        .map((column) => column.id)
+        .join(', ')}`,
+    )
+  }
+  const byStatus = columns.find((column) => decodeColumnStatusIds(column).includes(input))
+  if (byStatus) return byStatus.id
+  throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No Jira column matching '${input}'`)
 }
 
 interface JiraIssueRow {

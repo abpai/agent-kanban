@@ -33,7 +33,7 @@ export function Column({ column }: ColumnProps) {
               className="columnAddBtn"
               title={`Add task to ${column.name}`}
               aria-label={`Add task to ${column.name}`}
-              onClick={() => setShowNewTaskModal(true, column.name)}
+              onClick={() => setShowNewTaskModal(true, column.id)}
             >
               +
             </button>

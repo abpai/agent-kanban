@@ -229,6 +229,35 @@ describe('JiraProvider read path', () => {
     expect(decodeColumnStatusIds(cols[0]!)).toEqual(['10001', '10002'])
   })
 
+  test('sync keeps duplicate Jira board column names as distinct cached columns', async () => {
+    const { provider } = makeProviderWithBoard(
+      standardRoutes({
+        boardCfg: {
+          id: 1006,
+          name: 'ENG Board',
+          columnConfig: {
+            columns: [
+              { name: 'Backlog', statuses: [{ id: '10001' }] },
+              { name: 'Backlog', statuses: [{ id: '10002' }] },
+            ],
+          },
+        },
+      }),
+      1006,
+    )
+
+    await provider.getBoard()
+
+    const cols = getCachedColumns(db)
+    expect(cols.map((column) => column.id)).toEqual(['board:1006:Backlog', 'board:1006:Backlog:1'])
+    expect(cols.map((column) => decodeColumnStatusIds(column))).toEqual([['10001'], ['10002']])
+    await expect(provider.listTasks({ column: 'Backlog' })).rejects.toMatchObject({
+      code: ErrorCode.COLUMN_NOT_FOUND,
+      message: expect.stringContaining('ambiguous'),
+    })
+    expect(await provider.listTasks({ column: 'board:1006:Backlog' })).toEqual([])
+  })
+
   test('sync populates columns from statuses when boardId is absent', async () => {
     const { provider } = makeProvider(standardRoutes({}))
     await provider.getBoard()

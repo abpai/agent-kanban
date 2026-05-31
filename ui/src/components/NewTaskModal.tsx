@@ -112,7 +112,7 @@ export function NewTaskModal() {
               >
                 <option value="">Default (backlog)</option>
                 {columns.map((col) => (
-                  <option key={col.id} value={col.name}>
+                  <option key={col.id} value={col.id}>
                     {col.name}
                   </option>
                 ))}
