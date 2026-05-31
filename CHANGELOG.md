@@ -6,6 +6,11 @@
   Board-sourced cache ids remain unchanged for unique names and gain a
   positional suffix only for duplicate names, preventing Postgres and SQLite
   `jira_columns` primary-key collisions during sync.
+- Jira column resolution (task move/list `--column`) now matches an exact column
+  id first and rejects a name that maps to multiple columns with an actionable
+  error listing the candidate ids, instead of silently picking the first match.
+- The dashboard now submits column ids (not names) when adding and moving tasks,
+  so add/move target the correct column on boards with duplicate column names.
 
 ## 0.5.0 - 2026-05-15
 
@@ -115,6 +120,6 @@ sha256=<hex>` header when `JIRA_WEBHOOK_SECRET` is configured.
 - Simplified mobile board UI internals to make the new layout easier to maintain.
 - Added repository agent instructions for Cursor Cloud contributors.
 
-## 0.1.0
+## 0.1.0 - 2026-03-28
 
 - Initial public release of the Bun-based `agent-kanban` CLI and web dashboard.
