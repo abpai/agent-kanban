@@ -17,6 +17,7 @@ import { JIRA_CAPABILITIES } from './capabilities'
 import {
   decodeColumnStatusIds,
   jiraBoardColumnRows,
+  resolveJiraColumnId,
   type JiraActivityRow,
   type JiraColumnRow,
 } from './jira-cache'
@@ -738,23 +739,7 @@ export class PostgresJiraProvider implements KanbanProvider {
   }
 
   private async resolveColumnId(input: string): Promise<string> {
-    const columns = await this.getColumns()
-    const byId = columns.find((column) => column.id === input)
-    if (byId) return byId.id
-    const lower = input.toLowerCase()
-    const byName = columns.filter((column) => column.name.toLowerCase() === lower)
-    if (byName.length === 1) return byName[0]!.id
-    if (byName.length > 1) {
-      throw new KanbanError(
-        ErrorCode.COLUMN_NOT_FOUND,
-        `Jira column name '${input}' is ambiguous; use one of these column ids: ${byName
-          .map((column) => column.id)
-          .join(', ')}`,
-      )
-    }
-    const byStatus = columns.find((column) => decodeColumnStatusIds(column).includes(input))
-    if (byStatus) return byStatus.id
-    throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No Jira column matching '${input}'`)
+    return resolveJiraColumnId(await this.getColumns(), input)
   }
 
   private async buildBoardConfig(): Promise<BoardConfig> {

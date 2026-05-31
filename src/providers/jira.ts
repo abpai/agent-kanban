@@ -33,6 +33,7 @@ import {
   getCachedTasks,
   initJiraCacheSchema,
   jiraBoardColumnRows,
+  resolveJiraColumnId,
   loadJiraSyncMeta,
   loadTeamInfo,
   pruneJiraIssuesMissingUpstream,
@@ -270,26 +271,7 @@ export class JiraProvider implements KanbanProvider {
   }
 
   private resolveColumnId(input: string): string {
-    const columns = getCachedColumns(this.db)
-    // Priority 1: exact id.
-    const byId = columns.find((c) => c.id === input)
-    if (byId) return byId.id
-    // Priority 2: case-insensitive name.
-    const lower = input.toLowerCase()
-    const byName = columns.filter((c) => c.name.toLowerCase() === lower)
-    if (byName.length === 1) return byName[0]!.id
-    if (byName.length > 1) {
-      throw new KanbanError(
-        ErrorCode.COLUMN_NOT_FOUND,
-        `Jira column name '${input}' is ambiguous; use one of these column ids: ${byName
-          .map((c) => c.id)
-          .join(', ')}`,
-      )
-    }
-    // Priority 3: status_ids containment (raw status id).
-    const byStatus = columns.find((c) => decodeColumnStatusIds(c).includes(input))
-    if (byStatus) return byStatus.id
-    throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No Jira column matching '${input}'`)
+    return resolveJiraColumnId(getCachedColumns(this.db), input)
   }
 
   private async buildBoardConfig(): Promise<BoardConfig> {

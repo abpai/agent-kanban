@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite'
+import { ErrorCode, KanbanError } from '../errors'
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
 
 // Column ids are prefixed to avoid collisions across sources:
@@ -67,6 +68,29 @@ export function jiraBoardColumnRows(
       source: 'board',
     }
   })
+}
+
+// Resolves a user-supplied column reference to a cached column id, trying
+// (1) exact id, (2) case-insensitive name, (3) raw status id containment.
+// A name that matches multiple columns (possible when Jira returns duplicate
+// board column names) is rejected as ambiguous so the caller picks an id.
+export function resolveJiraColumnId(columns: JiraColumnRow[], input: string): string {
+  const byId = columns.find((column) => column.id === input)
+  if (byId) return byId.id
+  const lower = input.toLowerCase()
+  const byName = columns.filter((column) => column.name.toLowerCase() === lower)
+  if (byName.length === 1) return byName[0]!.id
+  if (byName.length > 1) {
+    throw new KanbanError(
+      ErrorCode.COLUMN_NOT_FOUND,
+      `Jira column name '${input}' is ambiguous; use one of these column ids: ${byName
+        .map((column) => column.id)
+        .join(', ')}`,
+    )
+  }
+  const byStatus = columns.find((column) => decodeColumnStatusIds(column).includes(input))
+  if (byStatus) return byStatus.id
+  throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No Jira column matching '${input}'`)
 }
 
 interface JiraIssueRow {
