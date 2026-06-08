@@ -20,15 +20,11 @@ import {
   type WebhookRequest,
   type WebhookResult,
 } from '../webhooks'
-import {
-  ensureWebhookEventsSchema,
-  extractWebhookMeta,
-  recordWebhookEvent,
-  webhookEventStatus,
-} from '../webhook-events'
+import { extractWebhookMeta, recordWebhookEvent, webhookEventStatus } from '../webhook-events'
 import { LINEAR_CAPABILITIES } from './capabilities'
 import { unsupportedOperation } from './errors'
 import { LinearClient, resolveLabelIdsForCreate, type LinearComment } from './linear-client'
+import { PostgresLinearCache, type LinearActivityRow } from './postgres-linear-cache'
 import type {
   CreateTaskInput,
   KanbanProvider,
@@ -39,53 +35,6 @@ import type {
 } from './types'
 
 const FULL_RECONCILIATION_INTERVAL_MS = 5 * 60_000
-const ACTIVITY_VALUE_MAX_CHARS = 4096
-const ACTIVITY_TRUNCATION_SUFFIX = '...[truncated]'
-const ACTIVITY_VALUE_BUDGET = ACTIVITY_VALUE_MAX_CHARS - ACTIVITY_TRUNCATION_SUFFIX.length
-
-interface LinearStateRow {
-  id: string
-  name: string
-  position: number
-  color: string | null
-  type: string | null
-  created_at: string
-  updated_at: string
-}
-
-interface LinearIssueRow {
-  id: string
-  identifier: string
-  title: string
-  description: string
-  state_id: string
-  state_position: number
-  priority: number
-  assignee_name: string
-  project_name: string
-  labels: string
-  comment_count: number
-  url: string | null
-  created_at: string
-  updated_at: string
-}
-
-interface LinearSyncMeta {
-  team: ProviderTeamInfo | null
-  lastSyncAt: string | null
-  lastFullSyncAt: string | null
-  lastIssueUpdatedAt: string | null
-  lastWebhookAt: string | null
-}
-
-interface LinearActivityRow {
-  issue_id: string
-  history_id: string
-  item_field: string
-  from_value: string | null
-  to_value: string | null
-  created_at: string
-}
 
 function parseTimestamp(value: string | null | undefined): number {
   if (!value) return 0
@@ -115,64 +64,10 @@ function toLinearPriority(priority: Task['priority'] | undefined): number | unde
   }
 }
 
-function mapPriority(priority: number): Task['priority'] {
-  switch (priority) {
-    case 1:
-      return 'urgent'
-    case 2:
-      return 'high'
-    case 3:
-      return 'medium'
-    case 0:
-    case 4:
-    default:
-      return 'low'
-  }
-}
-
-function parseLabels(raw: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === 'string')
-      : []
-  } catch {
-    return []
-  }
-}
-
-function taskFromRow(row: LinearIssueRow): Task {
-  return {
-    id: `linear:${row.id}`,
-    providerId: row.id,
-    externalRef: row.identifier,
-    url: row.url,
-    title: row.title,
-    description: row.description,
-    column_id: row.state_id,
-    position: row.state_position,
-    priority: mapPriority(row.priority),
-    assignee: row.assignee_name,
-    assignees: row.assignee_name ? [row.assignee_name] : [],
-    labels: parseLabels(row.labels),
-    comment_count: row.comment_count,
-    project: row.project_name,
-    metadata: '{}',
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    version: row.updated_at,
-    source_updated_at: row.updated_at,
-  }
-}
-
-function clampActivityValue(value: string): string {
-  if (value.length <= ACTIVITY_VALUE_MAX_CHARS) return value
-  return value.slice(0, ACTIVITY_VALUE_BUDGET) + ACTIVITY_TRUNCATION_SUFFIX
-}
-
 export class PostgresLinearProvider implements KanbanProvider {
   readonly type = 'linear' as const
   private readonly ready: Promise<void>
+  private readonly cache: PostgresLinearCache
   private readonly client: LinearClient
   // When a server-side background warmer owns cache refresh, implicit request-path
   // syncs are suppressed once the cache is warm so reads never block on Linear I/O.
@@ -185,7 +80,8 @@ export class PostgresLinearProvider implements KanbanProvider {
     private readonly pollingSyncIntervalMs = DEFAULT_POLLING_SYNC_INTERVAL_MS,
     client?: LinearClient,
   ) {
-    this.ready = this.ensureSchema()
+    this.cache = new PostgresLinearCache(sql)
+    this.ready = this.cache.ready
     this.client = client ?? new LinearClient(apiKey)
   }
 
@@ -193,408 +89,23 @@ export class PostgresLinearProvider implements KanbanProvider {
     await this.ready
   }
 
-  private async ensureSchema(): Promise<void> {
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS linear_sync_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS linear_states (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        position INTEGER NOT NULL,
-        color TEXT,
-        type TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS linear_users (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        active INTEGER NOT NULL DEFAULT 1,
-        updated_at TEXT NOT NULL
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS linear_projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        url TEXT,
-        state TEXT,
-        updated_at TEXT NOT NULL
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS linear_issues (
-        id TEXT PRIMARY KEY,
-        identifier TEXT NOT NULL UNIQUE,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        priority INTEGER NOT NULL DEFAULT 0,
-        assignee_id TEXT,
-        assignee_name TEXT NOT NULL DEFAULT '',
-        project_id TEXT,
-        project_name TEXT NOT NULL DEFAULT '',
-        state_id TEXT NOT NULL,
-        state_name TEXT NOT NULL,
-        state_position INTEGER NOT NULL DEFAULT 0,
-        labels TEXT NOT NULL DEFAULT '[]',
-        comment_count INTEGER NOT NULL DEFAULT 0,
-        url TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    `
-    await this
-      .sql`ALTER TABLE linear_issues ADD COLUMN IF NOT EXISTS labels TEXT NOT NULL DEFAULT '[]'`
-    await this
-      .sql`ALTER TABLE linear_issues ADD COLUMN IF NOT EXISTS comment_count INTEGER NOT NULL DEFAULT 0`
-    await this.sql`CREATE INDEX IF NOT EXISTS idx_linear_issues_state_id ON linear_issues(state_id)`
-    await this
-      .sql`CREATE INDEX IF NOT EXISTS idx_linear_issues_updated_at ON linear_issues(updated_at)`
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS linear_activity (
-        issue_id TEXT NOT NULL,
-        history_id TEXT NOT NULL,
-        item_field TEXT NOT NULL,
-        from_value TEXT,
-        to_value TEXT,
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (issue_id, history_id, item_field)
-      )
-    `
-    await this.sql`
-      CREATE INDEX IF NOT EXISTS linear_activity_created_at_idx ON linear_activity(created_at DESC)
-    `
-    await ensureWebhookEventsSchema(this.sql)
-  }
-
-  private async setMeta(key: string, value: string): Promise<void> {
-    await this.sql`
-      INSERT INTO linear_sync_meta (key, value)
-      VALUES (${key}, ${value})
-      ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
-    `
-  }
-
-  private async deleteMeta(key: string): Promise<void> {
-    await this.sql`DELETE FROM linear_sync_meta WHERE key = ${key}`
-  }
-
-  private async getMeta(key: string): Promise<string | null> {
-    const [row] = await this.sql<{ value: string }[]>`
-      SELECT value FROM linear_sync_meta WHERE key = ${key}
-    `
-    return row?.value ?? null
-  }
-
-  private async saveSyncMeta(meta: Partial<LinearSyncMeta>): Promise<void> {
-    const keys = [
-      'team',
-      'lastSyncAt',
-      'lastFullSyncAt',
-      'lastIssueUpdatedAt',
-      'lastWebhookAt',
-    ] as const
-    for (const key of keys) {
-      if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
-      const value = meta[key]
-      if (value === null) {
-        await this.deleteMeta(key)
-        continue
-      }
-      if (key === 'team') {
-        await this.setMeta(key, JSON.stringify(value))
-        continue
-      }
-      if (typeof value === 'string') await this.setMeta(key, value)
-    }
-  }
-
-  private async loadSyncMeta(): Promise<LinearSyncMeta> {
-    const teamRaw = await this.getMeta('team')
-    return {
-      team: teamRaw ? (JSON.parse(teamRaw) as ProviderTeamInfo) : null,
-      lastSyncAt: await this.getMeta('lastSyncAt'),
-      lastFullSyncAt: await this.getMeta('lastFullSyncAt'),
-      lastIssueUpdatedAt: await this.getMeta('lastIssueUpdatedAt'),
-      lastWebhookAt: await this.getMeta('lastWebhookAt'),
-    }
-  }
-
   private async resolvedTeamId(): Promise<string> {
-    return (await this.loadSyncMeta()).team?.id ?? this.teamId
+    return (await this.cache.loadSyncMeta()).team?.id ?? this.teamId
   }
 
   private async getConfiguredTeam(): Promise<ProviderTeamInfo> {
-    const metaTeam = (await this.loadSyncMeta()).team
+    const metaTeam = (await this.cache.loadSyncMeta()).team
     if (metaTeam) return metaTeam
 
     const team = await this.client.getTeam(this.teamId)
     const configuredTeam = { id: team.id, key: team.key, name: team.name }
-    await this.saveSyncMeta({ team: configuredTeam })
+    await this.cache.saveSyncMeta({ team: configuredTeam })
     return configuredTeam
-  }
-
-  private async replaceStates(
-    states: Array<{
-      id: string
-      name: string
-      position: number
-      color?: string | null
-      type?: string | null
-    }>,
-  ): Promise<void> {
-    const now = new Date().toISOString()
-    await this.sql.begin(async (tx) => {
-      await tx`DELETE FROM linear_states`
-      for (const state of states) {
-        await tx`
-          INSERT INTO linear_states (id, name, position, color, type, created_at, updated_at)
-          VALUES (${state.id}, ${state.name}, ${state.position}, ${state.color ?? null}, ${state.type ?? null}, ${now}, ${now})
-        `
-      }
-    })
-  }
-
-  private async upsertUsers(
-    users: Array<{ id: string; name: string; active?: boolean }>,
-  ): Promise<void> {
-    const now = new Date().toISOString()
-    for (const user of users) {
-      await this.sql`
-        INSERT INTO linear_users (id, name, active, updated_at)
-        VALUES (${user.id}, ${user.name}, ${user.active === false ? 0 : 1}, ${now})
-        ON CONFLICT(id) DO UPDATE SET
-          name = EXCLUDED.name,
-          active = EXCLUDED.active,
-          updated_at = EXCLUDED.updated_at
-      `
-    }
-  }
-
-  private async upsertProjects(
-    projects: Array<{ id: string; name: string; url?: string | null; state?: string | null }>,
-  ): Promise<void> {
-    const now = new Date().toISOString()
-    for (const project of projects) {
-      await this.sql`
-        INSERT INTO linear_projects (id, name, url, state, updated_at)
-        VALUES (${project.id}, ${project.name}, ${project.url ?? null}, ${project.state ?? null}, ${now})
-        ON CONFLICT(id) DO UPDATE SET
-          name = EXCLUDED.name,
-          url = EXCLUDED.url,
-          state = EXCLUDED.state,
-          updated_at = EXCLUDED.updated_at
-      `
-    }
-  }
-
-  private async saveActivity(rows: LinearActivityRow[]): Promise<void> {
-    for (const row of rows) {
-      await this.sql`
-        INSERT INTO linear_activity (issue_id, history_id, item_field, from_value, to_value, created_at)
-        VALUES (${row.issue_id}, ${row.history_id}, ${row.item_field}, ${row.from_value}, ${row.to_value}, ${row.created_at})
-        ON CONFLICT(issue_id, history_id, item_field) DO NOTHING
-      `
-    }
-  }
-
-  private async upsertIssues(
-    issues: Array<{
-      id: string
-      identifier: string
-      title: string
-      description?: string | null
-      priority?: number | null
-      assigneeId?: string | null
-      assigneeName?: string | null
-      projectId?: string | null
-      projectName?: string | null
-      stateId: string
-      stateName: string
-      statePosition: number
-      labels?: string[] | null
-      commentCount?: number | null
-      url?: string | null
-      createdAt: string
-      updatedAt: string
-    }>,
-  ): Promise<void> {
-    for (const issue of issues) {
-      const nextDescription = issue.description ?? ''
-      const [prior] = await this.sql<{ description: string }[]>`
-        SELECT description FROM linear_issues WHERE id = ${issue.id} LIMIT 1
-      `
-      if (prior && prior.description !== nextDescription) {
-        await this.saveActivity([
-          {
-            issue_id: issue.id,
-            history_id: `desc:${issue.updatedAt}`,
-            item_field: 'description',
-            from_value: clampActivityValue(prior.description),
-            to_value: clampActivityValue(nextDescription),
-            created_at: issue.updatedAt,
-          },
-        ])
-      }
-
-      const hasCommentCount = issue.commentCount !== undefined && issue.commentCount !== null
-      await this.sql`
-        INSERT INTO linear_issues (
-          id, identifier, title, description, priority, assignee_id, assignee_name,
-          project_id, project_name, state_id, state_name, state_position, labels, comment_count,
-          url, created_at, updated_at
-        ) VALUES (
-          ${issue.id}, ${issue.identifier}, ${issue.title}, ${nextDescription}, ${issue.priority ?? 0},
-          ${issue.assigneeId ?? null}, ${issue.assigneeName ?? ''}, ${issue.projectId ?? null},
-          ${issue.projectName ?? ''}, ${issue.stateId}, ${issue.stateName}, ${issue.statePosition},
-          ${JSON.stringify(issue.labels ?? [])}, ${hasCommentCount ? (issue.commentCount ?? 0) : 0},
-          ${issue.url ?? null}, ${issue.createdAt}, ${issue.updatedAt}
-        )
-        ON CONFLICT(id) DO UPDATE SET
-          identifier = EXCLUDED.identifier,
-          title = EXCLUDED.title,
-          description = EXCLUDED.description,
-          priority = EXCLUDED.priority,
-          assignee_id = EXCLUDED.assignee_id,
-          assignee_name = EXCLUDED.assignee_name,
-          project_id = EXCLUDED.project_id,
-          project_name = EXCLUDED.project_name,
-          state_id = EXCLUDED.state_id,
-          state_name = EXCLUDED.state_name,
-          state_position = EXCLUDED.state_position,
-          labels = EXCLUDED.labels,
-          comment_count = CASE
-            WHEN ${hasCommentCount} THEN EXCLUDED.comment_count
-            ELSE linear_issues.comment_count
-          END,
-          url = EXCLUDED.url,
-          created_at = EXCLUDED.created_at,
-          updated_at = EXCLUDED.updated_at
-      `
-    }
-  }
-
-  private async deleteIssue(idOrIdentifier: string): Promise<void> {
-    await this.sql`
-      DELETE FROM linear_activity
-      WHERE issue_id = ${idOrIdentifier}
-         OR issue_id IN (SELECT id FROM linear_issues WHERE identifier = ${idOrIdentifier})
-    `
-    await this
-      .sql`DELETE FROM linear_issues WHERE id = ${idOrIdentifier} OR identifier = ${idOrIdentifier}`
-  }
-
-  private async pruneIssues(liveIssueIds: string[]): Promise<void> {
-    if (liveIssueIds.length === 0) {
-      await this.sql`DELETE FROM linear_activity`
-      await this.sql`DELETE FROM linear_issues`
-      return
-    }
-    await this.sql`
-      DELETE FROM linear_activity
-      WHERE issue_id IN (
-        SELECT id FROM linear_issues WHERE NOT (id = ANY(${liveIssueIds}))
-      )
-    `
-    await this.sql`DELETE FROM linear_issues WHERE NOT (id = ANY(${liveIssueIds}))`
-  }
-
-  private async adjustIssueCommentCount(idOrIdentifier: string, delta: number): Promise<void> {
-    await this.sql`
-      UPDATE linear_issues
-      SET comment_count = GREATEST(0, comment_count + ${delta})
-      WHERE id = ${idOrIdentifier} OR identifier = ${idOrIdentifier}
-    `
-  }
-
-  private async getCachedColumns(): Promise<LinearStateRow[]> {
-    return this.sql<LinearStateRow[]>`SELECT * FROM linear_states ORDER BY position, name`
-  }
-
-  private async getCachedBoard(): Promise<BoardView> {
-    const columns = await this.getCachedColumns()
-    const boardColumns = []
-    for (const column of columns) {
-      const tasks = (
-        await this.sql<LinearIssueRow[]>`
-          SELECT * FROM linear_issues
-          WHERE state_id = ${column.id}
-          ORDER BY updated_at DESC, title ASC
-        `
-      ).map(taskFromRow)
-      boardColumns.push({ ...column, tasks })
-    }
-    return { columns: boardColumns }
-  }
-
-  private async getCachedTask(lookup: string): Promise<Task | null> {
-    const normalized = lookup.startsWith('linear:') ? lookup.slice('linear:'.length) : lookup
-    const [row] = await this.sql<LinearIssueRow[]>`
-      SELECT * FROM linear_issues
-      WHERE id = ${normalized} OR identifier = ${normalized}
-      LIMIT 1
-    `
-    return row ? taskFromRow(row) : null
-  }
-
-  private async getCachedTasks(): Promise<Task[]> {
-    return (
-      await this.sql<LinearIssueRow[]>`
-        SELECT * FROM linear_issues ORDER BY updated_at DESC, title ASC
-      `
-    ).map(taskFromRow)
-  }
-
-  private async getCachedConfig(): Promise<BoardConfig> {
-    const members = (
-      await this.sql<{ name: string }[]>`
-        SELECT name FROM linear_users WHERE active = 1 AND name != '' ORDER BY name
-      `
-    ).map((row) => ({ name: row.name, role: 'human' as const }))
-    const projects = (
-      await this.sql<{ name: string }[]>`
-        SELECT name FROM linear_projects WHERE name != '' ORDER BY name
-      `
-    ).map((row) => row.name)
-    return {
-      members,
-      projects,
-      provider: 'linear',
-      discoveredAssignees: members.map((member) => member.name),
-      discoveredProjects: projects,
-    }
-  }
-
-  private async getCachedActivity(
-    params: { issueId?: string; limit?: number } = {},
-  ): Promise<LinearActivityRow[]> {
-    const limit = params.limit ?? 100
-    if (params.issueId) {
-      return this.sql<LinearActivityRow[]>`
-        SELECT issue_id, history_id, item_field, from_value, to_value, created_at
-        FROM linear_activity
-        WHERE issue_id = ${params.issueId}
-        ORDER BY created_at DESC
-        LIMIT ${limit}
-      `
-    }
-    return this.sql<LinearActivityRow[]>`
-      SELECT issue_id, history_id, item_field, from_value, to_value, created_at
-      FROM linear_activity
-      ORDER BY created_at DESC
-      LIMIT ${limit}
-    `
   }
 
   private async sync(force = false, viaWarmer = false): Promise<void> {
     await this.ready
-    const meta = await this.loadSyncMeta()
+    const meta = await this.cache.loadSyncMeta()
     const lastSyncAtMs = parseTimestamp(meta.lastSyncAt)
     const lastFullSyncAtMs = parseTimestamp(meta.lastFullSyncAt)
     // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
@@ -622,10 +133,10 @@ export class PostgresLinearProvider implements KanbanProvider {
       ),
     ])
 
-    await this.replaceStates(team.states)
-    await this.upsertUsers(users)
-    await this.upsertProjects(projects)
-    await this.upsertIssues(
+    await this.cache.replaceStates(team.states)
+    await this.cache.upsertUsers(users)
+    await this.cache.upsertProjects(projects)
+    await this.cache.upsertIssues(
       issues.map((issue) => ({
         id: issue.id,
         identifier: issue.identifier,
@@ -646,7 +157,7 @@ export class PostgresLinearProvider implements KanbanProvider {
         updatedAt: issue.updatedAt,
       })),
     )
-    if (shouldFullSync) await this.pruneIssues(issues.map((issue) => issue.id))
+    if (shouldFullSync) await this.cache.pruneIssues(issues.map((issue) => issue.id))
 
     const newestIssueTimestamp = maxTimestamp(
       meta.lastIssueUpdatedAt,
@@ -666,7 +177,7 @@ export class PostgresLinearProvider implements KanbanProvider {
     })
 
     const syncedAt = new Date().toISOString()
-    await this.saveSyncMeta({
+    await this.cache.saveSyncMeta({
       team: { id: team.id, key: team.key, name: team.name },
       lastSyncAt: syncedAt,
       lastFullSyncAt: shouldFullSync ? syncedAt : undefined,
@@ -683,7 +194,7 @@ export class PostgresLinearProvider implements KanbanProvider {
         batch.map((issueId) => this.fetchIssueHistory(issueId, sinceIso)),
       )
       const rows = results.flat()
-      if (rows.length > 0) await this.saveActivity(rows)
+      if (rows.length > 0) await this.cache.saveActivity(rows)
     }
   }
 
@@ -719,7 +230,7 @@ export class PostgresLinearProvider implements KanbanProvider {
   }
 
   private async resolveTask(idOrRef: string): Promise<Task> {
-    const task = await this.getCachedTask(idOrRef)
+    const task = await this.cache.getCachedTask(idOrRef)
     if (!task) {
       throw new KanbanError(ErrorCode.TASK_NOT_FOUND, `No task with id '${idOrRef}'`)
     }
@@ -727,7 +238,7 @@ export class PostgresLinearProvider implements KanbanProvider {
   }
 
   private async resolveState(column: string): Promise<Column> {
-    const states = await this.getCachedColumns()
+    const states = await this.cache.getCachedColumns()
     const match = states.find(
       (state) => state.id === column || state.name.toLowerCase() === column.toLowerCase(),
     )
@@ -778,7 +289,7 @@ export class PostgresLinearProvider implements KanbanProvider {
   }
 
   async getSyncStatus(): Promise<ProviderSyncStatus> {
-    const meta = await this.loadSyncMeta()
+    const meta = await this.cache.loadSyncMeta()
     return {
       lastSyncAt: meta.lastSyncAt,
       lastFullSyncAt: meta.lastFullSyncAt,
@@ -791,7 +302,7 @@ export class PostgresLinearProvider implements KanbanProvider {
     return {
       provider: 'linear',
       capabilities: LINEAR_CAPABILITIES,
-      team: (await this.loadSyncMeta()).team,
+      team: (await this.cache.loadSyncMeta()).team,
     }
   }
 
@@ -800,27 +311,27 @@ export class PostgresLinearProvider implements KanbanProvider {
     return {
       provider: 'linear',
       capabilities: LINEAR_CAPABILITIES,
-      board: await this.getCachedBoard(),
-      config: await this.getCachedConfig(),
+      board: await this.cache.getCachedBoard(),
+      config: await this.cache.getCachedConfig(),
       metrics: null,
       activity: [],
-      team: (await this.loadSyncMeta()).team,
+      team: (await this.cache.loadSyncMeta()).team,
     }
   }
 
   async getBoard(): Promise<BoardView> {
     await this.sync()
-    return this.getCachedBoard()
+    return this.cache.getCachedBoard()
   }
 
   async listColumns(): Promise<Column[]> {
     await this.sync()
-    return this.getCachedColumns()
+    return this.cache.getCachedColumns()
   }
 
   async listTasks(filters: TaskListFilters = {}): Promise<Task[]> {
     await this.sync()
-    let tasks = await this.getCachedTasks()
+    let tasks = await this.cache.getCachedTasks()
     if (filters.column) {
       const column = await this.resolveState(filters.column)
       tasks = tasks.filter((task) => task.column_id === column.id)
@@ -858,7 +369,7 @@ export class PostgresLinearProvider implements KanbanProvider {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear issue creation failed')
     }
     const issue = result.issue
-    await this.upsertIssues([
+    await this.cache.upsertIssues([
       {
         id: issue.id,
         identifier: issue.identifier,
@@ -951,7 +462,7 @@ export class PostgresLinearProvider implements KanbanProvider {
     if (!result.success || !result.comment) {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear comment creation failed')
     }
-    await this.adjustIssueCommentCount(task.providerId || task.id, 1)
+    await this.cache.adjustIssueCommentCount(task.providerId || task.id, 1)
     return this.toTaskComment(task, result.comment)
   }
 
@@ -968,7 +479,7 @@ export class PostgresLinearProvider implements KanbanProvider {
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {
     await this.sync()
     const issueId = taskId ? await this.resolveIssueIdFromTaskId(taskId) : undefined
-    const rows = await this.getCachedActivity({
+    const rows = await this.cache.getCachedActivity({
       ...(issueId !== undefined ? { issueId } : {}),
       limit: limit ?? 100,
     })
@@ -1001,7 +512,7 @@ export class PostgresLinearProvider implements KanbanProvider {
 
   async getConfig(): Promise<BoardConfig> {
     await this.sync()
-    return this.getCachedConfig()
+    return this.cache.getCachedConfig()
   }
 
   async patchConfig(_input: Partial<BoardConfig>): Promise<BoardConfig> {
@@ -1074,8 +585,8 @@ export class PostgresLinearProvider implements KanbanProvider {
     if (!data) return { handled: false, message: 'No data in payload' }
 
     if (body.action === 'remove') {
-      await this.deleteIssue(data.id)
-      await this.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
+      await this.cache.deleteIssue(data.id)
+      await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
       return { handled: true }
     }
 
@@ -1110,7 +621,7 @@ export class PostgresLinearProvider implements KanbanProvider {
       }
       const stateId = data.state?.id ?? data.stateId ?? null
       if (!stateId) return { handled: false, message: 'Missing state id' }
-      await this.upsertIssues([
+      await this.cache.upsertIssues([
         {
           id: data.id,
           identifier: data.identifier,
@@ -1131,7 +642,7 @@ export class PostgresLinearProvider implements KanbanProvider {
           updatedAt: data.updatedAt,
         },
       ])
-      await this.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
+      await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
       return { handled: true }
     }
 
