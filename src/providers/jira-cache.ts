@@ -297,12 +297,21 @@ export function replaceJiraColumns(
     statusIds: string[]
     source: 'board' | 'status'
   }>,
+  prune = true,
 ): void {
+  // prune=true (full reconcile / direct callers): replace the whole catalog.
+  // prune=false (delta sync): upsert the current rows and leave the rest, so a
+  // stale delta snapshot never deletes a row a fresher sync just added.
   const run = db.transaction(() => {
-    db.run('DELETE FROM jira_columns')
+    if (prune) db.run('DELETE FROM jira_columns')
     const stmt = db.prepare(
       `INSERT INTO jira_columns (id, name, position, status_ids, source)
-       VALUES ($id, $name, $position, $status_ids, $source)`,
+       VALUES ($id, $name, $position, $status_ids, $source)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         position = excluded.position,
+         status_ids = excluded.status_ids,
+         source = excluded.source`,
     )
     for (const column of columns) {
       stmt.run({
@@ -341,10 +350,14 @@ export function upsertJiraUsers(
 export function replaceJiraPriorities(
   db: Database,
   priorities: Array<{ id: string; name: string }>,
+  prune = true,
 ): void {
   const run = db.transaction(() => {
-    db.run('DELETE FROM jira_priorities')
-    const stmt = db.prepare('INSERT INTO jira_priorities (id, name) VALUES ($id, $name)')
+    if (prune) db.run('DELETE FROM jira_priorities')
+    const stmt = db.prepare(
+      `INSERT INTO jira_priorities (id, name) VALUES ($id, $name)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name`,
+    )
     for (const priority of priorities) {
       stmt.run({ $id: priority.id, $name: priority.name })
     }
@@ -355,10 +368,14 @@ export function replaceJiraPriorities(
 export function replaceJiraIssueTypes(
   db: Database,
   types: Array<{ id: string; name: string }>,
+  prune = true,
 ): void {
   const run = db.transaction(() => {
-    db.run('DELETE FROM jira_issue_types')
-    const stmt = db.prepare('INSERT INTO jira_issue_types (id, name) VALUES ($id, $name)')
+    if (prune) db.run('DELETE FROM jira_issue_types')
+    const stmt = db.prepare(
+      `INSERT INTO jira_issue_types (id, name) VALUES ($id, $name)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name`,
+    )
     for (const type of types) {
       stmt.run({ $id: type.id, $name: type.name })
     }

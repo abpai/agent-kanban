@@ -1,7 +1,14 @@
 import type { Sql } from 'postgres'
 
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
-import { decodeColumnStatusIds, type JiraActivityRow, type JiraColumnRow } from './jira-cache'
+import {
+  decodeColumnStatusIds,
+  type JiraActivityRow,
+  type JiraCacheConfig,
+  type JiraColumnRow,
+  type JiraSyncMeta,
+} from './jira-cache'
+import type { JiraCachePort } from './jira-core'
 import { ensureWebhookEventsSchema } from '../webhook-events'
 
 export interface JiraIssueRow {
@@ -20,22 +27,6 @@ export interface JiraIssueRow {
   url: string | null
   created_at: string
   updated_at: string
-}
-
-export interface JiraSyncMeta {
-  projectKey: string | null
-  boardId: number | null
-  lastSyncAt: string | null
-  lastIssueUpdatedAt: string | null
-  lastFullSyncAt: string | null
-  lastWebhookAt: string | null
-}
-
-export interface JiraCacheConfig {
-  projectKey: string | null
-  users: Array<{ accountId: string; displayName: string }>
-  priorities: Array<{ id: string; name: string }>
-  issueTypes: Array<{ id: string; name: string }>
 }
 
 function mapPriorityNameToCanonical(name: string): Task['priority'] {
@@ -93,7 +84,7 @@ function taskFromRow(row: JiraIssueRow): Task {
  * cache I/O (persistence + materialization); API sync and business logic stay in
  * `PostgresJiraProvider`.
  */
-export class PostgresJiraCache {
+export class PostgresJiraCache implements JiraCachePort {
   readonly ready: Promise<void>
 
   constructor(private readonly sql: Sql) {
@@ -550,5 +541,57 @@ export class PostgresJiraCache {
       ORDER BY created_at DESC
       LIMIT ${limit}
     `
+  }
+
+  async getDiscoveredAssignees(): Promise<string[]> {
+    return (
+      await this.sql<{ assignee_name: string }[]>`
+        SELECT DISTINCT assignee_name FROM jira_issues WHERE assignee_name != '' ORDER BY assignee_name
+      `
+    ).map((row) => row.assignee_name)
+  }
+
+  async findPriorityName(wanted: string): Promise<string | null> {
+    const [row] = await this.sql<{ name: string }[]>`
+      SELECT name FROM jira_priorities WHERE LOWER(name) = LOWER(${wanted}) LIMIT 1
+    `
+    return row?.name ?? null
+  }
+
+  async getPriorityNames(): Promise<string[]> {
+    return (await this.sql<{ name: string }[]>`SELECT name FROM jira_priorities ORDER BY name`).map(
+      (row) => row.name,
+    )
+  }
+
+  async findActiveAssigneeAccountId(displayName: string): Promise<string | null> {
+    const [row] = await this.sql<{ account_id: string }[]>`
+      SELECT account_id
+      FROM jira_users
+      WHERE active = 1 AND LOWER(display_name) = LOWER(${displayName})
+      LIMIT 1
+    `
+    return row?.account_id ?? null
+  }
+
+  async findIssueTypeId(name: string): Promise<string | null> {
+    const [row] = await this.sql<{ id: string }[]>`
+      SELECT id FROM jira_issue_types WHERE LOWER(name) = LOWER(${name}) LIMIT 1
+    `
+    return row?.id ?? null
+  }
+
+  async getIssueTypeNames(): Promise<string[]> {
+    return (
+      await this.sql<{ name: string }[]>`SELECT name FROM jira_issue_types ORDER BY name`
+    ).map((row) => row.name)
+  }
+
+  async resolveIssueId(lookup: string): Promise<string | null> {
+    const normalized = lookup.startsWith('jira:') ? lookup.slice('jira:'.length) : lookup
+    const [row] = await this.sql<{ id: string }[]>`
+      SELECT id FROM jira_issues WHERE id = ${normalized} OR key = ${normalized} LIMIT 1
+    `
+    return row?.id ?? null
   }
 }
