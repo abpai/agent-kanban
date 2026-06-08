@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.1 - 2026-06-08
+
+- Added optional bearer-token authentication and CORS controls for the HTTP API,
+  and made provider webhook routes fail closed when their provider secret is not
+  configured.
+- Hardened Jira sync and board handling around unsafe delta cursors, WebSocket
+  column ids, warm-cache reads, server shutdown, and per-server WebSocket client
+  accounting.
+- Fixed local and Postgres board correctness for custom columns: metrics now
+  classify done/in-progress columns by role, SQLite honors `KANBAN_DEFAULT_COLUMNS`,
+  Postgres column-time metrics stay accurate, and `kanban board init` works
+  through the real CLI path on a fresh SQLite database.
+- Made SQLite comment create/update operations atomic with their activity log
+  entries, and aligned Linear activity truncation markers across SQLite and
+  Postgres caches.
+- Refactored the Jira/Linear cache repositories, shared provider cores,
+  capability interfaces, CLI/HTTP/MCP use-case layer, and UI store slices while
+  preserving the public provider/API surface.
+
 ## 0.6.0 - 2026-06-08
 
 - Fixed Jira issue sync to follow the `/rest/api/3/search/jql` cursor. That
