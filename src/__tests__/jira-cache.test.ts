@@ -62,6 +62,62 @@ describe('jira-cache', () => {
     expect(decodeColumnStatusIds(col)).toEqual(['10001', '10002', '10003'])
   })
 
+  test('catalog replace prune=false upserts without deleting obsolete rows', () => {
+    // Seed a full catalog (prune defaults to true → full replace).
+    replaceJiraColumns(db, [
+      { id: 'status:1', name: 'To Do', position: 0, statusIds: ['1'], source: 'status' },
+      { id: 'status:2', name: 'Done', position: 1, statusIds: ['2'], source: 'status' },
+    ])
+    replaceJiraPriorities(db, [
+      { id: 'p1', name: 'High' },
+      { id: 'p2', name: 'Low' },
+    ])
+    replaceJiraIssueTypes(db, [
+      { id: 't1', name: 'Bug' },
+      { id: 't2', name: 'Task' },
+    ])
+
+    // A delta sync (prune=false) carries a partial snapshot: it should upsert the
+    // rows it sees and leave the others in place (self-healing), not delete them.
+    replaceJiraColumns(
+      db,
+      [
+        {
+          id: 'status:1',
+          name: 'To Do (renamed)',
+          position: 0,
+          statusIds: ['1'],
+          source: 'status',
+        },
+      ],
+      false,
+    )
+    replaceJiraPriorities(db, [{ id: 'p1', name: 'Highest' }], false)
+    replaceJiraIssueTypes(db, [{ id: 't1', name: 'Defect' }], false)
+
+    const columns = getCachedColumns(db)
+    expect(columns.map((c) => c.id).sort()).toEqual(['status:1', 'status:2'])
+    expect(columns.find((c) => c.id === 'status:1')?.name).toBe('To Do (renamed)')
+
+    const { priorities, issueTypes } = getCachedConfig(db)
+    expect(priorities.map((p) => p.id).sort()).toEqual(['p1', 'p2'])
+    expect(priorities.find((p) => p.id === 'p1')?.name).toBe('Highest')
+    expect(issueTypes.map((t) => t.id).sort()).toEqual(['t1', 't2'])
+    expect(issueTypes.find((t) => t.id === 't1')?.name).toBe('Defect')
+  })
+
+  test('catalog replace prune=true (default) removes obsolete rows', () => {
+    replaceJiraColumns(db, [
+      { id: 'status:1', name: 'To Do', position: 0, statusIds: ['1'], source: 'status' },
+      { id: 'status:2', name: 'Done', position: 1, statusIds: ['2'], source: 'status' },
+    ])
+    // A full reconcile (prune=true) replaces the catalog: status:2 is gone.
+    replaceJiraColumns(db, [
+      { id: 'status:1', name: 'To Do', position: 0, statusIds: ['1'], source: 'status' },
+    ])
+    expect(getCachedColumns(db).map((c) => c.id)).toEqual(['status:1'])
+  })
+
   test('decodeColumnStatusIds handles 3-element array without ordering loss', () => {
     expect(decodeColumnStatusIds({ status_ids: JSON.stringify(['c', 'a', 'b']) })).toEqual([
       'c',
