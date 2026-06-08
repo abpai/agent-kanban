@@ -47,7 +47,11 @@ async function expectKanbanError(
 describe('parseServeArgs', () => {
   test('defaults: no tunnel, port from PORT env or 3000', () => {
     const prev = process.env['PORT']
+    const prevToken = process.env['KANBAN_API_TOKEN']
+    const prevOrigin = process.env['KANBAN_ALLOWED_ORIGIN']
     delete process.env['PORT']
+    delete process.env['KANBAN_API_TOKEN']
+    delete process.env['KANBAN_ALLOWED_ORIGIN']
     try {
       expect(parseServeArgs(['serve'])).toEqual({ db: undefined, port: 3000, tunnel: false })
       process.env['PORT'] = '4001'
@@ -55,6 +59,10 @@ describe('parseServeArgs', () => {
     } finally {
       if (prev === undefined) delete process.env['PORT']
       else process.env['PORT'] = prev
+      if (prevToken === undefined) delete process.env['KANBAN_API_TOKEN']
+      else process.env['KANBAN_API_TOKEN'] = prevToken
+      if (prevOrigin === undefined) delete process.env['KANBAN_ALLOWED_ORIGIN']
+      else process.env['KANBAN_ALLOWED_ORIGIN'] = prevOrigin
     }
   })
 
@@ -80,6 +88,36 @@ describe('parseServeArgs', () => {
   test('--sync-interval-ms rejects invalid values', () => {
     for (const raw of ['999', '0']) {
       expect(() => parseServeArgs(['serve', '--sync-interval-ms', raw])).toThrow(KanbanError)
+    }
+  })
+
+  test('--token / --allowed-origin flags and env are parsed; flags win over env', () => {
+    const prevToken = process.env['KANBAN_API_TOKEN']
+    const prevOrigin = process.env['KANBAN_ALLOWED_ORIGIN']
+    delete process.env['KANBAN_API_TOKEN']
+    delete process.env['KANBAN_ALLOWED_ORIGIN']
+    try {
+      const flags = parseServeArgs([
+        'serve',
+        '--token',
+        'flag-token',
+        '--allowed-origin',
+        'https://flag.example',
+      ])
+      expect(flags.authToken).toBe('flag-token')
+      expect(flags.allowedOrigin).toBe('https://flag.example')
+
+      process.env['KANBAN_API_TOKEN'] = 'env-token'
+      process.env['KANBAN_ALLOWED_ORIGIN'] = 'https://env.example'
+      expect(parseServeArgs(['serve']).authToken).toBe('env-token')
+      expect(parseServeArgs(['serve']).allowedOrigin).toBe('https://env.example')
+      // Flag overrides env.
+      expect(parseServeArgs(['serve', '--token', 'flag-token']).authToken).toBe('flag-token')
+    } finally {
+      if (prevToken === undefined) delete process.env['KANBAN_API_TOKEN']
+      else process.env['KANBAN_API_TOKEN'] = prevToken
+      if (prevOrigin === undefined) delete process.env['KANBAN_ALLOWED_ORIGIN']
+      else process.env['KANBAN_ALLOWED_ORIGIN'] = prevOrigin
     }
   })
 })

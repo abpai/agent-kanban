@@ -1,5 +1,5 @@
 import type { BoardBootstrap, Task, Priority } from './types'
-import { withBasePath } from './base'
+import { withBasePath, authHeaders } from './base'
 
 const BASE = withBasePath('/api')
 
@@ -14,7 +14,10 @@ export class ApiError extends Error {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init)
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: { ...authHeaders(), ...init?.headers },
+  })
   const body = await res.json()
   if (!body.ok) {
     throw new ApiError(body.error?.code ?? 'UNKNOWN', body.error?.message ?? 'Unknown error')

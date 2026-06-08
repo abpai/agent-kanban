@@ -1,15 +1,32 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { Buffer } from 'node:buffer'
+import { timingSafeEqual } from 'node:crypto'
 import { handleRequest } from './api'
 import type { ServerWebSocket } from 'bun'
 import type { KanbanProvider } from './providers/types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from './sync-config'
 
 const wsClients = new Set<ServerWebSocket<unknown>>()
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+
+// CORS is origin hygiene for cross-origin browser clients, never an auth control.
+// When no allowed origin is configured we emit no CORS headers (same-origin only),
+// which covers the bundled UI (served from this server) and the vite dev proxy.
+function buildCorsHeaders(allowedOrigin?: string): Record<string, string> {
+  if (!allowedOrigin) return {}
+  return {
+    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    Vary: 'Origin',
+  }
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a)
+  const bBuf = Buffer.from(b)
+  if (aBuf.length !== bBuf.length) return false
+  return timingSafeEqual(aBuf, bBuf)
 }
 interface BackgroundSyncState {
   enabled: boolean
@@ -22,6 +39,16 @@ interface BackgroundSyncState {
 
 export interface StartServerOptions {
   syncIntervalMs?: number
+  /**
+   * When set, all `/api/*` routes (reads and mutations) and the `/ws` upgrade
+   * require `Authorization: Bearer <token>` (or `?token=` for the WebSocket,
+   * which cannot send headers). `/api/health` and `/api/webhooks/*` are exempt:
+   * health is a liveness probe and webhooks authenticate with the provider
+   * webhook secret instead. When unset, the API is open (localhost default).
+   */
+  authToken?: string
+  /** Allowed CORS origin; when unset, no CORS headers are emitted (same-origin). */
+  allowedOrigin?: string
 }
 
 export interface StartedServer {
@@ -36,15 +63,15 @@ function broadcast(data: unknown): void {
   }
 }
 
-function applyCorsHeaders(response: Response): void {
-  for (const [header, value] of Object.entries(CORS_HEADERS)) {
+function applyCorsHeaders(response: Response, corsHeaders: Record<string, string>): void {
+  for (const [header, value] of Object.entries(corsHeaders)) {
     response.headers.set(header, value)
   }
 }
 
-function jsonWithCors(body: unknown, status = 200): Response {
+function jsonWithCors(body: unknown, corsHeaders: Record<string, string>, status = 200): Response {
   const response = Response.json(body, { status })
-  applyCorsHeaders(response)
+  applyCorsHeaders(response, corsHeaders)
   return response
 }
 
@@ -66,6 +93,33 @@ export function startServer(
   const syncIntervalMs = opts.syncIntervalMs ?? DEFAULT_POLLING_SYNC_INTERVAL_MS
   const syncCache = provider.syncCache?.bind(provider)
   const getSyncStatus = provider.getSyncStatus?.bind(provider)
+  const corsHeaders = buildCorsHeaders(opts.allowedOrigin)
+  const authToken = opts.authToken
+
+  const isAuthorized = (req: Request, url: URL, allowQueryToken: boolean): boolean => {
+    if (!authToken) return true
+    const header = req.headers.get('authorization')
+    // The `?token=` fallback exists only for the WebSocket handshake, which can't
+    // carry an Authorization header. HTTP API routes require the header so tokens
+    // don't end up in URLs, logs, or referrers.
+    const provided = header?.startsWith('Bearer ')
+      ? header.slice('Bearer '.length)
+      : allowQueryToken
+        ? url.searchParams.get('token')
+        : null
+    return provided ? safeEqual(provided, authToken) : false
+  }
+
+  // Health is a public liveness probe; webhooks authenticate with the provider
+  // webhook secret, not this token. Everything else under /api plus /ws is gated.
+  const pathRequiresAuth = (pathname: string): boolean => {
+    if (!authToken) return false
+    if (pathname === '/ws') return true
+    if (pathname === '/api/health') return false
+    if (pathname.startsWith('/api/webhooks/')) return false
+    return pathname.startsWith('/api/')
+  }
+
   const backgroundSync: BackgroundSyncState = {
     enabled: typeof syncCache === 'function',
     inFlight: false,
@@ -137,7 +191,17 @@ export function startServer(
 
       // Handle OPTIONS preflight first (before /api routing)
       if (req.method === 'OPTIONS') {
-        return new Response(null, { headers: CORS_HEADERS })
+        return new Response(null, { headers: corsHeaders })
+      }
+
+      // Auth gate: protect all /api/* and /ws except the public health probe and
+      // webhook routes (which authenticate with the provider webhook secret).
+      if (pathRequiresAuth(pathname) && !isAuthorized(req, url, pathname === '/ws')) {
+        return jsonWithCors(
+          { ok: false, error: { code: 'UNAUTHORIZED', message: 'Missing or invalid API token' } },
+          corsHeaders,
+          401,
+        )
       }
 
       // WebSocket upgrade
@@ -148,10 +212,13 @@ export function startServer(
       }
 
       if (pathname === '/api/health') {
-        return jsonWithCors({
-          ok: true,
-          data: { status: 'running', wsClients: wsClients.size, provider: provider.type },
-        })
+        return jsonWithCors(
+          {
+            ok: true,
+            data: { status: 'running', wsClients: wsClients.size, provider: provider.type },
+          },
+          corsHeaders,
+        )
       }
 
       if (pathname === '/api/ready') {
@@ -165,22 +232,26 @@ export function startServer(
               backgroundSync,
             },
           },
+          corsHeaders,
           ready ? 200 : 503,
         )
       }
 
       if (pathname === '/api/sync-status') {
         const providerSync = (await getSyncStatus?.()) ?? null
-        return jsonWithCors({
-          ok: true,
-          data: {
-            status: 'running',
-            provider: provider.type,
-            wsClients: wsClients.size,
-            backgroundSync,
-            providerSync,
+        return jsonWithCors(
+          {
+            ok: true,
+            data: {
+              status: 'running',
+              provider: provider.type,
+              wsClients: wsClients.size,
+              backgroundSync,
+              providerSync,
+            },
           },
-        })
+          corsHeaders,
+        )
       }
 
       if (pathname.startsWith('/api/')) {
@@ -188,7 +259,7 @@ export function startServer(
         forwardedUrl.pathname = pathname
         const forwardedReq = new Request(forwardedUrl.toString(), req)
         const result = await handleRequest(provider, forwardedReq)
-        applyCorsHeaders(result.response)
+        applyCorsHeaders(result.response, corsHeaders)
         if (result.mutated && result.response.ok) {
           broadcast(result.event ?? { type: 'refresh' })
         }

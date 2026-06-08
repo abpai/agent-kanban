@@ -289,3 +289,103 @@ describe('startServer', () => {
     expect(syncCalls).toBeGreaterThanOrEqual(2)
   })
 })
+
+describe('startServer auth + CORS', () => {
+  const TOKEN = 'secret-token'
+
+  test('without a token, the API stays open (localhost default)', async () => {
+    const runtime = startServer(makeProvider(), 0)
+    runtimes.push(runtime)
+    const res = await fetch(`http://127.0.0.1:${runtime.port}/api/bootstrap`)
+    expect(res.status).toBe(200)
+  })
+
+  test('with a token, protected routes require Bearer auth', async () => {
+    const runtime = startServer(makeProvider(), 0, { authToken: TOKEN })
+    runtimes.push(runtime)
+
+    const noAuth = await fetch(`http://127.0.0.1:${runtime.port}/api/bootstrap`)
+    expect(noAuth.status).toBe(401)
+    const noAuthBody = (await noAuth.json()) as { ok: boolean; error: { code: string } }
+    expect(noAuthBody.ok).toBe(false)
+    expect(noAuthBody.error.code).toBe('UNAUTHORIZED')
+
+    const wrong = await fetch(`http://127.0.0.1:${runtime.port}/api/bootstrap`, {
+      headers: { Authorization: 'Bearer nope' },
+    })
+    expect(wrong.status).toBe(401)
+
+    const ok = await fetch(`http://127.0.0.1:${runtime.port}/api/bootstrap`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    expect(ok.status).toBe(200)
+  })
+
+  test('?token= does NOT authorize HTTP API routes (header only)', async () => {
+    const runtime = startServer(makeProvider(), 0, { authToken: TOKEN })
+    runtimes.push(runtime)
+    const res = await fetch(`http://127.0.0.1:${runtime.port}/api/bootstrap?token=${TOKEN}`)
+    expect(res.status).toBe(401)
+  })
+
+  test('/ws requires the token and accepts it as a query param', async () => {
+    const runtime = startServer(makeProvider(), 0, { authToken: TOKEN })
+    runtimes.push(runtime)
+
+    // Plain GET (no upgrade) exercises the auth gate before the upgrade attempt.
+    const noToken = await fetch(`http://127.0.0.1:${runtime.port}/ws`)
+    expect(noToken.status).toBe(401)
+
+    // Correct query token passes the gate; the non-WebSocket request then fails
+    // the upgrade (400) rather than auth (401).
+    const withToken = await fetch(`http://127.0.0.1:${runtime.port}/ws?token=${TOKEN}`)
+    expect(withToken.status).not.toBe(401)
+  })
+
+  test('with a token, /api/health stays public', async () => {
+    const runtime = startServer(makeProvider(), 0, { authToken: TOKEN })
+    runtimes.push(runtime)
+    const res = await fetch(`http://127.0.0.1:${runtime.port}/api/health`)
+    expect(res.status).toBe(200)
+  })
+
+  test('with a token, webhook routes are exempt (provider secret guards them)', async () => {
+    const runtime = startServer(
+      makeProvider({
+        type: 'local',
+        async handleWebhook() {
+          return { handled: true }
+        },
+      }),
+      0,
+      { authToken: TOKEN },
+    )
+    runtimes.push(runtime)
+    const res = await fetch(`http://127.0.0.1:${runtime.port}/api/webhooks/local`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    // Reaches the provider handler instead of being rejected by bearer auth.
+    expect(res.status).not.toBe(401)
+  })
+
+  test('CORS headers are emitted only when an allowed origin is configured', async () => {
+    const withOrigin = startServer(makeProvider(), 0, {
+      allowedOrigin: 'https://kanban.example',
+    })
+    runtimes.push(withOrigin)
+    const res = await fetch(`http://127.0.0.1:${withOrigin.port}/api/health`)
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://kanban.example')
+
+    const preflight = await fetch(`http://127.0.0.1:${withOrigin.port}/api/bootstrap`, {
+      method: 'OPTIONS',
+    })
+    expect(preflight.headers.get('access-control-allow-origin')).toBe('https://kanban.example')
+
+    const noOrigin = startServer(makeProvider(), 0)
+    runtimes.push(noOrigin)
+    const bare = await fetch(`http://127.0.0.1:${noOrigin.port}/api/health`)
+    expect(bare.headers.get('access-control-allow-origin')).toBeNull()
+  })
+})

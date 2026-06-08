@@ -62,23 +62,25 @@ Running `kanban` with no arguments is equivalent to `kanban board view`.
 
 All operations route through a provider backend. Set `KANBAN_PROVIDER` to choose one.
 
-| Variable                     | Default       | Description                                                              |
-| ---------------------------- | ------------- | ------------------------------------------------------------------------ |
-| `KANBAN_PROVIDER`            | `local`       | `local`, `linear`, or `jira`                                             |
-| `KANBAN_STORAGE`             | `sqlite`      | `sqlite` or `postgres`                                                   |
-| `KANBAN_DATABASE_URL`        | —             | Required when `KANBAN_STORAGE=postgres`                                  |
-| `KANBAN_DB_PATH`             | auto-resolved | SQLite database path                                                     |
-| `KANBAN_DEFAULT_COLUMNS`     | —             | Optional bootstrap column names for local/Postgres caches                |
-| `KANBAN_DEFAULT_TASK_COLUMN` | —             | Optional created-task column override for local/Postgres caches          |
-| `KANBAN_SYNC_INTERVAL_MS`    | `30000`       | Polling sync interval for remote providers; integer milliseconds >= 1000 |
-| `LINEAR_API_KEY`             | —             | Required when `KANBAN_PROVIDER=linear`                                   |
-| `LINEAR_TEAM_ID`             | —             | Required when `KANBAN_PROVIDER=linear`                                   |
-| `JIRA_BASE_URL`              | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `https://acme.atlassian.net`) |
-| `JIRA_EMAIL`                 | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian account email)           |
-| `JIRA_API_TOKEN`             | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian API token)               |
-| `JIRA_PROJECT_KEY`           | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `ENG`)                        |
-| `JIRA_BOARD_ID`              | —             | Optional when `KANBAN_PROVIDER=jira` (Agile board id for column order)   |
-| `JIRA_ISSUE_TYPE`            | `Task`        | Optional when `KANBAN_PROVIDER=jira` (default issue type for new tasks)  |
+| Variable                     | Default       | Description                                                                                 |
+| ---------------------------- | ------------- | ------------------------------------------------------------------------------------------- |
+| `KANBAN_PROVIDER`            | `local`       | `local`, `linear`, or `jira`                                                                |
+| `KANBAN_STORAGE`             | `sqlite`      | `sqlite` or `postgres`                                                                      |
+| `KANBAN_DATABASE_URL`        | —             | Required when `KANBAN_STORAGE=postgres`                                                     |
+| `KANBAN_DB_PATH`             | auto-resolved | SQLite database path                                                                        |
+| `KANBAN_DEFAULT_COLUMNS`     | —             | Optional bootstrap column names for local/Postgres caches                                   |
+| `KANBAN_DEFAULT_TASK_COLUMN` | —             | Optional created-task column override for local/Postgres caches                             |
+| `KANBAN_SYNC_INTERVAL_MS`    | `30000`       | Polling sync interval for remote providers; integer milliseconds >= 1000                    |
+| `KANBAN_API_TOKEN`           | —             | When set, `kanban serve` requires `Authorization: Bearer <token>` (required for `--tunnel`) |
+| `KANBAN_ALLOWED_ORIGIN`      | —             | Allowed CORS origin for `kanban serve`; unset means same-origin only                        |
+| `LINEAR_API_KEY`             | —             | Required when `KANBAN_PROVIDER=linear`                                                      |
+| `LINEAR_TEAM_ID`             | —             | Required when `KANBAN_PROVIDER=linear`                                                      |
+| `JIRA_BASE_URL`              | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `https://acme.atlassian.net`)                    |
+| `JIRA_EMAIL`                 | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian account email)                              |
+| `JIRA_API_TOKEN`             | —             | Required when `KANBAN_PROVIDER=jira` (Atlassian API token)                                  |
+| `JIRA_PROJECT_KEY`           | —             | Required when `KANBAN_PROVIDER=jira` (e.g. `ENG`)                                           |
+| `JIRA_BOARD_ID`              | —             | Optional when `KANBAN_PROVIDER=jira` (Agile board id for column order)                      |
+| `JIRA_ISSUE_TYPE`            | `Task`        | Optional when `KANBAN_PROVIDER=jira` (default issue type for new tasks)                     |
 
 When `KANBAN_STORAGE=sqlite` and `KANBAN_DB_PATH` is unset, the local provider
 resolves the database in this order:
@@ -252,8 +254,29 @@ Default columns: `recurring`, `backlog`, `in-progress`, `review`, `done`.
 kanban serve            # default port 3000
 kanban serve --port 8080
 kanban serve --sync-interval-ms 300000
-kanban serve --tunnel   # optional public URL for webhook testing
+kanban serve --token "$(openssl rand -hex 32)"   # require an API token
+kanban serve --tunnel --token "$SECRET"           # public URL (token required)
 ```
+
+#### Authentication & CORS
+
+By default `serve` binds locally and leaves the API open for backward
+compatibility. To require authentication, set a token via `--token` or the
+`KANBAN_API_TOKEN` env var. When a token is set:
+
+- All `/api/*` routes (reads and mutations) and the `/ws` upgrade require
+  `Authorization: Bearer <token>`. The WebSocket, which can't send headers,
+  accepts `?token=<token>` instead.
+- `/api/health` stays public (liveness probe).
+- `/api/webhooks/*` are **not** covered by this token — they authenticate with
+  the provider webhook secret (e.g. `JIRA_WEBHOOK_SECRET`).
+- The bundled UI picks the token up once from `?token=` / `#token=` and stores
+  it in `localStorage`, so you can open `https://<host>/?token=<token>`.
+
+`--tunnel` exposes the dashboard publicly, so it **refuses to start without a
+token**. CORS is off by default (same-origin); set `KANBAN_ALLOWED_ORIGIN` (or
+`--allowed-origin`) to allow a specific cross-origin browser client. CORS is
+origin hygiene, not an auth control — the token is the security boundary.
 
 ### mcp
 

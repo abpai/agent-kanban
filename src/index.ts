@@ -435,6 +435,8 @@ export interface ServeOptions {
   port: number
   syncIntervalMs?: number
   tunnel: boolean
+  authToken?: string
+  allowedOrigin?: string
 }
 
 export function parseServeArgs(argv: string[]): ServeOptions {
@@ -445,6 +447,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       port: { type: 'string' },
       'sync-interval-ms': { type: 'string' },
       tunnel: { type: 'boolean', default: false },
+      token: { type: 'string' },
+      'allowed-origin': { type: 'string' },
     },
     strict: false,
     allowPositionals: true,
@@ -452,6 +456,10 @@ export function parseServeArgs(argv: string[]): ServeOptions {
   const port = values.port
     ? parseInt(values.port as string, 10)
     : parseInt(process.env['PORT'] || '3000', 10)
+  // Flags win over env so a one-off `--token` can override the ambient config.
+  const authToken = (values.token as string | undefined) || process.env['KANBAN_API_TOKEN']
+  const allowedOrigin =
+    (values['allowed-origin'] as string | undefined) || process.env['KANBAN_ALLOWED_ORIGIN']
   return {
     db: values.db as string | undefined,
     port,
@@ -459,6 +467,8 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       ? { syncIntervalMs: parseSyncIntervalMs(values['sync-interval-ms'] as string) }
       : {}),
     tunnel: Boolean(values.tunnel),
+    ...(authToken ? { authToken } : {}),
+    ...(allowedOrigin ? { allowedOrigin } : {}),
   }
 }
 
@@ -495,6 +505,16 @@ if (import.meta.main) {
   } else if (argv[0] === 'serve') {
     const opts = parseServeArgs(argv)
 
+    // A tunnel exposes the dashboard publicly, so refuse to start one without a
+    // token. Plain localhost serve stays open for backward compatibility.
+    if (opts.tunnel && !opts.authToken) {
+      console.error(
+        'Refusing to start a public tunnel without an API token. ' +
+          'Set KANBAN_API_TOKEN or pass --token <token>.',
+      )
+      process.exit(1)
+    }
+
     const runtime = await openKanbanRuntime({
       dbPath: opts.db ?? getDbPath(),
       ...(opts.syncIntervalMs !== undefined
@@ -507,7 +527,11 @@ if (import.meta.main) {
         : {}),
     })
     const { startServer } = await import('./server')
-    startServer(runtime.provider, opts.port, { syncIntervalMs: runtime.syncIntervalMs })
+    startServer(runtime.provider, opts.port, {
+      syncIntervalMs: runtime.syncIntervalMs,
+      ...(opts.authToken ? { authToken: opts.authToken } : {}),
+      ...(opts.allowedOrigin ? { allowedOrigin: opts.allowedOrigin } : {}),
+    })
 
     if (opts.tunnel) {
       const { startCloudflareTunnel } = await import('./tunnel')
