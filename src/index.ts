@@ -15,7 +15,7 @@ import { openKanbanRuntime } from './provider-runtime'
 import { trackerConfigFromEnv } from './tracker-config'
 import type { KanbanProvider } from './providers/types'
 import { resolvePollingSyncIntervalMs } from './sync-config'
-import { normalizeLabels } from './labels'
+import * as useCases from './use-cases'
 
 interface ParsedArgs {
   values: Record<string, unknown>
@@ -64,21 +64,21 @@ async function routeTask(
       const title = positionals[2]
       if (!title) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task title is required')
       return success(
-        await provider.createTask({
+        await useCases.createTask(provider, {
           title,
           description: values.d as string | undefined,
           column: values.c as string | undefined,
           priority: values.p as Priority | undefined,
           assignee: values.a as string | undefined,
           project: values.project as string | undefined,
-          labels: normalizeLabels([values.label, values.labels]),
+          labels: [values.label, values.labels],
           metadata: values.m as string | undefined,
         }),
       )
     }
     case 'list':
       return success(
-        await provider.listTasks({
+        await useCases.listTasks(provider, {
           column: values.c as string | undefined,
           priority: values.p as string | undefined,
           assignee: values.a as string | undefined,
@@ -90,13 +90,13 @@ async function routeTask(
     case 'view': {
       const id = positionals[2]
       if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
-      return success(await provider.getTask(id))
+      return success(await useCases.getTask(provider, id))
     }
     case 'update': {
       const id = positionals[2]
       if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
       return success(
-        await provider.updateTask(id, {
+        await useCases.updateTask(provider, id, {
           title: values.title as string | undefined,
           description: values.d as string | undefined,
           priority: values.p as Priority | undefined,
@@ -109,7 +109,7 @@ async function routeTask(
     case 'delete': {
       const id = positionals[2]
       if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
-      return success(await provider.deleteTask(id))
+      return success(await useCases.deleteTask(provider, id))
     }
     case 'move': {
       const id = positionals[2]
@@ -117,7 +117,7 @@ async function routeTask(
       if (!id || !column) {
         throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Usage: kanban task move <id> <column>')
       }
-      return success(await provider.moveTask(id, column))
+      return success(await useCases.moveTask(provider, id, column))
     }
     case 'assign': {
       const id = positionals[2]
@@ -128,7 +128,7 @@ async function routeTask(
           'Usage: kanban task assign <id> <assignee>',
         )
       }
-      return success(await provider.updateTask(id, { assignee }))
+      return success(await useCases.updateTask(provider, id, { assignee }))
     }
     case 'prioritize': {
       const id = positionals[2]
@@ -139,7 +139,7 @@ async function routeTask(
           'Usage: kanban task prioritize <id> <level>',
         )
       }
-      return success(await provider.updateTask(id, { priority: priority as Priority }))
+      return success(await useCases.updateTask(provider, id, { priority: priority as Priority }))
     }
     default:
       throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown task command '${action}'`)
@@ -155,7 +155,7 @@ async function routeComment(
     case 'list': {
       const id = positionals[2]
       if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
-      return success(await provider.listComments(id))
+      return success(await useCases.listComments(provider, id))
     }
     case 'add': {
       const id = positionals[2]
@@ -166,7 +166,7 @@ async function routeComment(
           'Usage: kanban comment add <task-id> <body>',
         )
       }
-      return success(await provider.comment(id, body))
+      return success(await useCases.addComment(provider, id, body))
     }
     case 'update': {
       const id = positionals[2]
@@ -178,7 +178,7 @@ async function routeComment(
           'Usage: kanban comment update <task-id> <comment-id> <body>',
         )
       }
-      return success(await provider.updateComment(id, commentId, body))
+      return success(await useCases.updateComment(provider, id, commentId, body))
     }
     default:
       throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown comment command '${action}'`)
@@ -239,7 +239,7 @@ async function routeConfig(
 ): Promise<CliOutput> {
   if (provider.type !== 'local') {
     if (action === 'show' || action === undefined) {
-      return success(await provider.getConfig())
+      return success(await useCases.getConfig(provider))
     }
     unsupportedOperation('Config mutation is only available in local mode')
   }
@@ -250,7 +250,7 @@ async function routeConfig(
   switch (action) {
     case 'show':
     case undefined:
-      return success(await provider.getConfig())
+      return success(await useCases.getConfig(provider))
     case 'set-member': {
       const name = positionals[2]
       if (!name) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Member name is required')
@@ -309,7 +309,7 @@ async function routeBoard(
         initSchema(db)
         seedDefaultColumns(db, columnNames)
       }
-      return success(await provider.getBoard())
+      return success(await useCases.getBoard(provider))
     case 'reset':
       requireLocalProvider(provider.type, 'Board reset')
       return boardReset(db, columnNames)
@@ -341,7 +341,7 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
           output: await routeBoard(sqliteDb, provider, undefined, defaultColumns),
           exitCode: 0,
         }
-      return { output: success(await provider.getBoard()), exitCode: 0 }
+      return { output: success(await useCases.getBoard(provider)), exitCode: 0 }
     }
 
     let output: CliOutput
@@ -350,7 +350,8 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
         if (sqliteDb) {
           output = await routeBoard(sqliteDb, provider, action, defaultColumns)
         } else {
-          if (action === 'view' || action === undefined) output = success(await provider.getBoard())
+          if (action === 'view' || action === undefined)
+            output = success(await useCases.getBoard(provider))
           else unsupportedOperation(`board ${action} is not available with KANBAN_STORAGE=postgres`)
         }
         break
@@ -375,7 +376,7 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
           output = await routeConfig(provider, dbPath, action, positionals, values)
         } else {
           if (action === 'show' || action === undefined)
-            output = success(await provider.getConfig())
+            output = success(await useCases.getConfig(provider))
           else
             unsupportedOperation(`config ${action} is not available with KANBAN_STORAGE=postgres`)
         }
