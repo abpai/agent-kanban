@@ -18,6 +18,7 @@ import {
   type WebhookResult,
 } from '../webhooks'
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
+import { buildDeltaJql, safeDeltaSince } from './jira-jql'
 import { JIRA_CAPABILITIES } from './capabilities'
 import { providerUpstreamError, unsupportedOperation } from './errors'
 import {
@@ -198,12 +199,14 @@ export class JiraProvider implements KanbanProvider {
     )
 
     // 4. Delta issue fetch (paginated).
-    const since = fullReconcile ? null : meta.lastIssueUpdatedAt
-    const sinceClause = since ?? '1970-01-01 00:00'
-    const jql = `project = ${project.key} AND updated >= "${sinceClause}" ORDER BY updated ASC`
+    // Sanitize the stored cursor once: an unsafe value is treated as absent so it
+    // is never carried into the JQL or re-persisted as `newestUpdatedAt`.
+    const storedSince = safeDeltaSince(meta.lastIssueUpdatedAt)
+    const since = fullReconcile ? null : storedSince
+    const jql = buildDeltaJql(project.key, since)
 
     const maxResults = 100
-    let newestUpdatedAt: string | null = meta.lastIssueUpdatedAt
+    let newestUpdatedAt: string | null = storedSince
     const seenIssueIds = new Set<string>()
     const issueFields = [
       'summary',
