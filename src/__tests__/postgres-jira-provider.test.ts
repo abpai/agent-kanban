@@ -503,4 +503,57 @@ describe('postgres jira provider', () => {
       await sql2.end({ timeout: 1 })
     }
   })
+
+  pgTest('full reconcile with a stalled cursor does not prune unfetched-page issues', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    // Mirror of the SQLite prune-safety coverage: if the cursor stalls (a
+    // repeated non-last token) mid-scan, seenIssueIds is only partial, so the
+    // incomplete scan must NOT prune issues that exist upstream on pages we never
+    // fetched.
+    let stalled = false
+    const routes = standardRoutes()
+    const sIdx = routes.findIndex((route) => route.match('https://x/rest/api/3/search/jql'))
+    routes[sIdx] = {
+      match: (url) => url.includes('/rest/api/3/search/jql'),
+      handler: () =>
+        stalled
+          ? // Later full reconcile: the cursor stalls after returning only ENG-1,
+            // so ENG-2's page is never reached. isLast=false + a repeated token =>
+            // incomplete.
+            jsonResponse({
+              nextPageToken: 'stuck',
+              isLast: false,
+              issues: [makeIssue({ id: '1', key: 'ENG-1' })],
+            })
+          : // First full reconcile: a clean single terminal page with both issues.
+            jsonResponse({
+              isLast: true,
+              issues: [makeIssue({ id: '1', key: 'ENG-1' }), makeIssue({ id: '2', key: 'ENG-2' })],
+            }),
+    }
+    globalThis.fetch = jiraFetchStub(routes).fn
+    const provider = new PostgresJiraProvider(sql, {
+      baseUrl: 'https://example.atlassian.net',
+      email: 'user@example.com',
+      apiToken: 'token',
+      projectKey: 'ENG',
+      boardId: 1006,
+      pollingSyncIntervalMs: 0,
+    })
+    const issueKeys = async () =>
+      (await sql!<{ key: string }[]>`SELECT key FROM jira_issues ORDER BY key`).map(
+        (row) => row.key,
+      )
+
+    await provider.getBoard()
+    expect(await issueKeys()).toEqual(['ENG-1', 'ENG-2'])
+
+    // Force the next sync to be a full reconcile and hit the stalled cursor.
+    stalled = true
+    await sql`DELETE FROM jira_sync_meta WHERE key = 'lastFullSyncAt'`
+    await provider.getBoard()
+
+    // ENG-2 must survive: the incomplete scan is not authoritative for pruning.
+    expect(await issueKeys()).toEqual(['ENG-1', 'ENG-2'])
+  })
 })
