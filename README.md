@@ -301,7 +301,7 @@ In Linear mode the dashboard hides unsupported actions and shows Linear issue id
 Starts a Bun HTTP server with:
 
 - **REST API** at `/api/*` — board, tasks, task comments, bootstrap/provider metadata, activity, metrics, config, and webhook endpoints
-- **WebSocket** at `/ws` — push notifications on board mutations (clients receive `task:upsert`, `task:delete`, or a fallback `refresh` event)
+- **WebSocket** at `/ws` — push notifications on board mutations (clients receive `task:upsert` with `{ task, columnId }`, `task:delete` with `{ id }`, or a fallback `refresh` event)
 - **Static UI** served from `ui/dist/` (build with `bun run build:ui` or `bun run ui:build`)
 - **Health check** at `/api/health` — cheap process liveness only
 - **Readiness check** at `/api/ready` — reports whether the cache has warmed at least once
