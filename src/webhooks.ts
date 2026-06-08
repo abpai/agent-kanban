@@ -12,6 +12,32 @@ export interface WebhookResult {
   message?: string
 }
 
+/**
+ * Fail-closed webhook authorization. Returns a rejecting WebhookResult when the
+ * secret is unset (so an anonymous caller can't inject cache writes) or when the
+ * signature doesn't verify, and null when the request is authorized. Webhook
+ * delivery therefore requires the provider secret to be configured.
+ */
+export function authorizeWebhook(opts: {
+  secret: string | undefined
+  rawBody: string
+  signature: string | undefined | null
+  verify: (secret: string, rawBody: string, signature: string | undefined | null) => boolean
+}): WebhookResult | null {
+  const { secret, rawBody, signature, verify } = opts
+  if (!secret) {
+    return {
+      handled: false,
+      unauthorized: true,
+      message: 'Webhook secret not configured; rejecting unauthenticated webhook',
+    }
+  }
+  if (!verify(secret, rawBody, signature)) {
+    return { handled: false, unauthorized: true, message: 'Invalid signature' }
+  }
+  return null
+}
+
 export function verifyHmacSha256(
   secret: string,
   rawBody: string,

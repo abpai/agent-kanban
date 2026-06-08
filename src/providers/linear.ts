@@ -9,7 +9,13 @@ import type {
   TaskComment,
   Task,
 } from '../types'
-import { headerLower, verifyHmacSha256, type WebhookRequest, type WebhookResult } from '../webhooks'
+import {
+  authorizeWebhook,
+  headerLower,
+  verifyHmacSha256,
+  type WebhookRequest,
+  type WebhookResult,
+} from '../webhooks'
 import { LINEAR_CAPABILITIES } from './capabilities'
 import {
   adjustLinearIssueCommentCount,
@@ -532,13 +538,13 @@ export class LinearProvider implements KanbanProvider {
   }
 
   async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
-    const secret = process.env['LINEAR_WEBHOOK_SECRET']
-    if (secret) {
-      const sig = headerLower(payload.headers, 'linear-signature')
-      if (!verifyHmacSha256(secret, payload.rawBody, sig)) {
-        return { handled: false, unauthorized: true, message: 'Invalid signature' }
-      }
-    }
+    const auth = authorizeWebhook({
+      secret: process.env['LINEAR_WEBHOOK_SECRET'],
+      rawBody: payload.rawBody,
+      signature: headerLower(payload.headers, 'linear-signature'),
+      verify: verifyHmacSha256,
+    })
+    if (auth) return auth
     let body: {
       action?: 'create' | 'update' | 'remove'
       type?: string

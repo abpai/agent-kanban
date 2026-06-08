@@ -27,6 +27,18 @@ function hmac(secret: string, body: string): string {
   return createHmac('sha256', secret).update(body).digest('hex')
 }
 
+const JIRA_TEST_SECRET = 'topsecret'
+const LINEAR_TEST_SECRET = 'hushhush'
+
+// Sign for both providers; each handler only reads its own header, so this works
+// regardless of which provider the test exercises.
+function signedHeaders(body: string): Record<string, string> {
+  return {
+    'x-hub-signature': `sha256=${hmac(JIRA_TEST_SECRET, body)}`,
+    'linear-signature': hmac(LINEAR_TEST_SECRET, body),
+  }
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -108,7 +120,7 @@ describe('Jira webhook', () => {
   test('issue_created upserts the task', async () => {
     const db = new Database(':memory:')
     seedJira(db)
-    delete process.env['JIRA_WEBHOOK_SECRET']
+    process.env['JIRA_WEBHOOK_SECRET'] = JIRA_TEST_SECRET
     const client = new JiraClient({
       baseUrl: jiraConfig.baseUrl,
       email: jiraConfig.email,
@@ -133,7 +145,7 @@ describe('Jira webhook', () => {
         },
       },
     })
-    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+    const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
     expect(result.handled).toBe(true)
     const tasks = getCachedJiraTasks(db)
     expect(tasks.find((t) => t.externalRef === 'ENG-100')?.title).toBe('New issue')
@@ -142,7 +154,7 @@ describe('Jira webhook', () => {
   test('issue_created accepts Jira webhook string descriptions', async () => {
     const db = new Database(':memory:')
     seedJira(db)
-    delete process.env['JIRA_WEBHOOK_SECRET']
+    process.env['JIRA_WEBHOOK_SECRET'] = JIRA_TEST_SECRET
     const client = new JiraClient({
       baseUrl: jiraConfig.baseUrl,
       email: jiraConfig.email,
@@ -170,7 +182,7 @@ describe('Jira webhook', () => {
       },
     })
 
-    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+    const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
 
     expect(result.handled).toBe(true)
     expect(getCachedJiraTasks(db).find((t) => t.externalRef === 'ENG-101')?.description).toBe(
@@ -193,7 +205,7 @@ describe('Jira webhook', () => {
         updatedAt: '2025-02-01',
       },
     ])
-    delete process.env['JIRA_WEBHOOK_SECRET']
+    process.env['JIRA_WEBHOOK_SECRET'] = JIRA_TEST_SECRET
     const client = new JiraClient({
       baseUrl: jiraConfig.baseUrl,
       email: jiraConfig.email,
@@ -214,7 +226,7 @@ describe('Jira webhook', () => {
         },
       },
     })
-    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+    const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
     expect(result.handled).toBe(true)
     expect(getCachedJiraTasks(db).find((t) => t.externalRef === 'ENG-200')).toBeUndefined()
   })
@@ -298,7 +310,7 @@ describe('Jira webhook', () => {
   test('ignores issue updates from other projects', async () => {
     const db = new Database(':memory:')
     seedJira(db)
-    delete process.env['JIRA_WEBHOOK_SECRET']
+    process.env['JIRA_WEBHOOK_SECRET'] = JIRA_TEST_SECRET
     const client = new JiraClient({
       baseUrl: jiraConfig.baseUrl,
       email: jiraConfig.email,
@@ -323,7 +335,7 @@ describe('Jira webhook', () => {
       },
     })
 
-    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+    const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
 
     expect(result.handled).toBe(false)
     expect(result.message).toContain('Ignoring issue from project')
@@ -333,7 +345,7 @@ describe('Jira webhook', () => {
   test('issue_updated backfills activity immediately', async () => {
     const db = new Database(':memory:')
     seedJira(db)
-    delete process.env['JIRA_WEBHOOK_SECRET']
+    process.env['JIRA_WEBHOOK_SECRET'] = JIRA_TEST_SECRET
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async (input) => {
       const url =
@@ -381,7 +393,7 @@ describe('Jira webhook', () => {
         },
       })
 
-      const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+      const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
 
       expect(result.handled).toBe(true)
       expect(getCachedJiraTasks(db).find((task) => task.externalRef === 'ENG-600')?.column_id).toBe(
@@ -434,7 +446,7 @@ describe('Linear webhook', () => {
   test('Issue.create upserts the task', async () => {
     const db = new Database(':memory:')
     seedLinear(db)
-    delete process.env['LINEAR_WEBHOOK_SECRET']
+    process.env['LINEAR_WEBHOOK_SECRET'] = LINEAR_TEST_SECRET
     const provider = new LinearProvider(db, 'tid', 'key')
     const body = JSON.stringify({
       action: 'create',
@@ -454,7 +466,7 @@ describe('Linear webhook', () => {
         commentCount: 1,
       },
     })
-    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+    const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
     expect(result.handled).toBe(true)
     const tasks = getCachedLinearTasks(db)
     const issue = tasks.find((t) => t.externalRef === 'DX-1')
@@ -479,14 +491,14 @@ describe('Linear webhook', () => {
         updatedAt: '2025-01',
       },
     ])
-    delete process.env['LINEAR_WEBHOOK_SECRET']
+    process.env['LINEAR_WEBHOOK_SECRET'] = LINEAR_TEST_SECRET
     const provider = new LinearProvider(db, 'tid', 'key')
     const body = JSON.stringify({
       action: 'remove',
       type: 'Issue',
       data: { id: 'ix', identifier: 'DX-9' },
     })
-    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+    const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
     expect(result.handled).toBe(true)
     expect(getCachedLinearTasks(db).find((t) => t.externalRef === 'DX-9')).toBeUndefined()
   })
@@ -494,7 +506,7 @@ describe('Linear webhook', () => {
   test('ignores create/update events from another team', async () => {
     const db = new Database(':memory:')
     seedLinear(db)
-    delete process.env['LINEAR_WEBHOOK_SECRET']
+    process.env['LINEAR_WEBHOOK_SECRET'] = LINEAR_TEST_SECRET
     const provider = new LinearProvider(db, 'tid', 'key')
     const body = JSON.stringify({
       action: 'update',
@@ -510,7 +522,7 @@ describe('Linear webhook', () => {
       },
     })
 
-    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+    const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
 
     expect(result.handled).toBe(false)
     expect(result.message).toContain("Ignoring issue from team 'other-team'")
@@ -520,7 +532,7 @@ describe('Linear webhook', () => {
   test('falls back to issue-team lookup when the webhook payload omits team info', async () => {
     const db = new Database(':memory:')
     seedLinear(db)
-    delete process.env['LINEAR_WEBHOOK_SECRET']
+    process.env['LINEAR_WEBHOOK_SECRET'] = LINEAR_TEST_SECRET
     globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as {
         query: string
@@ -559,7 +571,7 @@ describe('Linear webhook', () => {
       },
     })
 
-    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+    const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
 
     expect(result.handled).toBe(false)
     expect(result.message).toContain("Ignoring issue from team 'OPS'")
@@ -583,7 +595,7 @@ describe('Linear webhook', () => {
         updatedAt: '2025-02-01T00:00:00.000Z',
       },
     ])
-    delete process.env['LINEAR_WEBHOOK_SECRET']
+    process.env['LINEAR_WEBHOOK_SECRET'] = LINEAR_TEST_SECRET
     const provider = new LinearProvider(db, 'tid', 'key')
     const body = JSON.stringify({
       action: 'update',
@@ -599,7 +611,7 @@ describe('Linear webhook', () => {
       },
     })
 
-    const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+    const result = await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
 
     expect(result.handled).toBe(true)
     expect(
@@ -610,7 +622,7 @@ describe('Linear webhook', () => {
   test('create event stamps lastWebhookAt without clobbering team/lastSyncAt', async () => {
     const db = new Database(':memory:')
     seedLinear(db)
-    delete process.env['LINEAR_WEBHOOK_SECRET']
+    process.env['LINEAR_WEBHOOK_SECRET'] = LINEAR_TEST_SECRET
     const provider = new LinearProvider(db, 'tid', 'key')
     const body = JSON.stringify({
       action: 'create',
@@ -626,7 +638,7 @@ describe('Linear webhook', () => {
       },
     })
     const before = Date.now()
-    await provider.handleWebhook({ headers: {}, rawBody: body })
+    await provider.handleWebhook({ headers: signedHeaders(body), rawBody: body })
     const meta = loadSyncMeta(db)
     expect(meta.lastWebhookAt).not.toBeNull()
     expect(new Date(meta.lastWebhookAt!).getTime()).toBeGreaterThanOrEqual(before)
@@ -675,5 +687,46 @@ describe('Linear webhook', () => {
       rawBody: body,
     })
     expect(result.unauthorized).toBe(true)
+  })
+})
+
+describe('webhook fail-closed when secret is unset', () => {
+  test('Jira rejects unauthenticated webhooks when JIRA_WEBHOOK_SECRET is unset', async () => {
+    const prev = process.env['JIRA_WEBHOOK_SECRET']
+    delete process.env['JIRA_WEBHOOK_SECRET']
+    try {
+      const db = new Database(':memory:')
+      seedJira(db)
+      const client = new JiraClient({
+        baseUrl: jiraConfig.baseUrl,
+        email: jiraConfig.email,
+        apiToken: jiraConfig.apiToken,
+      })
+      const provider = new JiraProvider(db, jiraConfig, client)
+      const body = JSON.stringify({ webhookEvent: 'jira:issue_created', issue: { id: '1' } })
+      const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+      expect(result.handled).toBe(false)
+      expect(result.unauthorized).toBe(true)
+    } finally {
+      if (prev === undefined) delete process.env['JIRA_WEBHOOK_SECRET']
+      else process.env['JIRA_WEBHOOK_SECRET'] = prev
+    }
+  })
+
+  test('Linear rejects unauthenticated webhooks when LINEAR_WEBHOOK_SECRET is unset', async () => {
+    const prev = process.env['LINEAR_WEBHOOK_SECRET']
+    delete process.env['LINEAR_WEBHOOK_SECRET']
+    try {
+      const db = new Database(':memory:')
+      seedLinear(db)
+      const provider = new LinearProvider(db, 'tid', 'key')
+      const body = JSON.stringify({ action: 'create', type: 'Issue', data: { id: 'i1' } })
+      const result = await provider.handleWebhook({ headers: {}, rawBody: body })
+      expect(result.handled).toBe(false)
+      expect(result.unauthorized).toBe(true)
+    } finally {
+      if (prev === undefined) delete process.env['LINEAR_WEBHOOK_SECRET']
+      else process.env['LINEAR_WEBHOOK_SECRET'] = prev
+    }
   })
 })

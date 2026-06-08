@@ -168,15 +168,17 @@ still be repaired.
 Supported events: `jira:issue_created`, `jira:issue_updated`,
 `jira:issue_deleted`.
 
-### Optional HMAC verification
+### HMAC verification (required)
 
-Jira Cloud admin webhooks can sign payloads with a shared secret. Set
-`JIRA_WEBHOOK_SECRET` to the webhook secret and the signature will be verified
-from Jira's `X-Hub-Signature` header (`sha256=<hex>`). Requests with a missing
-or mismatched signature return HTTP 401.
+Jira Cloud admin webhooks sign payloads with a shared secret. Set
+`JIRA_WEBHOOK_SECRET` to that secret; the signature is verified from Jira's
+`X-Hub-Signature` header (`sha256=<hex>`). Requests with a missing or mismatched
+signature return HTTP 401.
 
-If `JIRA_WEBHOOK_SECRET` is unset the endpoint is open — put it behind a
-trusted network boundary.
+The webhook endpoint is **fail-closed**: if `JIRA_WEBHOOK_SECRET` is unset, all
+webhook requests are rejected (HTTP 401) rather than processed, so an
+unauthenticated caller can't inject cache writes. Configure the secret to enable
+webhook delivery.
 
 ### Public URL
 
