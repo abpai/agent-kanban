@@ -95,7 +95,7 @@ describe('boardUtils', () => {
     const nextBoard = upsertTaskInColumn(
       board,
       makeTask({ id: 't-1', title: 'First edited', column_id: 'c-backlog', position: 0 }),
-      'backlog',
+      'c-backlog',
     )
 
     expect(nextBoard.columns[0]!.tasks.map((task) => task.id)).toEqual(['t-1', 'tmp-1', 't-2'])
