@@ -332,11 +332,15 @@ export class PostgresJiraProvider implements KanbanProvider {
   }
 
   // Catalog refreshes (columns, priorities, issue types) UPSERT the current rows
-  // and then delete only rows whose id is no longer upstream. Unlike DELETE-all +
-  // INSERT, this never collides on the primary key when multiple Dispatch
-  // replicas refresh the same catalog concurrently — UPSERT serializes per row
-  // and the obsolete DELETE is idempotent — so the refresh is safe to run on
-  // every sync rather than only on a full reconcile.
+  // on every sync — UPSERT serializes per row and never collides on the primary
+  // key when multiple Dispatch replicas refresh concurrently, so a newly-created
+  // status/column/priority is reflected on the next sync. The obsolete-row DELETE
+  // (`prune`) runs ONLY on a full reconcile, mirroring how upstream-missing issues
+  // are pruned (see pruneIssuesMissingUpstream): a delta sync's snapshot can be
+  // stale, and a stale snapshot's DELETE would drop a row another replica just
+  // added with a fresher snapshot. Confining the delete to the periodic full
+  // reconcile (and self-healing via the every-sync UPSERT) keeps catalog pruning
+  // consistent with issue pruning and out of the common delta path.
   private async replaceColumns(
     columns: Array<{
       id: string
@@ -345,6 +349,7 @@ export class PostgresJiraProvider implements KanbanProvider {
       statusIds: string[]
       source: 'board' | 'status'
     }>,
+    prune: boolean,
   ): Promise<void> {
     for (const column of columns) {
       await this.sql`
@@ -363,7 +368,9 @@ export class PostgresJiraProvider implements KanbanProvider {
           source = EXCLUDED.source
       `
     }
-    await this.sql`DELETE FROM jira_columns WHERE NOT (id = ANY(${columns.map((c) => c.id)}))`
+    if (prune) {
+      await this.sql`DELETE FROM jira_columns WHERE NOT (id = ANY(${columns.map((c) => c.id)}))`
+    }
   }
 
   private async upsertUsers(
@@ -381,7 +388,10 @@ export class PostgresJiraProvider implements KanbanProvider {
     }
   }
 
-  private async replacePriorities(priorities: Array<{ id: string; name: string }>): Promise<void> {
+  private async replacePriorities(
+    priorities: Array<{ id: string; name: string }>,
+    prune: boolean,
+  ): Promise<void> {
     for (const priority of priorities) {
       await this.sql`
         INSERT INTO jira_priorities (id, name)
@@ -389,10 +399,16 @@ export class PostgresJiraProvider implements KanbanProvider {
         ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
       `
     }
-    await this.sql`DELETE FROM jira_priorities WHERE NOT (id = ANY(${priorities.map((p) => p.id)}))`
+    if (prune) {
+      await this
+        .sql`DELETE FROM jira_priorities WHERE NOT (id = ANY(${priorities.map((p) => p.id)}))`
+    }
   }
 
-  private async replaceIssueTypes(types: Array<{ id: string; name: string }>): Promise<void> {
+  private async replaceIssueTypes(
+    types: Array<{ id: string; name: string }>,
+    prune: boolean,
+  ): Promise<void> {
     for (const type of types) {
       await this.sql`
         INSERT INTO jira_issue_types (id, name)
@@ -400,7 +416,9 @@ export class PostgresJiraProvider implements KanbanProvider {
         ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
       `
     }
-    await this.sql`DELETE FROM jira_issue_types WHERE NOT (id = ANY(${types.map((t) => t.id)}))`
+    if (prune) {
+      await this.sql`DELETE FROM jira_issue_types WHERE NOT (id = ANY(${types.map((t) => t.id)}))`
+    }
   }
 
   private async upsertIssues(
@@ -626,15 +644,16 @@ export class PostgresJiraProvider implements KanbanProvider {
     const project = await this.client.getProject(this.config.projectKey)
     await this.saveTeamInfo({ id: project.id, key: project.key, name: project.name })
 
-    // Columns + catalogs (users/priorities/issue types) refresh on every sync.
-    // The writes are race-safe (UPSERT + obsolete-row DELETE, see replaceColumns),
-    // so concurrent replica refreshes can't collide on a primary key, and a
-    // newly-created Jira status/column/priority/user is reflected on the next
-    // sync rather than only on a full reconcile.
+    // Columns + catalogs (users/priorities/issue types) UPSERT on every sync so a
+    // newly-created Jira status/column/priority/user is reflected promptly; the
+    // obsolete-row prune is confined to the full reconcile (see replaceColumns).
     if (this.config.boardId !== undefined) {
       const boardCfg = await this.client.getBoardColumns(this.config.boardId)
       const boardId = this.config.boardId
-      await this.replaceColumns(jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns))
+      await this.replaceColumns(
+        jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns),
+        fullReconcile,
+      )
     } else {
       const statusCats = await this.client.getProjectStatuses(project.key)
       const seen = new Set<string>()
@@ -654,6 +673,7 @@ export class PostgresJiraProvider implements KanbanProvider {
           statusIds: [status.id],
           source: 'status' as const,
         })),
+        fullReconcile,
       )
     }
 
@@ -675,9 +695,11 @@ export class PostgresJiraProvider implements KanbanProvider {
     )
     await this.replacePriorities(
       priorities.map((priority) => ({ id: priority.id, name: priority.name })),
+      fullReconcile,
     )
     await this.replaceIssueTypes(
       issueTypes.map((issueType) => ({ id: issueType.id, name: issueType.name })),
+      fullReconcile,
     )
 
     const since = fullReconcile ? null : meta.lastIssueUpdatedAt
@@ -758,7 +780,7 @@ export class PostgresJiraProvider implements KanbanProvider {
         })
       }
 
-      const decision = decideJiraPagination(page, maxResults, seenPageTokens)
+      const decision = decideJiraPagination(page, seenPageTokens)
       if (decision.nextToken !== undefined) {
         seenPageTokens.add(decision.nextToken)
         nextPageToken = decision.nextToken

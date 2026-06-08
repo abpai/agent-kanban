@@ -178,7 +178,6 @@ describe('decideJiraPagination', () => {
   test('isLast=false with a fresh cursor advances', () => {
     const d = decideJiraPagination(
       { isLast: false, nextPageToken: 'p2', issues: issuesOfLength(MAX) },
-      MAX,
       new Set(),
     )
     expect(d).toEqual({ nextToken: 'p2', complete: false })
@@ -187,68 +186,63 @@ describe('decideJiraPagination', () => {
   test('isLast=true is a definitive complete end even if a token is present', () => {
     const d = decideJiraPagination(
       { isLast: true, nextPageToken: 'p2', issues: issuesOfLength(MAX) },
-      MAX,
       new Set(),
     )
     expect(d).toEqual({ complete: true })
   })
 
   test('isLast=false with no cursor is incomplete (server claims more but gave no way to fetch)', () => {
-    const d = decideJiraPagination({ isLast: false, issues: issuesOfLength(MAX) }, MAX, new Set())
+    const d = decideJiraPagination({ isLast: false, issues: issuesOfLength(MAX) }, new Set())
     expect(d).toEqual({ complete: false })
   })
 
   test('isLast=false with a repeated cursor is incomplete (stalled, not a false complete)', () => {
     const d = decideJiraPagination(
       { isLast: false, nextPageToken: 'seen', issues: issuesOfLength(MAX) },
-      MAX,
       new Set(['seen']),
     )
     expect(d).toEqual({ complete: false })
-  })
-
-  test('isLast absent: a full page with no cursor implies more pages (incomplete)', () => {
-    const d = decideJiraPagination({ issues: issuesOfLength(MAX) }, MAX, new Set())
-    expect(d).toEqual({ complete: false })
-  })
-
-  test('isLast absent: a short page with no cursor is the end (complete)', () => {
-    const d = decideJiraPagination({ issues: issuesOfLength(MAX - 1) }, MAX, new Set())
-    expect(d).toEqual({ complete: true })
-  })
-
-  test('isLast absent: a repeated cursor on a short page is still incomplete (cursor wins over page size)', () => {
-    const d = decideJiraPagination(
-      { nextPageToken: 'seen', issues: issuesOfLength(1) },
-      MAX,
-      new Set(['seen']),
-    )
-    expect(d).toEqual({ complete: false })
-  })
-
-  test('isLast absent: an empty page is the end (complete)', () => {
-    const d = decideJiraPagination({ issues: [] }, MAX, new Set())
-    expect(d).toEqual({ complete: true })
   })
 
   test('isLast absent: a full page with a fresh cursor advances', () => {
-    const d = decideJiraPagination(
-      { nextPageToken: 'p2', issues: issuesOfLength(MAX) },
-      MAX,
-      new Set(),
-    )
+    const d = decideJiraPagination({ nextPageToken: 'p2', issues: issuesOfLength(MAX) }, new Set())
     expect(d).toEqual({ nextToken: 'p2', complete: false })
+  })
+
+  // No completeness signal (no isLast, no total, no usable cursor): the scan is
+  // treated as incomplete REGARDLESS of page size. Guessing "complete" from a
+  // short/empty page would prune the entire cache on a full reconcile when a
+  // server returns a degraded response.
+  test('isLast absent: a full page with no cursor is incomplete (no completeness proof)', () => {
+    const d = decideJiraPagination({ issues: issuesOfLength(MAX) }, new Set())
+    expect(d).toEqual({ complete: false })
+  })
+
+  test('isLast absent: a short page with no cursor is incomplete (no completeness proof)', () => {
+    const d = decideJiraPagination({ issues: issuesOfLength(MAX - 1) }, new Set())
+    expect(d).toEqual({ complete: false })
+  })
+
+  test('isLast absent: an empty page is incomplete (a degraded {issues:[]} must not prune)', () => {
+    const d = decideJiraPagination({ issues: [] }, new Set())
+    expect(d).toEqual({ complete: false })
+  })
+
+  test('isLast absent: a repeated (stalled) cursor is incomplete', () => {
+    const d = decideJiraPagination(
+      { nextPageToken: 'seen', issues: issuesOfLength(1) },
+      new Set(['seen']),
+    )
+    expect(d).toEqual({ complete: false })
   })
 
   // Legacy total/startAt awareness: the live /search/jql endpoint omits `total`,
   // but a non-standard or mock server may supply it without a cursor. When it
-  // does, completeness must honor total rather than page size, so a full *last*
-  // page (exactly maxResults issues that are also the whole result set) is not
-  // misread as "more pages remain".
-  test('isLast absent: total present, full last page is complete (not mistaken for more)', () => {
+  // does, completeness is proven by total/startAt rather than page size, so a
+  // full *last* page (the whole result set) is not misread as "more remain".
+  test('isLast absent: total present, full last page is complete', () => {
     const d = decideJiraPagination(
       { issues: issuesOfLength(MAX), total: MAX, startAt: 0 },
-      MAX,
       new Set(),
     )
     expect(d).toEqual({ complete: true })
@@ -257,7 +251,6 @@ describe('decideJiraPagination', () => {
   test('isLast absent: total present, full non-last page is incomplete', () => {
     const d = decideJiraPagination(
       { issues: issuesOfLength(MAX), total: MAX * 3, startAt: 0 },
-      MAX,
       new Set(),
     )
     expect(d).toEqual({ complete: false })
@@ -266,7 +259,6 @@ describe('decideJiraPagination', () => {
   test('isLast absent: total present, final offset page reaching total is complete', () => {
     const d = decideJiraPagination(
       { issues: issuesOfLength(MAX), total: MAX * 2, startAt: MAX },
-      MAX,
       new Set(),
     )
     expect(d).toEqual({ complete: true })

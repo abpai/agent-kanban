@@ -272,7 +272,7 @@ export class JiraProvider implements KanbanProvider {
         })
       }
 
-      const decision = decideJiraPagination(page, maxResults, seenPageTokens)
+      const decision = decideJiraPagination(page, seenPageTokens)
       if (decision.nextToken !== undefined) {
         seenPageTokens.add(decision.nextToken)
         nextPageToken = decision.nextToken

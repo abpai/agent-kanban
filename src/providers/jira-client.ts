@@ -67,23 +67,29 @@ export interface JiraPaginationDecision {
 
 // Decide how a `/rest/api/3/search/jql` cursor scan should proceed after a page.
 // The endpoint signals continuation with `isLast`/`nextPageToken`, but real and
-// degraded servers vary, so termination must be conservative about completeness:
-//   - isLast === true                  → definitive end (complete).
-//   - isLast === false, usable cursor  → advance.
-//   - isLast === false, no cursor      → server claims more pages but gave no way
-//                                        to fetch them: incomplete, do not prune.
-//   - isLast absent (legacy/empty)     → advance on a usable cursor; if a cursor
-//                                        is present but unusable (already seen),
-//                                        the server still offered more pages, so
-//                                        the scan is incomplete; with no cursor at
-//                                        all a full page implies more remain
-//                                        (incomplete) and a short/empty page is the
-//                                        end (complete).
+// degraded servers vary, so termination must be conservative: a scan is reported
+// `complete` (safe to prune against the accumulated issue set) ONLY when the
+// server proves the end, never from a page-size guess.
+//   - usable cursor (fresh `nextPageToken`, isLast !== true) → advance.
+//   - isLast === true                                        → definitive end (complete).
+//   - isLast === false                                       → more pages exist; if the
+//                                                              cursor is missing/stale we
+//                                                              cannot fetch them, so the
+//                                                              scan is incomplete.
+//   - isLast absent, `total` present                         → legacy total/startAt proof:
+//                                                              complete once startAt+count
+//                                                              reaches `total`.
+//   - isLast absent, no `total`, no usable cursor            → NO completeness proof. A
+//                                                              short/empty page must NOT be
+//                                                              read as "the end": a degraded
+//                                                              `{ issues: [] }` would then
+//                                                              prune the entire cache on a
+//                                                              full reconcile. Treat as
+//                                                              incomplete and retry instead.
 // A cursor already in `seenPageTokens` counts as not usable (a stalled cursor
 // that would otherwise loop forever).
 export function decideJiraPagination(
   page: Pick<JiraSearchPage, 'isLast' | 'nextPageToken' | 'issues' | 'total' | 'startAt'>,
-  maxResults: number,
   seenPageTokens: ReadonlySet<string>,
 ): JiraPaginationDecision {
   const token = page.nextPageToken
@@ -91,21 +97,19 @@ export function decideJiraPagination(
   if (canAdvance) return { nextToken: token, complete: false }
   if (page.isLast === true) return { complete: true }
   if (page.isLast === false) return { complete: false }
-  // isLast absent: a present-but-unusable (already-seen) cursor still signals
-  // more pages, so the scan is incomplete.
-  if (token) return { complete: false }
-  // No cursor at all. Prefer the legacy total/startAt signal when the server
-  // supplies it: the scan is complete once we have fetched everything `total`
-  // promises (this avoids mis-flagging a full *last* page — e.g. exactly
-  // maxResults issues with total === that count — as incomplete). Otherwise a
-  // full page implies more remain and a short/empty page is the end. The loop
-  // cannot itself advance by offset (it follows cursors only), so a `total` that
-  // promises more than this page is reported incomplete rather than fetched.
-  const issueCount = page.issues?.length ?? 0
+  // isLast absent below. Prefer the legacy total/startAt signal when a
+  // (non-standard) server supplies it: complete once we have fetched everything
+  // `total` promises. The live /search/jql endpoint omits `total` and ignores
+  // `startAt`, so the loop never advances by offset — a `total` promising more
+  // than this page is reported incomplete rather than fetched.
   if (typeof page.total === 'number') {
+    const issueCount = page.issues?.length ?? 0
     return { complete: (page.startAt ?? 0) + issueCount >= page.total }
   }
-  return { complete: issueCount < maxResults }
+  // No completeness signal at all (no isLast, no total, no usable cursor). We
+  // cannot prove the scan reached the end, so never guess `complete` from page
+  // size — that would prune the whole cache on a degraded short/empty response.
+  return { complete: false }
 }
 
 export interface JiraCreatePayload {

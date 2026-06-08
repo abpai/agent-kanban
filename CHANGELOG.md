@@ -35,13 +35,19 @@
   own result, but the expensive whole-project issue re-fetch (plus a per-issue
   changelog call) now runs only on the periodic full-reconcile schedule.
 - The Postgres provider's column/catalog (users, priorities, issue types)
-  refreshes are now race-safe: each is an `INSERT ... ON CONFLICT DO UPDATE`
-  followed by a delete of only the rows whose id is no longer upstream, replacing
-  the previous `DELETE`+`INSERT` that could trip `jira_priorities_pkey` (and
-  peers) when multiple replicas refresh the shared cache concurrently. Because
-  the writes are idempotent they run on every sync again, so a newly-created Jira
-  status, column, priority, or assignable user is reflected on the next sync
-  rather than only on a full reconcile.
+  refreshes are now race-safe. Each row is written with an idempotent UPSERT
+  (`ON CONFLICT DO UPDATE`) on every sync, replacing the previous
+  `DELETE`+`INSERT` that could trip `jira_priorities_pkey` (and peers) when
+  multiple replicas refresh the shared cache concurrently; because the upsert is
+  idempotent, a newly-created
+  Jira status, column, priority, or assignable user is reflected on the next sync
+  rather than only on a full reconcile. The obsolete-row delete (removing a row
+  whose id is no longer upstream) now runs only on the periodic full reconcile,
+  mirroring how upstream-missing issues are pruned: a delta sync's catalog
+  snapshot can be stale, and a stale snapshot's delete would drop a row another
+  replica just added with a fresher snapshot. Confining the delete to the full
+  reconcile (additions still self-heal via the every-sync upsert) keeps catalog
+  pruning consistent with issue pruning and off the common delta path.
 
 ## 0.5.1 - 2026-05-30
 

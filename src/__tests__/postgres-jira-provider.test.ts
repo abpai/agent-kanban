@@ -412,51 +412,62 @@ describe('postgres jira provider', () => {
     })
   })
 
-  pgTest('delta sync refreshes catalogs and removes obsolete priorities', async () => {
-    if (!sql) throw new Error('expected postgres test connection')
-    const prioritiesState = {
-      list: [
+  pgTest(
+    'delta sync adds new catalog rows but only a full reconcile prunes obsolete ones',
+    async () => {
+      if (!sql) throw new Error('expected postgres test connection')
+      const prioritiesState = {
+        list: [
+          { id: '2', name: 'High' },
+          { id: '3', name: 'Medium' },
+        ] as Array<{ id: string; name: string }>,
+      }
+      const routes = standardRoutes()
+      const pIdx = routes.findIndex((route) =>
+        route.match('https://example.atlassian.net/rest/api/3/priority'),
+      )
+      routes[pIdx] = {
+        match: (url) => url.includes('/rest/api/3/priority'),
+        handler: () => jsonResponse(prioritiesState.list),
+      }
+      globalThis.fetch = jiraFetchStub(routes).fn
+      // pollingSyncIntervalMs: 0 lets every getBoard run; the first is a full
+      // reconcile (no lastFullSyncAt yet), later ones are delta syncs because the
+      // full-reconcile interval has not elapsed.
+      const provider = new PostgresJiraProvider(sql, {
+        baseUrl: 'https://example.atlassian.net',
+        email: 'user@example.com',
+        apiToken: 'token',
+        projectKey: 'ENG',
+        boardId: 1006,
+        pollingSyncIntervalMs: 0,
+      })
+      const priorityNames = async () =>
+        (await sql!<{ name: string }[]>`SELECT name FROM jira_priorities ORDER BY name`).map(
+          (row) => row.name,
+        )
+
+      await provider.getBoard()
+      expect(await priorityNames()).toEqual(['High', 'Medium'])
+
+      // Drop Medium, add Low upstream. A delta sync must pick up the new row
+      // (Low) via the every-sync UPSERT but must NOT prune the now-obsolete row
+      // (Medium): pruning on a possibly-stale delta snapshot could delete a row
+      // another replica just added. Pruning is confined to the full reconcile.
+      prioritiesState.list = [
         { id: '2', name: 'High' },
-        { id: '3', name: 'Medium' },
-      ] as Array<{ id: string; name: string }>,
-    }
-    const routes = standardRoutes()
-    const pIdx = routes.findIndex((route) =>
-      route.match('https://example.atlassian.net/rest/api/3/priority'),
-    )
-    routes[pIdx] = {
-      match: (url) => url.includes('/rest/api/3/priority'),
-      handler: () => jsonResponse(prioritiesState.list),
-    }
-    globalThis.fetch = jiraFetchStub(routes).fn
-    // pollingSyncIntervalMs: 0 lets the second getBoard run; it is a delta sync
-    // because the full-reconcile interval has not elapsed since the first.
-    const provider = new PostgresJiraProvider(sql, {
-      baseUrl: 'https://example.atlassian.net',
-      email: 'user@example.com',
-      apiToken: 'token',
-      projectKey: 'ENG',
-      boardId: 1006,
-      pollingSyncIntervalMs: 0,
-    })
+        { id: '4', name: 'Low' },
+      ]
+      await provider.getBoard()
+      expect(await priorityNames()).toEqual(['High', 'Low', 'Medium'])
 
-    await provider.getBoard()
-    const afterFull = (
-      await sql<{ name: string }[]>`SELECT name FROM jira_priorities ORDER BY name`
-    ).map((row) => row.name)
-    expect(afterFull).toEqual(['High', 'Medium'])
-
-    // Drop Medium, add Low upstream; a delta sync must still pick this up.
-    prioritiesState.list = [
-      { id: '2', name: 'High' },
-      { id: '4', name: 'Low' },
-    ]
-    await provider.getBoard()
-    const afterDelta = (
-      await sql<{ name: string }[]>`SELECT name FROM jira_priorities ORDER BY name`
-    ).map((row) => row.name)
-    expect(afterDelta).toEqual(['High', 'Low'])
-  })
+      // Force the next sync to be a full reconcile; only then is the obsolete
+      // Medium pruned.
+      await sql`DELETE FROM jira_sync_meta WHERE key = 'lastFullSyncAt'`
+      await provider.getBoard()
+      expect(await priorityNames()).toEqual(['High', 'Low'])
+    },
+  )
 
   pgTest('concurrent catalog refreshes do not collide on a primary key', async () => {
     if (!sql) throw new Error('expected postgres test connection')
@@ -479,8 +490,10 @@ describe('postgres jira provider', () => {
       const p2 = new PostgresJiraProvider(sql2, config)
       await p2.initialize()
       // Two replicas on separate connections refreshing the same shared cache
-      // concurrently must not trip a primary-key collision; UPSERT +
-      // obsolete-delete is idempotent.
+      // concurrently must not trip a primary-key collision. Both first syncs are
+      // full reconciles (no lastFullSyncAt yet), so this also exercises the
+      // obsolete-row DELETE running concurrently: UPSERT + conditional DELETE is
+      // idempotent and order-independent.
       await Promise.all([p1.getBoard(), p2.getBoard()])
       const rows = await sql<
         { count: number }[]
