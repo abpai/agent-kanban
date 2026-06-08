@@ -327,9 +327,9 @@ export const useStore = create<AppState>((set, get) => ({
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
-        if (data.type === 'task:upsert' && data.task && data.columnName) {
+        if (data.type === 'task:upsert' && data.task && data.columnId) {
           const current = get().board
-          if (current) set({ board: upsertTaskInColumn(current, data.task, data.columnName) })
+          if (current) set({ board: upsertTaskInColumn(current, data.task, data.columnId) })
           return
         }
         if (data.type === 'task:delete' && data.id) {

@@ -4,7 +4,7 @@ import type { CreateTaskInput, UpdateTaskInput, KanbanProvider } from './provide
 import { normalizeLabels } from './labels'
 
 export type WsEvent =
-  | { type: 'task:upsert'; task: Task; columnName: string }
+  | { type: 'task:upsert'; task: Task; columnId: string }
   | { type: 'task:delete'; id: string }
 
 interface MoveTaskBody {
@@ -71,17 +71,8 @@ export interface ApiResult {
   event?: WsEvent
 }
 
-async function resolveColumnName(
-  provider: KanbanProvider,
-  columnId: string,
-): Promise<string | null> {
-  const columns = await provider.listColumns()
-  return columns.find((column) => column.id === columnId)?.name ?? null
-}
-
-async function upsertEvent(provider: KanbanProvider, task: Task): Promise<WsEvent | undefined> {
-  const columnName = await resolveColumnName(provider, task.column_id)
-  return columnName ? { type: 'task:upsert', task, columnName } : undefined
+function upsertEvent(task: Task): WsEvent {
+  return { type: 'task:upsert', task, columnId: task.column_id }
 }
 
 export async function handleRequest(provider: KanbanProvider, req: Request): Promise<ApiResult> {
@@ -152,7 +143,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
       })
       return { ok: true, data: created }
     })
-    const event = response.ok && created ? await upsertEvent(provider, created) : undefined
+    const event = response.ok && created ? upsertEvent(created) : undefined
     return { response, mutated: response.ok, event }
   }
 
@@ -174,7 +165,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
         updated = await provider.updateTask(id, body)
         return { ok: true, data: updated }
       })
-      const event = response.ok && updated ? await upsertEvent(provider, updated) : undefined
+      const event = response.ok && updated ? upsertEvent(updated) : undefined
       return { response, mutated: response.ok, event }
     }
 
@@ -198,7 +189,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
       moved = await provider.moveTask(id, body.column!)
       return { ok: true, data: moved }
     })
-    const event = response.ok && moved ? await upsertEvent(provider, moved) : undefined
+    const event = response.ok && moved ? upsertEvent(moved) : undefined
     return { response, mutated: response.ok, event }
   }
 

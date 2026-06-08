@@ -377,6 +377,7 @@ export class PostgresLocalProvider implements KanbanProvider {
       )
     `
     await this.insertActivity(id, 'created', null, null, input.title)
+    await this.enterColumn(id, column.id)
     return this.getTask(id)
   }
 
@@ -443,23 +444,38 @@ export class PostgresLocalProvider implements KanbanProvider {
     await this.ready
     const current = await this.requireTask(idOrRef)
     const column = await this.resolveColumn(columnName)
-    const oldColumn = current.column_name ?? current.column_id
+    const oldColumnId = current.column_id
+    const [posRow] = await this.sql<{ next: string | number }[]>`
+      SELECT COALESCE(MAX(position), -1) + 1 AS next FROM tasks WHERE column_id = ${column.id}
+    `
     await this.sql`
       UPDATE tasks
       SET column_id = ${column.id},
+          position = ${Number(posRow?.next ?? 0)},
           revision = revision + 1,
           updated_at = ${nowIso()}
       WHERE id = ${current.id}
     `
-    await this.insertActivity(current.id, 'moved', 'column', oldColumn, column.name)
+    await this.renumberColumn(oldColumnId)
+    await this.exitColumn(current.id, oldColumnId)
+    await this.enterColumn(current.id, column.id)
+    await this.insertActivity(
+      current.id,
+      'moved',
+      'column',
+      current.column_name ?? oldColumnId,
+      column.name,
+    )
     return this.getTask(current.id)
   }
 
   async deleteTask(idOrRef: string): Promise<Task> {
     await this.ready
     const task = await this.getTask(idOrRef)
-    await this.sql`DELETE FROM tasks WHERE id = ${task.id}`
+    await this.exitColumn(task.id, task.column_id)
     await this.insertActivity(task.id, 'deleted', null, task.title, null)
+    await this.sql`DELETE FROM tasks WHERE id = ${task.id}`
+    await this.renumberColumn(task.column_id)
     return task
   }
 
@@ -551,6 +567,22 @@ export class PostgresLocalProvider implements KanbanProvider {
     const projects = await this.discoveredProjects()
     const totalTasks = Number(total?.count ?? 0)
     const completedTasks = Number(completed?.count ?? 0)
+    const [avgResult] = await this.sql<{ avg_hours: number | null }[]>`
+      SELECT AVG(
+        EXTRACT(EPOCH FROM (ct.exited_at::timestamp - fe.entered_at::timestamp)) / 3600
+      ) AS avg_hours
+      FROM column_time_tracking ct
+      JOIN columns c ON ct.column_id = c.id
+      JOIN (
+        SELECT task_id, MIN(entered_at::timestamp) AS entered_at
+        FROM column_time_tracking GROUP BY task_id
+      ) fe ON fe.task_id = ct.task_id
+      WHERE LOWER(c.name) = 'done' AND ct.exited_at IS NOT NULL
+    `
+    const [weekCount] = await this.sql<{ count: string | number }[]>`
+      SELECT COUNT(*) AS count FROM tasks
+      WHERE created_at::timestamp >= NOW() - INTERVAL '7 days'
+    `
     return {
       tasksByColumn: tasksByColumn.map((row) => ({
         column_name: row.column_name,
@@ -562,9 +594,9 @@ export class PostgresLocalProvider implements KanbanProvider {
       })),
       totalTasks,
       completedTasks,
-      avgCompletionHours: null,
+      avgCompletionHours: avgResult?.avg_hours ?? null,
       recentActivity: await this.getActivity(10),
-      tasksCreatedThisWeek: 0,
+      tasksCreatedThisWeek: Number(weekCount?.count ?? 0),
       inProgressCount:
         tasksByColumn.find((row) => row.column_name === 'in-progress')?.count === undefined
           ? 0
@@ -587,6 +619,31 @@ export class PostgresLocalProvider implements KanbanProvider {
       SELECT DISTINCT project FROM tasks WHERE project != '' ORDER BY project
     `
     return rows.map((row) => row.project)
+  }
+
+  private async enterColumn(taskId: string, columnId: string): Promise<void> {
+    const id = generateId('ct')
+    await this.sql`
+      INSERT INTO column_time_tracking (id, task_id, column_id, entered_at)
+      VALUES (${id}, ${taskId}, ${columnId}, ${nowIso()})
+    `
+  }
+
+  private async exitColumn(taskId: string, columnId: string): Promise<void> {
+    await this.sql`
+      UPDATE column_time_tracking
+      SET exited_at = ${nowIso()}
+      WHERE task_id = ${taskId} AND column_id = ${columnId} AND exited_at IS NULL
+    `
+  }
+
+  private async renumberColumn(columnId: string): Promise<void> {
+    const tasks = await this.sql<{ id: string }[]>`
+      SELECT id FROM tasks WHERE column_id = ${columnId} ORDER BY position
+    `
+    for (let i = 0; i < tasks.length; i++) {
+      await this.sql`UPDATE tasks SET position = ${i} WHERE id = ${tasks[i]!.id}`
+    }
   }
 
   async getConfig(): Promise<BoardConfig> {

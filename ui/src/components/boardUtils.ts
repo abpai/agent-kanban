@@ -145,10 +145,8 @@ export function removeTaskById(board: BoardView, id: string): BoardView {
   }
 }
 
-export function upsertTaskInColumn(board: BoardView, task: Task, columnName: string): BoardView {
-  const targetIdx = board.columns.findIndex(
-    (c) => c.name.toLowerCase() === columnName.toLowerCase(),
-  )
+export function upsertTaskInColumn(board: BoardView, task: Task, columnId: string): BoardView {
+  const targetIdx = board.columns.findIndex((c) => c.id === columnId)
   if (targetIdx === -1) return board
 
   let fallbackColumnIdx: number | undefined
