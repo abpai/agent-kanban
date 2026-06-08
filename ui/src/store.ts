@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { api, ApiError } from './api'
-import { withBasePath } from './base'
+import { withBasePath, withTokenParam } from './base'
 import { safeLocalStorageGet, safeLocalStorageSet } from './utils'
 import {
   findTask,
@@ -316,7 +316,9 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}${withBasePath('/ws')}`
+    // WebSocket handshakes can't carry an Authorization header, so the token (if
+    // any) rides as a query param to match the server's /ws auth fallback.
+    const wsUrl = withTokenParam(`${protocol}//${window.location.host}${withBasePath('/ws')}`)
     const ws = new WebSocket(wsUrl)
     set({ ws })
 
