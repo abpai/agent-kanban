@@ -47,18 +47,27 @@ export function getBoardMetrics(db: Database): BoardMetrics {
      JOIN columns c ON t.column_id = c.id WHERE LOWER(c.name) = 'done'`,
   )
 
+  // Average completion time = first time a task was tracked (creation) until the
+  // first time it entered the Done column. Measuring the Done *entry* (not exit)
+  // means tasks that reach Done and stay there are counted; MIN() over Done rows
+  // handles tasks that re-enter Done. Kept in lockstep with the Postgres copy in
+  // postgres-local.ts:getMetrics — update both together.
   const avgResult = db
     .query(
       `SELECT AVG(
-        (julianday(ct.exited_at) - julianday(first_enter.entered_at)) * 24
+        (julianday(done_enter.entered_at) - julianday(first_enter.entered_at)) * 24
        ) as avg_hours
-       FROM column_time_tracking ct
-       JOIN columns c ON ct.column_id = c.id
+       FROM (
+         SELECT ct.task_id, MIN(ct.entered_at) as entered_at
+         FROM column_time_tracking ct
+         JOIN columns c ON ct.column_id = c.id
+         WHERE LOWER(c.name) = 'done'
+         GROUP BY ct.task_id
+       ) done_enter
        JOIN (
          SELECT task_id, MIN(entered_at) as entered_at
          FROM column_time_tracking GROUP BY task_id
-       ) first_enter ON first_enter.task_id = ct.task_id
-       WHERE LOWER(c.name) = 'done' AND ct.exited_at IS NOT NULL`,
+       ) first_enter ON first_enter.task_id = done_enter.task_id`,
     )
     .get() as { avg_hours: number | null }
 

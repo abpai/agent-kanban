@@ -145,9 +145,17 @@ export function removeTaskById(board: BoardView, id: string): BoardView {
   }
 }
 
-export function upsertTaskInColumn(board: BoardView, task: Task, columnId: string): BoardView {
+// Returns null when the target column is not present in the client's board
+// (e.g. a provider whose task.column_id differs from the board column id, or a
+// column added since the last fetch). Callers should treat null as "cannot place
+// locally" and fall back to a full refresh.
+export function upsertTaskInColumn(
+  board: BoardView,
+  task: Task,
+  columnId: string,
+): BoardView | null {
   const targetIdx = board.columns.findIndex((c) => c.id === columnId)
-  if (targetIdx === -1) return board
+  if (targetIdx === -1) return null
 
   let fallbackColumnIdx: number | undefined
   let fallbackTaskIdx: number | undefined

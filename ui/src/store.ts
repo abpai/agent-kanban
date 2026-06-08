@@ -329,7 +329,14 @@ export const useStore = create<AppState>((set, get) => ({
         const data = JSON.parse(event.data)
         if (data.type === 'task:upsert' && data.task && data.columnId) {
           const current = get().board
-          if (current) set({ board: upsertTaskInColumn(current, data.task, data.columnId) })
+          if (current) {
+            const next = upsertTaskInColumn(current, data.task, data.columnId)
+            // null = the column isn't in this client's board (e.g. Jira raw status
+            // ids, or a newly-added column); fall back to a full refresh so the
+            // update is not silently dropped.
+            if (next) set({ board: next })
+            else get().fetchAll()
+          }
           return
         }
         if (data.type === 'task:delete' && data.id) {

@@ -608,6 +608,10 @@ export function moveTask(db: Database, id: string, columnIdOrName: string): Task
   const task = getTask(db, id)
   const column = resolveColumn(db, columnIdOrName)
 
+  // No-op move to the same column: skip the write so we don't fragment
+  // column-time tracking (spurious exit/enter) or re-append the task.
+  if (column.id === task.column_id) return task
+
   const maxPos = db
     .query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
     .get({ $col: column.id }) as { next: number }
