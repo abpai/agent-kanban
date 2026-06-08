@@ -614,9 +614,16 @@ export class PostgresJiraProvider implements KanbanProvider {
     await this.saveTeamInfo({ id: project.id, key: project.key, name: project.name })
 
     // Columns + catalogs (users/priorities/issue types) change rarely and use
-    // DELETE+INSERT, which races under concurrent syncs (poll loop + a forced
-    // write sync) and trips e.g. jira_priorities_pkey. Refresh them only on a
-    // full reconcile; delta syncs reuse the cached catalogs.
+    // DELETE+INSERT, which races when multiple Dispatch replicas poll the same
+    // shared Postgres cache concurrently and trips e.g. jira_priorities_pkey.
+    // Refresh them only on a full reconcile (which the poll loop runs every
+    // FULL_RECONCILE_INTERVAL_MS); delta syncs reuse the cached catalogs.
+    // Trade-off: a Jira status/column created since the last full reconcile is
+    // unmapped — and issues in it absent from the board projection — until the
+    // next full reconcile (bounded by that interval). Acceptable because new
+    // statuses are rare admin actions and transitions between existing columns,
+    // the hot path, are unaffected. The single-process SQLite provider has no
+    // such concurrency and so refreshes catalogs on every sync instead.
     if (fullReconcile) {
       if (this.config.boardId !== undefined) {
         const boardCfg = await this.client.getBoardColumns(this.config.boardId)

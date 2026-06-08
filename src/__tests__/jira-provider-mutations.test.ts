@@ -195,6 +195,19 @@ function standardSyncRoutes(opts: SyncRoutesOpts): StubRoute[] {
       handler: () => jsonResponse(opts.issueTypes ?? []),
     },
     {
+      // GET /rest/api/3/issue/{key} backs hydrateIssueByKey's read-after-write.
+      // Serves the post-mutation issue from the same pool as /search so tests
+      // that push a created/updated issue into `opts.issues` see it here too.
+      match: (u, init) =>
+        /\/rest\/api\/3\/issue\/[A-Z]+-\d+$/.test(new URL(u).pathname) &&
+        (init?.method ?? 'GET') === 'GET',
+      handler: (u) => {
+        const key = new URL(u).pathname.split('/').pop()!
+        const found = (opts.issues ?? []).find((iss) => (iss as { key?: string }).key === key)
+        return found ? jsonResponse(found) : jsonResponse({ errorMessages: ['not found'] }, 404)
+      },
+    },
+    {
       match: (u) => u.includes('/rest/api/3/search/jql'),
       handler: () =>
         jsonResponse({
@@ -298,16 +311,16 @@ function fullSyncRoutes(extraIssues: Record<string, unknown>[] = []): StubRoute[
 describe('JiraProvider mutations', () => {
   test('createTask happy path: plainTextToAdf invoked, priority mapped, assignee and issueType resolved', async () => {
     fullSeed(db)
-    // Shared state so the POST /issue handler appends the created issue, which
-    // the subsequent sync(true)'s /search handler then returns so getCachedTask
-    // finds it after the post-mutation sync.
-    const createdIssues: Record<string, unknown>[] = []
+    // Shared issue pool: the POST /issue handler appends the created issue, which
+    // hydrateIssueByKey then reads back through the GET /issue/{key} route so the
+    // returned task reflects the create.
     const createdIssue = makeJiraIssueFixture({
       id: '600',
       key: 'ENG-10',
       statusId: '20000',
       summary: 'Fix',
     })
+    const issues: Record<string, unknown>[] = [makeJiraIssueFixture(seedIssues[0]!)]
     const syncRoutes: StubRoute[] = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [
@@ -317,28 +330,12 @@ describe('JiraProvider mutations', () => {
       users: seedUsers,
       priorities: seedPriorities,
       issueTypes: seedIssueTypes,
-      issues: [makeJiraIssueFixture(seedIssues[0]!)],
+      issues,
     })
-    // Replace the /search route to include createdIssues dynamically.
-    const searchRouteIndex = syncRoutes.findIndex((r) =>
-      r.match('https://example.atlassian.net/rest/api/3/search/jql'),
-    )
-    syncRoutes[searchRouteIndex] = {
-      match: (u) => u.includes('/rest/api/3/search/jql'),
-      handler: () => {
-        const all = [makeJiraIssueFixture(seedIssues[0]!), ...createdIssues]
-        return jsonResponse({
-          startAt: 0,
-          maxResults: 100,
-          total: all.length,
-          issues: all,
-        })
-      },
-    }
     const mutationRoute: StubRoute = {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
       handler: () => {
-        createdIssues.push(createdIssue)
+        issues.push(createdIssue)
         return jsonResponse({
           id: '600',
           key: 'ENG-10',
@@ -652,13 +649,13 @@ describe('JiraProvider mutations', () => {
 
   test('createTask project field omitted is accepted', async () => {
     fullSeed(db)
-    const createdIssues: Record<string, unknown>[] = []
     const createdIssue = makeJiraIssueFixture({
       id: '600',
       key: 'ENG-10',
       statusId: '20000',
       summary: 'x',
     })
+    const issues: Record<string, unknown>[] = [makeJiraIssueFixture(seedIssues[0]!)]
     const syncRoutes = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [
@@ -668,27 +665,12 @@ describe('JiraProvider mutations', () => {
       users: seedUsers,
       priorities: seedPriorities,
       issueTypes: seedIssueTypes,
-      issues: [makeJiraIssueFixture(seedIssues[0]!)],
+      issues,
     })
-    const searchIdx = syncRoutes.findIndex((r) =>
-      r.match('https://example.atlassian.net/rest/api/3/search/jql'),
-    )
-    syncRoutes[searchIdx] = {
-      match: (u) => u.includes('/rest/api/3/search/jql'),
-      handler: () => {
-        const all = [makeJiraIssueFixture(seedIssues[0]!), ...createdIssues]
-        return jsonResponse({
-          startAt: 0,
-          maxResults: 100,
-          total: all.length,
-          issues: all,
-        })
-      },
-    }
     const mutationRoute: StubRoute = {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
       handler: () => {
-        createdIssues.push(createdIssue)
+        issues.push(createdIssue)
         return jsonResponse({ id: '600', key: 'ENG-10', self: 'x' })
       },
     }
@@ -706,13 +688,13 @@ describe('JiraProvider mutations', () => {
 
   test('createTask project field matching configured projectKey is accepted', async () => {
     fullSeed(db)
-    const createdIssues: Record<string, unknown>[] = []
     const createdIssue = makeJiraIssueFixture({
       id: '601',
       key: 'ENG-11',
       statusId: '20000',
       summary: 'x',
     })
+    const issues: Record<string, unknown>[] = [makeJiraIssueFixture(seedIssues[0]!)]
     const syncRoutes = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [
@@ -722,27 +704,12 @@ describe('JiraProvider mutations', () => {
       users: seedUsers,
       priorities: seedPriorities,
       issueTypes: seedIssueTypes,
-      issues: [makeJiraIssueFixture(seedIssues[0]!)],
+      issues,
     })
-    const searchIdx = syncRoutes.findIndex((r) =>
-      r.match('https://example.atlassian.net/rest/api/3/search/jql'),
-    )
-    syncRoutes[searchIdx] = {
-      match: (u) => u.includes('/rest/api/3/search/jql'),
-      handler: () => {
-        const all = [makeJiraIssueFixture(seedIssues[0]!), ...createdIssues]
-        return jsonResponse({
-          startAt: 0,
-          maxResults: 100,
-          total: all.length,
-          issues: all,
-        })
-      },
-    }
     const mutationRoute: StubRoute = {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
       handler: () => {
-        createdIssues.push(createdIssue)
+        issues.push(createdIssue)
         return jsonResponse({ id: '601', key: 'ENG-11', self: 'x' })
       },
     }

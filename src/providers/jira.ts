@@ -114,7 +114,11 @@ export class JiraProvider implements KanbanProvider {
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
     const now = Date.now()
     if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
-    const fullReconcile = force || shouldRunFullReconcile(meta.lastFullSyncAt, now)
+    // `force` only bypasses the poll throttle; it must NOT imply a full
+    // 1970-based reconcile, which re-fetches every issue plus a per-issue
+    // changelog call (~minutes). Writes get read-after-write freshness from
+    // hydrateIssueByKey instead, so a forced sync stays a cheap delta.
+    const fullReconcile = shouldRunFullReconcile(meta.lastFullSyncAt, now)
 
     // 1. Resolve project.
     const project = await this.client.getProject(this.config.projectKey)
@@ -466,6 +470,38 @@ export class JiraProvider implements KanbanProvider {
     }
   }
 
+  // Read-after-write via the direct issue endpoint. Unlike JQL search (used by
+  // sync()), GET /issue/{key} has no search-index lag, so a just-created or
+  // just-transitioned issue is reflected immediately. This replaces the previous
+  // "create/transition then sync(true) then getCachedTask" pattern, which raced
+  // the search index (creates reported "not yet visible"; a move's new status
+  // sometimes didn't land) and forced a full whole-project reconcile per write.
+  private async hydrateIssueByKey(key: string): Promise<Task | null> {
+    const issue = await this.client.getIssue(key)
+    upsertJiraIssues(this.db, [
+      {
+        id: issue.id,
+        key: issue.key,
+        summary: issue.fields.summary,
+        descriptionText: issue.fields.description
+          ? adfToPlainText(issue.fields.description as AdfDocument)
+          : '',
+        statusId: issue.fields.status.id,
+        priorityName: issue.fields.priority?.name ?? null,
+        issueTypeName: issue.fields.issuetype?.name ?? '',
+        assigneeAccountId: issue.fields.assignee?.accountId ?? null,
+        assigneeName: issue.fields.assignee?.displayName ?? null,
+        labels: issue.fields.labels ?? [],
+        commentCount: issue.fields.comment?.total ?? 0,
+        projectKey: issue.fields.project?.key ?? this.config.projectKey,
+        url: `${this.config.baseUrl}/browse/${issue.key}`,
+        createdAt: issue.fields.created,
+        updatedAt: issue.fields.updated,
+      },
+    ])
+    return getCachedTask(this.db, key)
+  }
+
   async createTask(input: CreateTaskInput): Promise<Task> {
     await this.sync()
     this.normalizeProjectField(input.project)
@@ -493,11 +529,10 @@ export class JiraProvider implements KanbanProvider {
     // issues land in the project workflow's default start state. Use
     // `moveTask` after create to change status.
     const created = await this.client.createIssue({ fields })
-    await this.sync(true)
-    const fresh = getCachedTask(this.db, created.key)
+    const fresh = await this.hydrateIssueByKey(created.key)
     if (!fresh) {
       providerUpstreamError(
-        `Jira issue ${created.key} was created but is not yet visible in the cache after sync.`,
+        `Jira issue ${created.key} was created but is not yet visible in the cache after hydration.`,
       )
     }
     return fresh
@@ -535,8 +570,7 @@ export class JiraProvider implements KanbanProvider {
     if (Object.keys(fields).length > 0) {
       await this.client.updateIssue(issueKey, { fields })
     }
-    await this.sync(true)
-    const fresh = getCachedTask(this.db, issueKey)
+    const fresh = await this.hydrateIssueByKey(issueKey)
     if (!fresh) {
       providerUpstreamError(`Jira issue ${issueKey} disappeared from cache after update.`)
     }
@@ -577,8 +611,7 @@ export class JiraProvider implements KanbanProvider {
       )
     }
     await this.client.transitionIssue(issueKey, match.id)
-    await this.sync(true)
-    const fresh = getCachedTask(this.db, issueKey)
+    const fresh = await this.hydrateIssueByKey(issueKey)
     if (!fresh) {
       providerUpstreamError(`Jira issue ${issueKey} missing from cache after transition.`)
     }

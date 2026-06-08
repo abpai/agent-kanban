@@ -14,18 +14,21 @@
   longer mistaken for the end). `JiraSearchPage`'s `startAt`/`maxResults`/`total`
   are now optional and `nextPageToken`/`isLast` are exposed.
 - Jira create/update/move now perform read-after-write via `GET /issue/{key}`
-  instead of `sync(true)` + cache read. The direct issue endpoint has no
-  search-index lag, so a just-created or just-transitioned issue is reflected
-  immediately. The previous pattern raced the search index — creates reported
-  "not yet visible", and a move's new status sometimes failed to land, causing
-  the poll loop to re-issue the same move repeatedly.
-- A forced sync (`sync(true)`) on the Postgres provider no longer triggers a
-  full 1970-based reconcile. `force` still bypasses the poll throttle so a write
-  sees its own result, but the expensive whole-project re-fetch (plus a
-  per-issue changelog call) now runs only on the periodic full-reconcile
-  schedule. Column and catalog (users/priorities/issue types) refreshes, which
-  use racy `DELETE`+`INSERT`, are likewise gated to full reconciles to avoid
-  primary-key collisions under concurrent syncs.
+  instead of `sync(true)` + cache read, in both the SQLite and Postgres
+  providers. The direct issue endpoint has no search-index lag, so a just-created
+  or just-transitioned issue is reflected immediately. The previous pattern raced
+  the search index — creates reported "not yet visible", and a move's new status
+  sometimes failed to land, causing the poll loop to re-issue the same move
+  repeatedly.
+- A forced sync (`sync(true)`) no longer triggers a full 1970-based reconcile in
+  either provider. `force` still bypasses the poll throttle so a write sees its
+  own result, but the expensive whole-project re-fetch (plus a per-issue
+  changelog call) now runs only on the periodic full-reconcile schedule.
+  Additionally, on the Postgres provider, column and catalog
+  (users/priorities/issue types) refreshes — which use racy `DELETE`+`INSERT` —
+  are gated to full reconciles to avoid primary-key collisions when multiple
+  replicas poll the shared cache concurrently; the single-process SQLite provider
+  has no such race and refreshes catalogs every sync.
 
 ## 0.5.1 - 2026-05-30
 
