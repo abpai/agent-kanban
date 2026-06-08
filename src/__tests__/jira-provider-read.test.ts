@@ -368,6 +368,48 @@ describe('JiraProvider read path', () => {
     expect(requestedTokens).toEqual([null, 'page-2'])
   })
 
+  test('sync does not drop a page when an intermediate page is empty but carries a token', async () => {
+    // A non-last page may legitimately return zero issues alongside a cursor;
+    // the loop must follow the token rather than treat the empty page as the end.
+    const searchHandler: StubHandler = (url) => {
+      const token = new URL(url).searchParams.get('nextPageToken')
+      if (token === null) {
+        return jsonResponse({ nextPageToken: 'page-2', isLast: false, issues: [] })
+      }
+      return jsonResponse({
+        isLast: true,
+        issues: [makeIssue({ id: '2', key: 'ENG-2', statusId: '10002' })],
+      })
+    }
+    const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+    await provider.getBoard()
+    expect(getCachedTasks(db).map((task) => task.externalRef)).toEqual(['ENG-2'])
+  })
+
+  test('sync terminates instead of spinning when the server repeats a cursor token', async () => {
+    // A misbehaving server that keeps handing back the same non-last token would
+    // otherwise loop forever and hang the poll cycle; the seen-token guard stops
+    // after the cursor fails to advance, without dropping the page it did return.
+    let call = 0
+    const searchHandler: StubHandler = () => {
+      call += 1
+      return jsonResponse({
+        nextPageToken: 'stuck',
+        isLast: false,
+        issues: [makeIssue({ id: String(call), key: `ENG-${call}`, statusId: '10001' })],
+      })
+    }
+    const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+    await provider.getBoard()
+    // Two fetches: the first records token 'stuck', the second sees it repeat and breaks.
+    expect(call).toBe(2)
+    expect(
+      getCachedTasks(db)
+        .map((task) => task.externalRef)
+        .sort(),
+    ).toEqual(['ENG-1', 'ENG-2'])
+  })
+
   test('periodic full reconciliation prunes cached issues missing upstream', async () => {
     const capturedJql: string[] = []
     let searchCalls = 0

@@ -8,9 +8,11 @@
   once `total` came back `undefined` it stopped after the first page. On any
   project with more than 100 issues, every issue beyond the oldest 100 (by
   `updated ASC`) — including newly-created tickets — was silently never cached.
-  The loop now follows `nextPageToken` until `isLast`. `JiraSearchPage`'s
-  `startAt`/`maxResults`/`total` are now optional and `nextPageToken`/`isLast`
-  are exposed.
+  The loop now follows `nextPageToken` until `isLast` (or until the server stops
+  advancing the cursor — a repeated token is guarded against so a misbehaving
+  server cannot spin the poll cycle forever, and a non-last empty page is no
+  longer mistaken for the end). `JiraSearchPage`'s `startAt`/`maxResults`/`total`
+  are now optional and `nextPageToken`/`isLast` are exposed.
 - Jira create/update/move now perform read-after-write via `GET /issue/{key}`
   instead of `sync(true)` + cache read. The direct issue endpoint has no
   search-index lag, so a just-created or just-transitioned issue is reflected

@@ -198,13 +198,18 @@ export class JiraProvider implements KanbanProvider {
       'project',
     ]
     // /rest/api/3/search/jql paginates by an opaque nextPageToken and omits
-    // `total`, so we follow the cursor until `isLast`. The previous total/startAt
-    // loop fetched only the first page (oldest 100 by updated ASC) once `total`
-    // came back undefined, so every issue beyond the first page — including
-    // newly-created tickets on a project with >100 issues — was never cached.
+    // `total`, so we follow the cursor until the server reports `isLast` or stops
+    // handing back a token. The previous total/startAt loop fetched only the first
+    // page (oldest 100 by updated ASC) once `total` came back undefined, so every
+    // issue beyond the first page — including newly-created tickets on a project
+    // with >100 issues — was never cached. seenPageTokens guards against a server
+    // that repeats a cursor, which would otherwise spin this loop forever and hang
+    // the poll cycle; an empty page is not treated as terminal because a non-last
+    // page may legitimately carry a token with zero issues.
+    const seenPageTokens = new Set<string>()
     let nextPageToken: string | undefined
     let firstPage = true
-    while (firstPage || nextPageToken) {
+    while (firstPage || nextPageToken !== undefined) {
       firstPage = false
       const page = await this.client.listIssues({
         jql,
@@ -213,7 +218,6 @@ export class JiraProvider implements KanbanProvider {
         fields: issueFields,
         nextPageToken,
       })
-      if (page.issues.length === 0) break
 
       upsertJiraIssues(
         this.db,
@@ -257,7 +261,10 @@ export class JiraProvider implements KanbanProvider {
         })
       }
 
-      nextPageToken = page.isLast ? undefined : page.nextPageToken
+      const token = page.isLast ? undefined : page.nextPageToken
+      if (!token || seenPageTokens.has(token)) break
+      seenPageTokens.add(token)
+      nextPageToken = token
     }
 
     if (fullReconcile) {
