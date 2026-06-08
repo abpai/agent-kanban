@@ -155,10 +155,13 @@ export function seedDefaultColumns(db: Database, columnNames?: string[]): void {
 }
 
 export function isInitialized(db: Database): boolean {
-  const result = db
+  const table = db
     .query("SELECT COUNT(*) as count FROM sqlite_master WHERE type='table' AND name='columns'")
     .get() as { count: number }
-  return result.count > 0
+  if (table.count === 0) return false
+
+  const rows = db.query('SELECT COUNT(*) as count FROM columns').get() as { count: number }
+  return rows.count > 0
 }
 
 // --- Column CRUD ---

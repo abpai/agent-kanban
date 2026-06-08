@@ -17,6 +17,13 @@ describe('boardInit', () => {
     expect(result.ok).toBe(true)
   })
 
+  test('initializes when the schema exists without seeded columns', () => {
+    initSchema(db)
+    const result = boardInit(db)
+    expect(result.ok).toBe(true)
+    expect(getBoardView(db).columns).toHaveLength(5)
+  })
+
   test('throws if already initialized', () => {
     initSchema(db)
     seedDefaultColumns(db)

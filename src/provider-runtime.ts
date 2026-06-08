@@ -22,7 +22,12 @@ export interface KanbanRuntime {
 }
 
 export async function openKanbanRuntime(
-  opts: { dbPath?: string; storage?: KanbanStorageConfig; tracker?: TrackerConfig } = {},
+  opts: {
+    dbPath?: string
+    storage?: KanbanStorageConfig
+    tracker?: TrackerConfig
+    seedLocalColumns?: boolean
+  } = {},
 ): Promise<KanbanRuntime> {
   const dbPath = opts.dbPath ?? getDbPath()
   const storage =
@@ -98,7 +103,9 @@ export async function openKanbanRuntime(
   const db = openDb(storage.sqlitePath)
   migrateSchema(db)
   return {
-    provider: createProvider(db, trackerConfig, storage.sqlitePath),
+    provider: createProvider(db, trackerConfig, storage.sqlitePath, {
+      seedLocalColumns: opts.seedLocalColumns,
+    }),
     dbPath: storage.sqlitePath,
     trackerConfig,
     sqliteDb: db,

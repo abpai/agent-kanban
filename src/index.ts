@@ -324,8 +324,10 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
     return { output: { ok: true, data: { message: HELP_TEXT } }, exitCode: 0 }
   }
 
+  const actionRequiresExplicitInit = positionals[0] === 'board' && positionals[1] === 'init'
   const runtime = await openKanbanRuntime({
     dbPath: (values.db as string | undefined) ?? getDbPath(),
+    seedLocalColumns: actionRequiresExplicitInit ? false : undefined,
   })
 
   try {

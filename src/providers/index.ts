@@ -10,6 +10,7 @@ export function createProvider(
   db: Database,
   config: TrackerConfig,
   dbPath = getDbPath(),
+  options: { seedLocalColumns?: boolean } = {},
 ): KanbanProvider {
   if (config.provider === 'linear') {
     return new LinearProvider(db, config.teamId, config.apiKey, config.syncIntervalMs)
@@ -28,6 +29,8 @@ export function createProvider(
   }
 
   initSchema(db)
-  seedDefaultColumns(db, config.defaultColumns)
+  if (options.seedLocalColumns !== false) {
+    seedDefaultColumns(db, config.defaultColumns)
+  }
   return new LocalProvider(db, dbPath)
 }

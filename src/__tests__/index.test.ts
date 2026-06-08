@@ -123,6 +123,23 @@ describe('parseServeArgs', () => {
 })
 
 describe('run', () => {
+  test('initializes a fresh board through the CLI path', async () => {
+    await withTempDb(async (dbPath) => {
+      const result = expectOk<{ message: string }>(await run(['--db', dbPath, 'board', 'init']))
+      expect(result.message).toContain('Board initialized')
+
+      const db = new Database(dbPath)
+      const columns = db.query('SELECT COUNT(*) as count FROM columns').get() as { count: number }
+      expect(columns.count).toBeGreaterThan(0)
+      db.close()
+
+      await expectKanbanError(
+        run(['--db', dbPath, 'board', 'init']),
+        ErrorCode.BOARD_ALREADY_INITIALIZED,
+      )
+    })
+  })
+
   test('applies schema migration before task commands', async () => {
     await withTempDb(async (dbPath) => {
       const legacy = new Database(dbPath)
