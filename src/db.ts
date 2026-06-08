@@ -569,19 +569,21 @@ export function addComment(
 ): TaskComment {
   getTask(db, taskId)
   const id = generateId('cm')
-  db.query(
-    `INSERT INTO comments (id, task_id, body, author)
-     VALUES ($id, $task_id, $body, $author)`,
-  ).run({
-    $id: id,
-    $task_id: taskId,
-    $body: body,
-    $author: author,
-  })
-  logActivity(db, taskId, 'updated', {
-    field: 'comment',
-    new_value: body,
-  })
+  db.transaction(() => {
+    db.query(
+      `INSERT INTO comments (id, task_id, body, author)
+       VALUES ($id, $task_id, $body, $author)`,
+    ).run({
+      $id: id,
+      $task_id: taskId,
+      $body: body,
+      $author: author,
+    })
+    logActivity(db, taskId, 'updated', {
+      field: 'comment',
+      new_value: body,
+    })
+  })()
   return getComment(db, taskId, id)
 }
 
@@ -592,21 +594,23 @@ export function updateComment(
   body: string,
 ): TaskComment {
   const existing = getComment(db, taskId, commentId)
-  db.query(
-    `UPDATE comments
-        SET body = $body,
-            updated_at = datetime('now')
-      WHERE id = $id AND task_id = $task_id`,
-  ).run({
-    $id: commentId,
-    $task_id: taskId,
-    $body: body,
-  })
-  logActivity(db, taskId, 'updated', {
-    field: 'comment',
-    old_value: existing.body,
-    new_value: body,
-  })
+  db.transaction(() => {
+    db.query(
+      `UPDATE comments
+          SET body = $body,
+              updated_at = datetime('now')
+        WHERE id = $id AND task_id = $task_id`,
+    ).run({
+      $id: commentId,
+      $task_id: taskId,
+      $body: body,
+    })
+    logActivity(db, taskId, 'updated', {
+      field: 'comment',
+      old_value: existing.body,
+      new_value: body,
+    })
+  })()
   return getComment(db, taskId, commentId)
 }
 
