@@ -115,12 +115,16 @@ Supported events: `Issue.create`, `Issue.update`, `Issue.remove`.
 
 Issue webhooks that do not belong to the configured team are ignored.
 
-### Signature verification
+### Signature verification (required)
 
-If `LINEAR_WEBHOOK_SECRET` is set, the handler verifies HMAC-SHA256 of the
-raw body against the `Linear-Signature` header (hex digest). Requests with a
-missing or mismatched signature return HTTP 401. If the env var is unset the
-endpoint is open — put it behind a trusted network boundary.
+Set `LINEAR_WEBHOOK_SECRET` to the webhook signing secret; the handler verifies
+HMAC-SHA256 of the raw body against the `Linear-Signature` header (hex digest).
+Requests with a missing or mismatched signature return HTTP 401.
+
+The endpoint is **fail-closed**: if `LINEAR_WEBHOOK_SECRET` is unset, all webhook
+requests are rejected (HTTP 401) rather than processed, so an unauthenticated
+caller can't inject cache writes. Configure the secret to enable webhook
+delivery.
 
 ### Public URL
 

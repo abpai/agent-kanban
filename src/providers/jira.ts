@@ -12,6 +12,7 @@ import type {
   Task,
 } from '../types'
 import {
+  authorizeWebhook,
   headerLower,
   verifySha256HmacSignatureHeader,
   type WebhookRequest,
@@ -804,13 +805,13 @@ export class JiraProvider implements KanbanProvider {
   }
 
   async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
-    const secret = process.env['JIRA_WEBHOOK_SECRET']
-    if (secret) {
-      const sig = headerLower(payload.headers, 'x-hub-signature')
-      if (!verifySha256HmacSignatureHeader(secret, payload.rawBody, sig)) {
-        return { handled: false, unauthorized: true, message: 'Invalid signature' }
-      }
-    }
+    const auth = authorizeWebhook({
+      secret: process.env['JIRA_WEBHOOK_SECRET'],
+      rawBody: payload.rawBody,
+      signature: headerLower(payload.headers, 'x-hub-signature'),
+      verify: verifySha256HmacSignatureHeader,
+    })
+    if (auth) return auth
     let body: { webhookEvent?: string; issue?: JiraIssue } = {}
     try {
       body = JSON.parse(payload.rawBody) as typeof body

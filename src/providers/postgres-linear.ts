@@ -13,7 +13,13 @@ import type {
   TaskComment,
 } from '../types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
-import { headerLower, verifyHmacSha256, type WebhookRequest, type WebhookResult } from '../webhooks'
+import {
+  authorizeWebhook,
+  headerLower,
+  verifyHmacSha256,
+  type WebhookRequest,
+  type WebhookResult,
+} from '../webhooks'
 import {
   ensureWebhookEventsSchema,
   extractWebhookMeta,
@@ -1025,13 +1031,13 @@ export class PostgresLinearProvider implements KanbanProvider {
   }
 
   private async handleWebhookInner(payload: WebhookRequest): Promise<WebhookResult> {
-    const secret = process.env['LINEAR_WEBHOOK_SECRET']
-    if (secret) {
-      const sig = headerLower(payload.headers, 'linear-signature')
-      if (!verifyHmacSha256(secret, payload.rawBody, sig)) {
-        return { handled: false, unauthorized: true, message: 'Invalid signature' }
-      }
-    }
+    const auth = authorizeWebhook({
+      secret: process.env['LINEAR_WEBHOOK_SECRET'],
+      rawBody: payload.rawBody,
+      signature: headerLower(payload.headers, 'linear-signature'),
+      verify: verifyHmacSha256,
+    })
+    if (auth) return auth
     let body: {
       action?: 'create' | 'update' | 'remove'
       type?: string
