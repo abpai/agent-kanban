@@ -2,20 +2,14 @@ import type { Sql } from 'postgres'
 
 import type { BoardConfig, BoardView, ProviderTeamInfo, Task } from '../types'
 import { ensureWebhookEventsSchema } from '../webhook-events'
+import type { LinearCachePort } from './linear-core'
+import type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
+
+export type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
 
 const ACTIVITY_VALUE_MAX_CHARS = 4096
 const ACTIVITY_TRUNCATION_SUFFIX = '...[truncated]'
 const ACTIVITY_VALUE_BUDGET = ACTIVITY_VALUE_MAX_CHARS - ACTIVITY_TRUNCATION_SUFFIX.length
-
-export interface LinearStateRow {
-  id: string
-  name: string
-  position: number
-  color: string | null
-  type: string | null
-  created_at: string
-  updated_at: string
-}
 
 export interface LinearIssueRow {
   id: string
@@ -32,23 +26,6 @@ export interface LinearIssueRow {
   url: string | null
   created_at: string
   updated_at: string
-}
-
-export interface LinearSyncMeta {
-  team: ProviderTeamInfo | null
-  lastSyncAt: string | null
-  lastFullSyncAt: string | null
-  lastIssueUpdatedAt: string | null
-  lastWebhookAt: string | null
-}
-
-export interface LinearActivityRow {
-  issue_id: string
-  history_id: string
-  item_field: string
-  from_value: string | null
-  to_value: string | null
-  created_at: string
 }
 
 function mapPriority(priority: number): Task['priority'] {
@@ -113,7 +90,7 @@ function clampActivityValue(value: string): string {
  * cache I/O (persistence + materialization, including description-change activity
  * synthesis on write); API sync and business logic stay in `PostgresLinearProvider`.
  */
-export class PostgresLinearCache {
+export class PostgresLinearCache implements LinearCachePort {
   readonly ready: Promise<void>
 
   constructor(private readonly sql: Sql) {
@@ -501,5 +478,27 @@ export class PostgresLinearCache {
       ORDER BY created_at DESC
       LIMIT ${limit}
     `
+  }
+
+  async findUserIdByName(name: string): Promise<string | null> {
+    const [row] = await this.sql<{ id: string }[]>`
+      SELECT id FROM linear_users WHERE LOWER(name) = LOWER(${name}) LIMIT 1
+    `
+    return row?.id ?? null
+  }
+
+  async findProjectIdByName(name: string): Promise<string | null> {
+    const [row] = await this.sql<{ id: string }[]>`
+      SELECT id FROM linear_projects WHERE LOWER(name) = LOWER(${name}) LIMIT 1
+    `
+    return row?.id ?? null
+  }
+
+  async resolveIssueId(lookup: string): Promise<string | null> {
+    const normalized = lookup.startsWith('linear:') ? lookup.slice('linear:'.length) : lookup
+    const [row] = await this.sql<{ id: string }[]>`
+      SELECT id FROM linear_issues WHERE id = ${normalized} OR identifier = ${normalized} LIMIT 1
+    `
+    return row?.id ?? null
   }
 }
