@@ -479,6 +479,54 @@ describe('JiraProvider read path', () => {
     expect(getCachedTasks(db).map((task) => task.externalRef)).toEqual(['ENG-1'])
   })
 
+  test('full reconcile with a stalled cursor does not prune issues from the unfetched pages', async () => {
+    // If the cursor stalls (a repeated non-last token) mid-scan, seenIssueIds is
+    // only partial. Pruning against it would delete issues that exist upstream on
+    // pages we never fetched, so an incomplete scan must not prune.
+    let stalled = false
+    const searchHandler: StubHandler = () => {
+      if (!stalled) {
+        // First full reconcile: a clean single terminal page with both issues.
+        return jsonResponse({
+          isLast: true,
+          issues: [
+            makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' }),
+            makeIssue({ id: '2', key: 'ENG-2', statusId: '10001' }),
+          ],
+        })
+      }
+      // Later full reconcile: the cursor stalls after returning only ENG-1, so
+      // ENG-2's page is never reached.
+      return jsonResponse({
+        nextPageToken: 'stuck',
+        isLast: false,
+        issues: [makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' })],
+      })
+    }
+    const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+    const baseNow = originalDateNow()
+
+    Date.now = () => baseNow
+    await provider.getBoard()
+    expect(
+      getCachedTasks(db)
+        .map((task) => task.externalRef)
+        .sort(),
+    ).toEqual(['ENG-1', 'ENG-2'])
+
+    // Next full reconcile (past the interval) hits the stalled cursor.
+    stalled = true
+    Date.now = () => baseNow + 5 * 60_000 + 31_000
+    await provider.getBoard()
+
+    // ENG-2 must survive: the incomplete scan is not authoritative for pruning.
+    expect(
+      getCachedTasks(db)
+        .map((task) => task.externalRef)
+        .sort(),
+    ).toEqual(['ENG-1', 'ENG-2'])
+  })
+
   test('listTasks filters by columnId with many-to-one mapping', async () => {
     const { provider } = makeProvider(standardRoutes({}))
     // Sync first (populates statuses-based columns)

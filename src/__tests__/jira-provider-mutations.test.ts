@@ -480,6 +480,62 @@ describe('JiraProvider mutations', () => {
     expect(body.transition.id).toBe('21')
   })
 
+  test('moveTask ingests the moved issue changelog via hydration (activity recorded immediately)', async () => {
+    // seedCache sets a recent lastSyncAt, so moveTask's pre-move sync() is
+    // throttled and fetches no changelog. The only changelog call must therefore
+    // come from hydrateIssueByKey's read-after-write — proving the transition
+    // lands in jira_activity immediately rather than waiting for a later sync.
+    seedCache(db, {
+      priorities: seedPriorities,
+      users: seedUsers,
+      issueTypes: seedIssueTypes,
+      columns: seedColumns,
+      issues: [{ id: '501', key: 'ENG-1', statusId: '20000' }],
+      projectKey: 'ENG',
+    })
+    const syncRoutes = fullSyncRoutes()
+    let changelogCalls = 0
+    const changelogRoute: StubRoute = {
+      match: (u) => /\/rest\/api\/3\/issue\/501\/changelog/.test(new URL(u).pathname),
+      handler: () => {
+        changelogCalls += 1
+        return jsonResponse({
+          values: [
+            {
+              id: 'h1',
+              created: '2026-01-06T00:00:00Z',
+              items: [{ field: 'status', from: '20000', to: '10001' }],
+            },
+          ],
+        })
+      },
+    }
+    const transitionsRoute: StubRoute = {
+      match: (u, init) =>
+        u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'GET',
+      handler: () =>
+        jsonResponse({
+          transitions: [{ id: '21', name: 'Done', to: { id: '10001', name: 'Done' } }],
+        }),
+    }
+    const postTransitionRoute: StubRoute = {
+      match: (u, init) =>
+        u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'POST',
+      handler: () => emptyResponse(204),
+    }
+    const { provider } = makeProvider(db, [
+      changelogRoute,
+      transitionsRoute,
+      postTransitionRoute,
+      ...syncRoutes,
+    ])
+    await provider.moveTask('ENG-1', 'Done')
+
+    expect(changelogCalls).toBe(1)
+    const activity = await provider.getActivity(50, 'jira:501')
+    expect(activity.length).toBeGreaterThan(0)
+  })
+
   test('moveTask no-match failure: error message names target and lists available transitions', async () => {
     seedCache(db, {
       priorities: seedPriorities,

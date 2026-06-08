@@ -707,6 +707,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     const seenPageTokens = new Set<string>()
     let nextPageToken: string | undefined
     let firstPage = true
+    let paginationComplete = false
     while (firstPage || nextPageToken !== undefined) {
       firstPage = false
       const page = await this.client.listIssues({
@@ -753,12 +754,27 @@ export class PostgresJiraProvider implements KanbanProvider {
       }
 
       const token = page.isLast ? undefined : page.nextPageToken
-      if (!token || seenPageTokens.has(token)) break
+      if (!token) {
+        // No continuation cursor (isLast, or the server returned no token): the
+        // scan reached a definitive end and seenIssueIds is the full upstream set.
+        paginationComplete = true
+        break
+      }
+      if (seenPageTokens.has(token)) {
+        // The cursor stalled (a repeated token while not last). seenIssueIds is
+        // only a partial scan, so we must not treat it as authoritative below.
+        console.warn(`[jira] search/jql cursor stalled on a repeated token; scan incomplete`)
+        break
+      }
       seenPageTokens.add(token)
       nextPageToken = token
     }
 
-    if (fullReconcile) {
+    // Only prune against seenIssueIds and advance lastFullSyncAt when the scan
+    // completed: an aborted (stalled-cursor) scan would otherwise delete issues
+    // that exist upstream on pages we never fetched.
+    const fullReconcileComplete = fullReconcile && paginationComplete
+    if (fullReconcileComplete) {
       await this.pruneIssuesMissingUpstream(project.key, [...seenIssueIds])
     }
 
@@ -768,7 +784,7 @@ export class PostgresJiraProvider implements KanbanProvider {
       lastSyncAt: new Date().toISOString(),
       lastIssueUpdatedAt: newestUpdatedAt ?? new Date().toISOString(),
     }
-    if (fullReconcile) nextMeta.lastFullSyncAt = nextMeta.lastSyncAt
+    if (fullReconcileComplete) nextMeta.lastFullSyncAt = nextMeta.lastSyncAt
     await this.saveSyncMeta(nextMeta)
   }
 
@@ -985,6 +1001,13 @@ export class PostgresJiraProvider implements KanbanProvider {
         updatedAt: issue.fields.updated,
       },
     ])
+    // Ingest the changelog like the sync loop does, so a just-applied transition
+    // is recorded in jira_activity immediately (backs getActivity and the
+    // poll-based `moved` trigger) rather than waiting for the next unthrottled
+    // sync. Best-effort: activity must not fail the mutation.
+    await this.ingestIssueActivity(issue.id).catch((err) => {
+      console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
+    })
     return this.getCachedTask(key)
   }
 

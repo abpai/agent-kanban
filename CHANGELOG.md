@@ -11,15 +11,20 @@
   The loop now follows `nextPageToken` until `isLast` (or until the server stops
   advancing the cursor — a repeated token is guarded against so a misbehaving
   server cannot spin the poll cycle forever, and a non-last empty page is no
-  longer mistaken for the end). `JiraSearchPage`'s `startAt`/`maxResults`/`total`
-  are now optional and `nextPageToken`/`isLast` are exposed.
+  longer mistaken for the end). A scan aborted by a stalled cursor is treated as
+  incomplete: it no longer prunes cached issues (which would delete issues that
+  exist upstream on unfetched pages) or advances the full-reconcile marker, so
+  the next sync retries. `JiraSearchPage`'s `startAt`/`maxResults`/`total` are now
+  optional and `nextPageToken`/`isLast` are exposed.
 - Jira create/update/move now perform read-after-write via `GET /issue/{key}`
   instead of `sync(true)` + cache read, in both the SQLite and Postgres
   providers. The direct issue endpoint has no search-index lag, so a just-created
   or just-transitioned issue is reflected immediately. The previous pattern raced
   the search index — creates reported "not yet visible", and a move's new status
   sometimes failed to land, causing the poll loop to re-issue the same move
-  repeatedly.
+  repeatedly. Hydration still ingests the issue changelog (best-effort), so a
+  just-applied transition is recorded in `jira_activity` immediately rather than
+  waiting for the next unthrottled sync.
 - A forced sync (`sync(true)`) no longer triggers a full 1970-based reconcile in
   either provider. `force` still bypasses the poll throttle so a write sees its
   own result, but the expensive whole-project re-fetch (plus a per-issue
