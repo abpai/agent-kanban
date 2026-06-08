@@ -9,7 +9,6 @@ import type {
   BoardView,
   Column,
   Priority,
-  ProviderTeamInfo,
   Task,
   TaskComment,
 } from '../types'
@@ -19,8 +18,8 @@ import {
   jiraBoardColumnRows,
   resolveJiraColumnId,
   type JiraActivityRow,
-  type JiraColumnRow,
 } from './jira-cache'
+import { PostgresJiraCache, type JiraSyncMeta } from './postgres-jira-cache'
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
 import {
   JiraClient,
@@ -48,12 +47,7 @@ import {
   type WebhookRequest,
   type WebhookResult,
 } from '../webhooks'
-import {
-  ensureWebhookEventsSchema,
-  extractWebhookMeta,
-  recordWebhookEvent,
-  webhookEventStatus,
-} from '../webhook-events'
+import { extractWebhookMeta, recordWebhookEvent, webhookEventStatus } from '../webhook-events'
 
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
@@ -71,91 +65,10 @@ const CANONICAL_TO_JIRA_DEFAULT: Record<Priority, string> = {
   low: 'Low',
 }
 
-interface JiraIssueRow {
-  id: string
-  key: string
-  summary: string
-  description_text: string
-  status_id: string
-  priority_name: string
-  issue_type_name: string
-  assignee_account_id: string | null
-  assignee_name: string
-  labels: string
-  comment_count: number
-  project_key: string
-  url: string | null
-  created_at: string
-  updated_at: string
-}
-
-interface JiraSyncMeta {
-  projectKey: string | null
-  boardId: number | null
-  lastSyncAt: string | null
-  lastIssueUpdatedAt: string | null
-  lastFullSyncAt: string | null
-  lastWebhookAt: string | null
-}
-
-interface JiraCacheConfig {
-  projectKey: string | null
-  users: Array<{ accountId: string; displayName: string }>
-  priorities: Array<{ id: string; name: string }>
-  issueTypes: Array<{ id: string; name: string }>
-}
-
-function mapPriorityNameToCanonical(name: string): Task['priority'] {
-  switch (name.trim().toLowerCase()) {
-    case 'highest':
-      return 'urgent'
-    case 'high':
-      return 'high'
-    case 'medium':
-      return 'medium'
-    default:
-      return 'low'
-  }
-}
-
-function parseLabels(raw: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === 'string')
-      : []
-  } catch {
-    return []
-  }
-}
-
-function taskFromRow(row: JiraIssueRow): Task {
-  return {
-    id: `jira:${row.id}`,
-    providerId: row.id,
-    externalRef: row.key,
-    url: row.url,
-    title: row.summary,
-    description: row.description_text,
-    column_id: row.status_id,
-    position: 0,
-    priority: mapPriorityNameToCanonical(row.priority_name),
-    assignee: row.assignee_name,
-    assignees: row.assignee_name ? [row.assignee_name] : [],
-    labels: parseLabels(row.labels),
-    comment_count: row.comment_count,
-    project: row.project_key,
-    metadata: '{}',
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    version: row.updated_at,
-    source_updated_at: row.updated_at,
-  }
-}
-
 export class PostgresJiraProvider implements KanbanProvider {
   readonly type = 'jira' as const
   private readonly ready: Promise<void>
+  private readonly cache: PostgresJiraCache
   private readonly client: JiraClient
   private readonly pollingSyncIntervalMs: number
   // When a server-side background warmer owns cache refresh, implicit request-path
@@ -167,7 +80,8 @@ export class PostgresJiraProvider implements KanbanProvider {
     private readonly config: JiraProviderConfig,
     client?: JiraClient,
   ) {
-    this.ready = this.ensureSchema()
+    this.cache = new PostgresJiraCache(sql)
+    this.ready = this.cache.ready
     this.pollingSyncIntervalMs = config.pollingSyncIntervalMs ?? DEFAULT_POLLING_SYNC_INTERVAL_MS
     this.client =
       client ??
@@ -182,464 +96,9 @@ export class PostgresJiraProvider implements KanbanProvider {
     await this.ready
   }
 
-  private async ensureSchema(): Promise<void> {
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS jira_sync_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS jira_columns (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        position INTEGER NOT NULL,
-        status_ids TEXT NOT NULL,
-        source TEXT NOT NULL CHECK(source IN ('board','status'))
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS jira_users (
-        account_id TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL,
-        active INTEGER NOT NULL DEFAULT 1,
-        updated_at TEXT NOT NULL
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS jira_priorities (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS jira_issue_types (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS jira_activity (
-        issue_id TEXT NOT NULL,
-        history_id TEXT NOT NULL,
-        item_field TEXT NOT NULL,
-        from_value TEXT,
-        to_value TEXT,
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (issue_id, history_id, item_field)
-      )
-    `
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS jira_issues (
-        id TEXT PRIMARY KEY,
-        key TEXT NOT NULL UNIQUE,
-        summary TEXT NOT NULL,
-        description_text TEXT NOT NULL DEFAULT '',
-        status_id TEXT NOT NULL,
-        priority_name TEXT NOT NULL DEFAULT '',
-        issue_type_name TEXT NOT NULL DEFAULT '',
-        assignee_account_id TEXT,
-        assignee_name TEXT NOT NULL DEFAULT '',
-        labels TEXT NOT NULL DEFAULT '[]',
-        comment_count INTEGER NOT NULL DEFAULT 0,
-        project_key TEXT NOT NULL,
-        url TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    `
-    await this.sql`CREATE INDEX IF NOT EXISTS idx_jira_issues_status_id ON jira_issues(status_id)`
-    await this.sql`CREATE INDEX IF NOT EXISTS idx_jira_issues_updated_at ON jira_issues(updated_at)`
-    await this.sql`
-      CREATE INDEX IF NOT EXISTS jira_activity_created_at_idx ON jira_activity(created_at DESC)
-    `
-    await ensureWebhookEventsSchema(this.sql)
-  }
-
-  private async setMeta(key: string, value: string): Promise<void> {
-    await this.sql`
-      INSERT INTO jira_sync_meta (key, value)
-      VALUES (${key}, ${value})
-      ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
-    `
-  }
-
-  private async deleteMeta(key: string): Promise<void> {
-    await this.sql`DELETE FROM jira_sync_meta WHERE key = ${key}`
-  }
-
-  private async getMeta(key: string): Promise<string | null> {
-    const [row] = await this.sql<{ value: string }[]>`
-      SELECT value FROM jira_sync_meta WHERE key = ${key}
-    `
-    return row?.value ?? null
-  }
-
-  private async saveSyncMeta(meta: Partial<JiraSyncMeta>): Promise<void> {
-    const keys = [
-      'projectKey',
-      'boardId',
-      'lastSyncAt',
-      'lastIssueUpdatedAt',
-      'lastFullSyncAt',
-      'lastWebhookAt',
-    ] as const
-    for (const key of keys) {
-      if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
-      const value = meta[key]
-      if (value === null) {
-        await this.deleteMeta(key)
-        continue
-      }
-      if (key === 'boardId') {
-        if (typeof value === 'number' && Number.isFinite(value))
-          await this.setMeta(key, String(value))
-        continue
-      }
-      if (typeof value === 'string') await this.setMeta(key, value)
-    }
-  }
-
-  private async loadSyncMeta(): Promise<JiraSyncMeta> {
-    const boardIdRaw = await this.getMeta('boardId')
-    const boardId = boardIdRaw === null ? null : Number.parseInt(boardIdRaw, 10)
-    return {
-      projectKey: await this.getMeta('projectKey'),
-      boardId: boardId === null || Number.isNaN(boardId) ? null : boardId,
-      lastSyncAt: await this.getMeta('lastSyncAt'),
-      lastIssueUpdatedAt: await this.getMeta('lastIssueUpdatedAt'),
-      lastFullSyncAt: await this.getMeta('lastFullSyncAt'),
-      lastWebhookAt: await this.getMeta('lastWebhookAt'),
-    }
-  }
-
-  private async saveTeamInfo(team: ProviderTeamInfo | null): Promise<void> {
-    if (team === null) {
-      await this.deleteMeta('team')
-      return
-    }
-    await this.setMeta('team', JSON.stringify(team))
-  }
-
-  private async loadTeamInfo(): Promise<ProviderTeamInfo | null> {
-    const raw = await this.getMeta('team')
-    if (raw === null) return null
-    try {
-      const parsed = JSON.parse(raw) as ProviderTeamInfo
-      return typeof parsed.id === 'string' &&
-        typeof parsed.key === 'string' &&
-        typeof parsed.name === 'string'
-        ? parsed
-        : null
-    } catch {
-      return null
-    }
-  }
-
-  // Catalog refreshes (columns, priorities, issue types) UPSERT the current rows
-  // on every sync — UPSERT serializes per row and never collides on the primary
-  // key when multiple Dispatch replicas refresh concurrently, so a newly-created
-  // status/column/priority is reflected on the next sync. The obsolete-row DELETE
-  // (`prune`) runs ONLY on a full reconcile, mirroring how upstream-missing issues
-  // are pruned (see pruneIssuesMissingUpstream): a delta sync's snapshot can be
-  // stale, and a stale snapshot's DELETE would drop a row another replica just
-  // added with a fresher snapshot. Confining the delete to the periodic full
-  // reconcile (and self-healing via the every-sync UPSERT) keeps catalog pruning
-  // consistent with issue pruning and out of the common delta path.
-  private async replaceColumns(
-    columns: Array<{
-      id: string
-      name: string
-      position: number
-      statusIds: string[]
-      source: 'board' | 'status'
-    }>,
-    prune: boolean,
-  ): Promise<void> {
-    for (const column of columns) {
-      await this.sql`
-        INSERT INTO jira_columns (id, name, position, status_ids, source)
-        VALUES (
-          ${column.id},
-          ${column.name},
-          ${column.position},
-          ${JSON.stringify(column.statusIds)},
-          ${column.source}
-        )
-        ON CONFLICT(id) DO UPDATE SET
-          name = EXCLUDED.name,
-          position = EXCLUDED.position,
-          status_ids = EXCLUDED.status_ids,
-          source = EXCLUDED.source
-      `
-    }
-    if (prune) {
-      await this.sql`DELETE FROM jira_columns WHERE NOT (id = ANY(${columns.map((c) => c.id)}))`
-    }
-  }
-
-  private async upsertUsers(
-    users: Array<{ accountId: string; displayName: string; active?: boolean }>,
-  ): Promise<void> {
-    for (const user of users) {
-      await this.sql`
-        INSERT INTO jira_users (account_id, display_name, active, updated_at)
-        VALUES (${user.accountId}, ${user.displayName}, ${user.active === false ? 0 : 1}, ${new Date().toISOString()})
-        ON CONFLICT(account_id) DO UPDATE SET
-          display_name = EXCLUDED.display_name,
-          active = EXCLUDED.active,
-          updated_at = EXCLUDED.updated_at
-      `
-    }
-  }
-
-  private async replacePriorities(
-    priorities: Array<{ id: string; name: string }>,
-    prune: boolean,
-  ): Promise<void> {
-    for (const priority of priorities) {
-      await this.sql`
-        INSERT INTO jira_priorities (id, name)
-        VALUES (${priority.id}, ${priority.name})
-        ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
-      `
-    }
-    if (prune) {
-      await this
-        .sql`DELETE FROM jira_priorities WHERE NOT (id = ANY(${priorities.map((p) => p.id)}))`
-    }
-  }
-
-  private async replaceIssueTypes(
-    types: Array<{ id: string; name: string }>,
-    prune: boolean,
-  ): Promise<void> {
-    for (const type of types) {
-      await this.sql`
-        INSERT INTO jira_issue_types (id, name)
-        VALUES (${type.id}, ${type.name})
-        ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
-      `
-    }
-    if (prune) {
-      await this.sql`DELETE FROM jira_issue_types WHERE NOT (id = ANY(${types.map((t) => t.id)}))`
-    }
-  }
-
-  private async upsertIssues(
-    issues: Array<{
-      id: string
-      key: string
-      summary: string
-      descriptionText: string
-      statusId: string
-      priorityName?: string | null
-      issueTypeName?: string | null
-      assigneeAccountId?: string | null
-      assigneeName?: string | null
-      labels?: string[] | null
-      commentCount?: number | null
-      projectKey: string
-      url?: string | null
-      createdAt: string
-      updatedAt: string
-    }>,
-  ): Promise<void> {
-    if (issues.length === 0) return
-    await this.sql.begin(async (tx) => {
-      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
-      for (const issue of issues) {
-        await tx`
-          INSERT INTO jira_issues (
-            id, key, summary, description_text, status_id, priority_name, issue_type_name,
-            assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
-          ) VALUES (
-            ${issue.id}, ${issue.key}, ${issue.summary}, ${issue.descriptionText}, ${issue.statusId},
-            ${issue.priorityName ?? ''}, ${issue.issueTypeName ?? ''}, ${issue.assigneeAccountId ?? null},
-            ${issue.assigneeName ?? ''}, ${JSON.stringify(issue.labels ?? [])}, ${issue.commentCount ?? 0},
-            ${issue.projectKey}, ${issue.url ?? null}, ${issue.createdAt}, ${issue.updatedAt}
-          )
-          ON CONFLICT(id) DO UPDATE SET
-            key = EXCLUDED.key,
-            summary = EXCLUDED.summary,
-            description_text = EXCLUDED.description_text,
-            status_id = EXCLUDED.status_id,
-            priority_name = EXCLUDED.priority_name,
-            issue_type_name = EXCLUDED.issue_type_name,
-            assignee_account_id = EXCLUDED.assignee_account_id,
-            assignee_name = EXCLUDED.assignee_name,
-            labels = EXCLUDED.labels,
-            comment_count = EXCLUDED.comment_count,
-            project_key = EXCLUDED.project_key,
-            url = EXCLUDED.url,
-            created_at = EXCLUDED.created_at,
-            updated_at = EXCLUDED.updated_at
-        `
-      }
-    })
-  }
-
-  private async deleteIssue(idOrKey: string): Promise<void> {
-    await this.sql`
-      DELETE FROM jira_activity
-      WHERE issue_id = ${idOrKey}
-         OR issue_id IN (SELECT id FROM jira_issues WHERE key = ${idOrKey})
-    `
-    await this.sql`DELETE FROM jira_issues WHERE id = ${idOrKey} OR key = ${idOrKey}`
-  }
-
-  private async pruneIssuesMissingUpstream(
-    projectKey: string,
-    upstreamIssueIds: string[],
-  ): Promise<void> {
-    if (upstreamIssueIds.length === 0) {
-      await this.sql`
-        DELETE FROM jira_activity
-        WHERE issue_id IN (SELECT id FROM jira_issues WHERE project_key = ${projectKey})
-      `
-      await this.sql`DELETE FROM jira_issues WHERE project_key = ${projectKey}`
-      return
-    }
-
-    await this.sql`
-      DELETE FROM jira_activity
-      WHERE issue_id IN (
-        SELECT id FROM jira_issues
-        WHERE project_key = ${projectKey}
-          AND NOT (id = ANY(${upstreamIssueIds}))
-      )
-    `
-    await this.sql`
-      DELETE FROM jira_issues
-      WHERE project_key = ${projectKey}
-        AND NOT (id = ANY(${upstreamIssueIds}))
-    `
-  }
-
-  private async getColumns(): Promise<JiraColumnRow[]> {
-    await this.ready
-    return this.sql<JiraColumnRow[]>`SELECT * FROM jira_columns ORDER BY position, name`
-  }
-
-  private async selectIssuesByStatusIds(statusIds: string[]): Promise<JiraIssueRow[]> {
-    if (statusIds.length === 0) return []
-    return this.sql<JiraIssueRow[]>`
-      SELECT * FROM jira_issues
-      WHERE status_id = ANY(${statusIds})
-      ORDER BY updated_at DESC, summary ASC
-    `
-  }
-
-  private async getCachedBoard(): Promise<BoardView> {
-    const columns = await this.getColumns()
-    const boardColumns = []
-    for (const column of columns) {
-      const tasks = (await this.selectIssuesByStatusIds(decodeColumnStatusIds(column))).map(
-        taskFromRow,
-      )
-      boardColumns.push({
-        id: column.id,
-        name: column.name,
-        position: column.position,
-        color: null,
-        created_at: '',
-        updated_at: '',
-        tasks,
-      })
-    }
-    return { columns: boardColumns }
-  }
-
-  private async getCachedTask(lookup: string): Promise<Task | null> {
-    const normalized = lookup.startsWith('jira:') ? lookup.slice('jira:'.length) : lookup
-    const [row] = await this.sql<JiraIssueRow[]>`
-      SELECT * FROM jira_issues
-      WHERE id = ${normalized} OR key = ${normalized}
-      LIMIT 1
-    `
-    return row ? taskFromRow(row) : null
-  }
-
-  private async adjustIssueCommentCount(idOrKey: string, delta: number): Promise<void> {
-    await this.sql`
-      UPDATE jira_issues
-      SET comment_count = GREATEST(0, comment_count + ${delta})
-      WHERE id = ${idOrKey} OR key = ${idOrKey}
-    `
-  }
-
-  private async getCachedTasks(params?: { columnId?: string }): Promise<Task[]> {
-    if (params?.columnId !== undefined) {
-      const [columnRow] = await this.sql<Pick<JiraColumnRow, 'status_ids'>[]>`
-        SELECT status_ids FROM jira_columns WHERE id = ${params.columnId}
-      `
-      if (!columnRow) return []
-      return (await this.selectIssuesByStatusIds(decodeColumnStatusIds(columnRow))).map(taskFromRow)
-    }
-    return (
-      await this.sql<JiraIssueRow[]>`
-        SELECT * FROM jira_issues ORDER BY updated_at DESC, summary ASC
-      `
-    ).map(taskFromRow)
-  }
-
-  private async getCachedConfig(): Promise<JiraCacheConfig> {
-    const users = (
-      await this.sql<{ account_id: string; display_name: string }[]>`
-        SELECT account_id, display_name
-        FROM jira_users
-        WHERE active = 1
-        ORDER BY display_name
-      `
-    ).map((row) => ({ accountId: row.account_id, displayName: row.display_name }))
-    const priorities = await this.sql<Array<{ id: string; name: string }>>`
-      SELECT id, name FROM jira_priorities ORDER BY name
-    `
-    const issueTypes = await this.sql<Array<{ id: string; name: string }>>`
-      SELECT id, name FROM jira_issue_types ORDER BY name
-    `
-    return {
-      projectKey: await this.getMeta('projectKey'),
-      users,
-      priorities,
-      issueTypes,
-    }
-  }
-
-  private async saveActivity(rows: JiraActivityRow[]): Promise<void> {
-    for (const row of rows) {
-      await this.sql`
-        INSERT INTO jira_activity (issue_id, history_id, item_field, from_value, to_value, created_at)
-        VALUES (${row.issue_id}, ${row.history_id}, ${row.item_field}, ${row.from_value}, ${row.to_value}, ${row.created_at})
-        ON CONFLICT(issue_id, history_id, item_field) DO NOTHING
-      `
-    }
-  }
-
-  private async getCachedActivity(
-    params: { issueId?: string; limit?: number } = {},
-  ): Promise<JiraActivityRow[]> {
-    const limit = params.limit ?? 100
-    if (params.issueId) {
-      return this.sql<JiraActivityRow[]>`
-        SELECT issue_id, history_id, item_field, from_value, to_value, created_at
-        FROM jira_activity
-        WHERE issue_id = ${params.issueId}
-        ORDER BY created_at DESC
-        LIMIT ${limit}
-      `
-    }
-    return this.sql<JiraActivityRow[]>`
-      SELECT issue_id, history_id, item_field, from_value, to_value, created_at
-      FROM jira_activity
-      ORDER BY created_at DESC
-      LIMIT ${limit}
-    `
-  }
-
   private async sync(force = false, viaWarmer = false): Promise<void> {
     await this.ready
-    const meta = await this.loadSyncMeta()
+    const meta = await this.cache.loadSyncMeta()
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
     // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
     // Once warm, implicit request-path reads serve the warm cache instead of
@@ -657,7 +116,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     const fullReconcile = shouldRunFullReconcile(meta.lastFullSyncAt, now)
 
     const project = await this.client.getProject(this.config.projectKey)
-    await this.saveTeamInfo({ id: project.id, key: project.key, name: project.name })
+    await this.cache.saveTeamInfo({ id: project.id, key: project.key, name: project.name })
 
     // Columns + catalogs (users/priorities/issue types) UPSERT on every sync so a
     // newly-created Jira status/column/priority/user is reflected promptly; the
@@ -665,7 +124,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     if (this.config.boardId !== undefined) {
       const boardCfg = await this.client.getBoardColumns(this.config.boardId)
       const boardId = this.config.boardId
-      await this.replaceColumns(
+      await this.cache.replaceColumns(
         jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns),
         fullReconcile,
       )
@@ -680,7 +139,7 @@ export class PostgresJiraProvider implements KanbanProvider {
           uniqueStatuses.push({ id: status.id, name: status.name })
         }
       }
-      await this.replaceColumns(
+      await this.cache.replaceColumns(
         uniqueStatuses.map((status, index) => ({
           id: `status:${status.id}`,
           name: status.name,
@@ -701,18 +160,18 @@ export class PostgresJiraProvider implements KanbanProvider {
       this.client.listPriorities(),
       this.client.listIssueTypes({ projectId: project.id }),
     ])
-    await this.upsertUsers(
+    await this.cache.upsertUsers(
       users.map((user) => ({
         accountId: user.accountId,
         displayName: user.displayName,
         active: user.active ?? true,
       })),
     )
-    await this.replacePriorities(
+    await this.cache.replacePriorities(
       priorities.map((priority) => ({ id: priority.id, name: priority.name })),
       fullReconcile,
     )
-    await this.replaceIssueTypes(
+    await this.cache.replaceIssueTypes(
       issueTypes.map((issueType) => ({ id: issueType.id, name: issueType.name })),
       fullReconcile,
     )
@@ -762,7 +221,7 @@ export class PostgresJiraProvider implements KanbanProvider {
         nextPageToken,
       })
 
-      await this.upsertIssues(
+      await this.cache.upsertIssues(
         page.issues.map((issue) => ({
           id: issue.id,
           key: issue.key,
@@ -829,7 +288,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     // reconcile; a delta sync's seenIssueIds is intentionally partial. (The scan
     // is known complete here — an incomplete scan returned above.)
     if (fullReconcile) {
-      await this.pruneIssuesMissingUpstream(project.key, [...seenIssueIds])
+      await this.cache.pruneIssuesMissingUpstream(project.key, [...seenIssueIds])
     }
 
     const nextMeta: Partial<JiraSyncMeta> = {
@@ -839,15 +298,15 @@ export class PostgresJiraProvider implements KanbanProvider {
       lastIssueUpdatedAt: newestUpdatedAt ?? new Date().toISOString(),
     }
     if (fullReconcile) nextMeta.lastFullSyncAt = nextMeta.lastSyncAt
-    await this.saveSyncMeta(nextMeta)
+    await this.cache.saveSyncMeta(nextMeta)
   }
 
   private async resolveColumnId(input: string): Promise<string> {
-    return resolveJiraColumnId(await this.getColumns(), input)
+    return resolveJiraColumnId(await this.cache.getColumns(), input)
   }
 
   private async buildBoardConfig(): Promise<BoardConfig> {
-    const cache = await this.getCachedConfig()
+    const cache = await this.cache.getCachedConfig()
     const members = cache.users.map((user) => ({ name: user.displayName, role: 'human' as const }))
     const projects = cache.projectKey ? [cache.projectKey] : []
     const discoveredAssignees = (
@@ -875,7 +334,7 @@ export class PostgresJiraProvider implements KanbanProvider {
   }
 
   async getSyncStatus(): Promise<ProviderSyncStatus> {
-    const meta = await this.loadSyncMeta()
+    const meta = await this.cache.loadSyncMeta()
     return {
       lastSyncAt: meta.lastSyncAt,
       lastFullSyncAt: meta.lastFullSyncAt,
@@ -885,7 +344,11 @@ export class PostgresJiraProvider implements KanbanProvider {
 
   async getContext(): Promise<ProviderContext> {
     await this.sync()
-    return { provider: 'jira', capabilities: JIRA_CAPABILITIES, team: await this.loadTeamInfo() }
+    return {
+      provider: 'jira',
+      capabilities: JIRA_CAPABILITIES,
+      team: await this.cache.loadTeamInfo(),
+    }
   }
 
   async getBootstrap(): Promise<BoardBootstrap> {
@@ -893,22 +356,22 @@ export class PostgresJiraProvider implements KanbanProvider {
     return {
       provider: 'jira',
       capabilities: JIRA_CAPABILITIES,
-      board: await this.getCachedBoard(),
+      board: await this.cache.getCachedBoard(),
       config: await this.buildBoardConfig(),
       metrics: null,
       activity: [],
-      team: await this.loadTeamInfo(),
+      team: await this.cache.loadTeamInfo(),
     }
   }
 
   async getBoard(): Promise<BoardView> {
     await this.sync()
-    return this.getCachedBoard()
+    return this.cache.getCachedBoard()
   }
 
   async listColumns(): Promise<Column[]> {
     await this.sync()
-    return (await this.getColumns()).map((row) => ({
+    return (await this.cache.getColumns()).map((row) => ({
       id: row.id,
       name: row.name,
       position: row.position,
@@ -921,7 +384,7 @@ export class PostgresJiraProvider implements KanbanProvider {
   async listTasks(filters: TaskListFilters = {}): Promise<Task[]> {
     await this.sync()
     const columnId = filters.column ? await this.resolveColumnId(filters.column) : undefined
-    let tasks = await this.getCachedTasks(columnId ? { columnId } : undefined)
+    let tasks = await this.cache.getCachedTasks(columnId ? { columnId } : undefined)
     if (filters.priority) tasks = tasks.filter((task) => task.priority === filters.priority)
     if (filters.assignee) tasks = tasks.filter((task) => task.assignee === filters.assignee)
     if (filters.project) tasks = tasks.filter((task) => task.project === filters.project)
@@ -934,13 +397,13 @@ export class PostgresJiraProvider implements KanbanProvider {
 
   async getTask(idOrRef: string): Promise<Task> {
     await this.sync()
-    const task = await this.getCachedTask(idOrRef)
+    const task = await this.cache.getCachedTask(idOrRef)
     if (!task) throw new KanbanError(ErrorCode.TASK_NOT_FOUND, `No task with id '${idOrRef}'`)
     return task
   }
 
   private async resolveTaskByIdOrKey(idOrRef: string): Promise<Task> {
-    const task = await this.getCachedTask(idOrRef)
+    const task = await this.cache.getCachedTask(idOrRef)
     if (!task) throw new KanbanError(ErrorCode.TASK_NOT_FOUND, `No task with id '${idOrRef}'`)
     return task
   }
@@ -1028,7 +491,7 @@ export class PostgresJiraProvider implements KanbanProvider {
         })
       }
     }
-    await this.saveActivity(rows)
+    await this.cache.saveActivity(rows)
   }
 
   // Read-after-write via the direct issue endpoint. Unlike JQL search (used by
@@ -1044,7 +507,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     // anomaly (the upsert above did not land), not an ordinary not-found — surface
     // it rather than threading an unreachable null through every caller.
     const issue = await this.client.getIssue(key)
-    await this.upsertIssues([
+    await this.cache.upsertIssues([
       {
         id: issue.id,
         key: issue.key,
@@ -1072,7 +535,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     await this.ingestIssueActivity(issue.id).catch((err) => {
       console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
     })
-    const task = await this.getCachedTask(key)
+    const task = await this.cache.getCachedTask(key)
     if (!task) {
       providerUpstreamError(
         `Jira issue ${key} was hydrated from GET /issue but is missing from the cache.`,
@@ -1140,7 +603,7 @@ export class PostgresJiraProvider implements KanbanProvider {
 
   private async moveTaskByKey(issueKey: string, column: string): Promise<Task> {
     const columnId = await this.resolveColumnId(column)
-    const columnRow = (await this.getColumns()).find((candidate) => candidate.id === columnId)
+    const columnRow = (await this.cache.getColumns()).find((candidate) => candidate.id === columnId)
     if (!columnRow) {
       throw new KanbanError(
         ErrorCode.COLUMN_NOT_FOUND,
@@ -1155,7 +618,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     const { transitions } = await this.client.getTransitions(issueKey)
     const match = transitions.find((transition) => transition.to.id === targetStatusId)
     if (!match) {
-      const currentStatusId = (await this.getCachedTask(issueKey))?.column_id ?? '<unknown>'
+      const currentStatusId = (await this.cache.getCachedTask(issueKey))?.column_id ?? '<unknown>'
       providerUpstreamError(
         `Cannot transition Jira issue ${issueKey} (current status id ${currentStatusId}) to column '${columnRow.name}' (target status id ${targetStatusId}). Available transitions: [${transitions
           .map((transition) => `"${transition.name}"`)
@@ -1200,7 +663,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     const created = await this.client.addComment(this.issueKeyFor(task), {
       body: plainTextToAdf(body),
     })
-    await this.adjustIssueCommentCount(task.providerId || task.externalRef || task.id, 1)
+    await this.cache.adjustIssueCommentCount(task.providerId || task.externalRef || task.id, 1)
     return this.toTaskComment(task, created)
   }
 
@@ -1216,7 +679,7 @@ export class PostgresJiraProvider implements KanbanProvider {
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {
     await this.sync()
     const lookupIssueId = taskId ? await this.resolveIssueIdFromTaskId(taskId) : undefined
-    const rows = await this.getCachedActivity({
+    const rows = await this.cache.getCachedActivity({
       ...(lookupIssueId !== undefined ? { issueId: lookupIssueId } : {}),
       limit: limit ?? 100,
     })
@@ -1253,7 +716,7 @@ export class PostgresJiraProvider implements KanbanProvider {
   }
 
   private async statusIdToColumnId(statusId: string): Promise<string | undefined> {
-    for (const column of await this.getColumns()) {
+    for (const column of await this.cache.getColumns()) {
       if (decodeColumnStatusIds(column).includes(statusId)) return column.id
     }
     return undefined
@@ -1313,8 +776,8 @@ export class PostgresJiraProvider implements KanbanProvider {
     if (!issue) return { handled: false, message: `No issue in payload (${event})` }
 
     if (event === 'jira:issue_deleted') {
-      await this.deleteIssue(issue.id)
-      await this.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
+      await this.cache.deleteIssue(issue.id)
+      await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
       return { handled: true }
     }
 
@@ -1326,7 +789,7 @@ export class PostgresJiraProvider implements KanbanProvider {
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
         }
       }
-      await this.upsertIssues([
+      await this.cache.upsertIssues([
         {
           id: issue.id,
           key: issue.key,
@@ -1352,7 +815,7 @@ export class PostgresJiraProvider implements KanbanProvider {
           console.warn(`[jira] activity fetch for webhook issue ${issue.key} failed:`, err)
         })
       }
-      await this.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
+      await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
       return { handled: true }
     }
 
