@@ -545,7 +545,9 @@ describe('JiraProvider mutations', () => {
       issues: [{ id: '501', key: 'ENG-1', statusId: '20000' }],
       projectKey: 'ENG',
     })
-    // No standard sync routes — the mutation throws before sync(true).
+    // No standard sync/hydrate routes needed: the move resolves against the
+    // seeded cache and throws at transition resolution (no transition reaches the
+    // target status) before any read-after-write hydration runs.
     const transitionsRoute: StubRoute = {
       match: (u, init) =>
         u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'GET',
