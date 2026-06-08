@@ -290,11 +290,20 @@ export class JiraProvider implements KanbanProvider {
       break
     }
 
-    // Only prune against seenIssueIds and advance lastFullSyncAt when the scan
-    // completed: an aborted (stalled-cursor) scan would otherwise delete issues
-    // that exist upstream on pages we never fetched.
-    const fullReconcileComplete = fullReconcile && paginationComplete
-    if (fullReconcileComplete) {
+    if (!paginationComplete) {
+      // The scan ended early (stalled/contradictory cursor). Leave sync metadata
+      // unchanged so this partial result is not recorded as a clean sync: lastSyncAt
+      // is not advanced, so the next sync is not throttled and retries promptly, and
+      // the full-reconcile marker stays due. The issues we did fetch are already
+      // cached (additive); we only skip pruning — which would delete issues that
+      // exist upstream on pages we never fetched — and the metadata advance.
+      return
+    }
+
+    // Prune against seenIssueIds and advance lastFullSyncAt only on a full
+    // reconcile; a delta sync's seenIssueIds is intentionally partial. (The scan
+    // is known complete here — an incomplete scan returned above.)
+    if (fullReconcile) {
       pruneJiraIssuesMissingUpstream(this.db, project.key, [...seenIssueIds])
     }
 
@@ -305,7 +314,7 @@ export class JiraProvider implements KanbanProvider {
       lastSyncAt: new Date().toISOString(),
       lastIssueUpdatedAt: newestUpdatedAt ?? new Date().toISOString(),
     }
-    if (fullReconcileComplete) {
+    if (fullReconcile) {
       nextMeta.lastFullSyncAt = nextMeta.lastSyncAt
     }
     saveJiraSyncMeta(this.db, nextMeta)
@@ -499,7 +508,11 @@ export class JiraProvider implements KanbanProvider {
   // "create/transition then sync(true) then getCachedTask" pattern, which raced
   // the search index (creates reported "not yet visible"; a move's new status
   // sometimes didn't land) and forced a full whole-project reconcile per write.
-  private async hydrateIssueByKey(key: string): Promise<Task | null> {
+  private async hydrateIssueByKey(key: string): Promise<Task> {
+    // getIssue throws on a missing key (404), so reaching this method means the
+    // issue exists upstream. A null read-back would therefore be a genuine cache
+    // anomaly (the upsert above did not land), not an ordinary not-found — surface
+    // it rather than threading an unreachable null through every caller.
     const issue = await this.client.getIssue(key)
     upsertJiraIssues(this.db, [
       {
@@ -529,7 +542,13 @@ export class JiraProvider implements KanbanProvider {
     await this.ingestIssueActivity(issue.id).catch((err) => {
       console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
     })
-    return getCachedTask(this.db, key)
+    const task = getCachedTask(this.db, key)
+    if (!task) {
+      providerUpstreamError(
+        `Jira issue ${key} was hydrated from GET /issue but is missing from the cache.`,
+      )
+    }
+    return task
   }
 
   async createTask(input: CreateTaskInput): Promise<Task> {
@@ -559,13 +578,7 @@ export class JiraProvider implements KanbanProvider {
     // issues land in the project workflow's default start state. Use
     // `moveTask` after create to change status.
     const created = await this.client.createIssue({ fields })
-    const fresh = await this.hydrateIssueByKey(created.key)
-    if (!fresh) {
-      providerUpstreamError(
-        `Jira issue ${created.key} was created but is not yet visible in the cache after hydration.`,
-      )
-    }
-    return fresh
+    return this.hydrateIssueByKey(created.key)
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task> {
@@ -600,11 +613,7 @@ export class JiraProvider implements KanbanProvider {
     if (Object.keys(fields).length > 0) {
       await this.client.updateIssue(issueKey, { fields })
     }
-    const fresh = await this.hydrateIssueByKey(issueKey)
-    if (!fresh) {
-      providerUpstreamError(`Jira issue ${issueKey} disappeared from cache after update.`)
-    }
-    return fresh
+    return this.hydrateIssueByKey(issueKey)
   }
 
   async moveTask(idOrRef: string, column: string): Promise<Task> {
@@ -641,11 +650,7 @@ export class JiraProvider implements KanbanProvider {
       )
     }
     await this.client.transitionIssue(issueKey, match.id)
-    const fresh = await this.hydrateIssueByKey(issueKey)
-    if (!fresh) {
-      providerUpstreamError(`Jira issue ${issueKey} missing from cache after transition.`)
-    }
-    return fresh
+    return this.hydrateIssueByKey(issueKey)
   }
 
   async deleteTask(_idOrRef: string): Promise<Task> {

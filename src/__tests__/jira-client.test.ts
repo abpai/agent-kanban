@@ -239,4 +239,36 @@ describe('decideJiraPagination', () => {
     )
     expect(d).toEqual({ nextToken: 'p2', complete: false })
   })
+
+  // Legacy total/startAt awareness: the live /search/jql endpoint omits `total`,
+  // but a non-standard or mock server may supply it without a cursor. When it
+  // does, completeness must honor total rather than page size, so a full *last*
+  // page (exactly maxResults issues that are also the whole result set) is not
+  // misread as "more pages remain".
+  test('isLast absent: total present, full last page is complete (not mistaken for more)', () => {
+    const d = decideJiraPagination(
+      { issues: issuesOfLength(MAX), total: MAX, startAt: 0 },
+      MAX,
+      new Set(),
+    )
+    expect(d).toEqual({ complete: true })
+  })
+
+  test('isLast absent: total present, full non-last page is incomplete', () => {
+    const d = decideJiraPagination(
+      { issues: issuesOfLength(MAX), total: MAX * 3, startAt: 0 },
+      MAX,
+      new Set(),
+    )
+    expect(d).toEqual({ complete: false })
+  })
+
+  test('isLast absent: total present, final offset page reaching total is complete', () => {
+    const d = decideJiraPagination(
+      { issues: issuesOfLength(MAX), total: MAX * 2, startAt: MAX },
+      MAX,
+      new Set(),
+    )
+    expect(d).toEqual({ complete: true })
+  })
 })

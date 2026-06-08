@@ -82,7 +82,7 @@ export interface JiraPaginationDecision {
 // A cursor already in `seenPageTokens` counts as not usable (a stalled cursor
 // that would otherwise loop forever).
 export function decideJiraPagination(
-  page: Pick<JiraSearchPage, 'isLast' | 'nextPageToken' | 'issues'>,
+  page: Pick<JiraSearchPage, 'isLast' | 'nextPageToken' | 'issues' | 'total' | 'startAt'>,
   maxResults: number,
   seenPageTokens: ReadonlySet<string>,
 ): JiraPaginationDecision {
@@ -92,10 +92,20 @@ export function decideJiraPagination(
   if (page.isLast === true) return { complete: true }
   if (page.isLast === false) return { complete: false }
   // isLast absent: a present-but-unusable (already-seen) cursor still signals
-  // more pages, so the scan is incomplete. Only fall back to page size when there
-  // is no cursor at all.
+  // more pages, so the scan is incomplete.
   if (token) return { complete: false }
-  return { complete: (page.issues?.length ?? 0) < maxResults }
+  // No cursor at all. Prefer the legacy total/startAt signal when the server
+  // supplies it: the scan is complete once we have fetched everything `total`
+  // promises (this avoids mis-flagging a full *last* page — e.g. exactly
+  // maxResults issues with total === that count — as incomplete). Otherwise a
+  // full page implies more remain and a short/empty page is the end. The loop
+  // cannot itself advance by offset (it follows cursors only), so a `total` that
+  // promises more than this page is reported incomplete rather than fetched.
+  const issueCount = page.issues?.length ?? 0
+  if (typeof page.total === 'number') {
+    return { complete: (page.startAt ?? 0) + issueCount >= page.total }
+  }
+  return { complete: issueCount < maxResults }
 }
 
 export interface JiraCreatePayload {

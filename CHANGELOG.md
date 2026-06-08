@@ -12,10 +12,15 @@
   advancing the cursor — a repeated token is guarded against so a misbehaving
   server cannot spin the poll cycle forever, and a non-last empty page is no
   longer mistaken for the end). A scan aborted by a stalled cursor is treated as
-  incomplete: it no longer prunes cached issues (which would delete issues that
-  exist upstream on unfetched pages) or advances the full-reconcile marker, so
-  the next sync retries. `JiraSearchPage`'s `startAt`/`maxResults`/`total` are now
-  optional and `nextPageToken`/`isLast` are exposed.
+  incomplete: the partial result is not recorded as a clean sync at all — it does
+  not prune cached issues (which would delete issues that exist upstream on
+  unfetched pages), and `lastSyncAt`/`lastIssueUpdatedAt`/the full-reconcile
+  marker are all left unchanged, so the next sync is not throttled and retries
+  promptly. The issues that were fetched stay cached (additive). If a
+  non-standard server supplies the legacy `total` without a cursor, completeness
+  honors `total`/`startAt` rather than page size so a full final page is not
+  misread as "more pages remain". `JiraSearchPage`'s `startAt`/`maxResults`/`total`
+  are now optional and `nextPageToken`/`isLast` are exposed.
 - Jira create/update/move now perform read-after-write via `GET /issue/{key}`
   instead of `sync(true)` + cache read, in both the SQLite and Postgres
   providers. The direct issue endpoint has no search-index lag, so a just-created
