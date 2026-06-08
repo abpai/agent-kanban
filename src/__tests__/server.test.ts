@@ -370,6 +370,32 @@ describe('startServer auth + CORS', () => {
     expect(res.status).not.toBe(401)
   })
 
+  test('wsClients are tracked per server instance, not shared globally', async () => {
+    const a = startServer(makeProvider(), 0)
+    runtimes.push(a)
+    const b = startServer(makeProvider(), 0)
+    runtimes.push(b)
+
+    const ws = new WebSocket(`ws://127.0.0.1:${a.port}/ws`)
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve()
+      ws.onerror = () => reject(new Error('ws connection failed'))
+    })
+    // Let server A's open handler register the socket.
+    await sleep(25)
+
+    const healthA = (await (await fetch(`http://127.0.0.1:${a.port}/api/health`)).json()) as {
+      data: { wsClients: number }
+    }
+    const healthB = (await (await fetch(`http://127.0.0.1:${b.port}/api/health`)).json()) as {
+      data: { wsClients: number }
+    }
+    expect(healthA.data.wsClients).toBe(1)
+    // Before per-instance scoping, B shared A's global set and also reported 1.
+    expect(healthB.data.wsClients).toBe(0)
+    ws.close()
+  })
+
   test('CORS headers are emitted only when an allowed origin is configured', async () => {
     const withOrigin = startServer(makeProvider(), 0, {
       allowedOrigin: 'https://kanban.example',

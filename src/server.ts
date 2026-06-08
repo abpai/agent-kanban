@@ -7,8 +7,6 @@ import type { ServerWebSocket } from 'bun'
 import type { KanbanProvider } from './providers/types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from './sync-config'
 
-const wsClients = new Set<ServerWebSocket<unknown>>()
-
 // CORS is origin hygiene for cross-origin browser clients, never an auth control.
 // When no allowed origin is configured we emit no CORS headers (same-origin only),
 // which covers the bundled UI (served from this server) and the vite dev proxy.
@@ -56,13 +54,6 @@ export interface StartedServer {
   stop(closeActiveConnections?: boolean): void
 }
 
-function broadcast(data: unknown): void {
-  const msg = JSON.stringify(data)
-  for (const ws of wsClients) {
-    ws.send(msg)
-  }
-}
-
 function applyCorsHeaders(response: Response, corsHeaders: Record<string, string>): void {
   for (const [header, value] of Object.entries(corsHeaders)) {
     response.headers.set(header, value)
@@ -95,6 +86,21 @@ export function startServer(
   const getSyncStatus = provider.getSyncStatus?.bind(provider)
   const corsHeaders = buildCorsHeaders(opts.allowedOrigin)
   const authToken = opts.authToken
+
+  // Per-instance so multiple servers (e.g. in tests) don't share or cross-broadcast
+  // to each other's sockets.
+  const wsClients = new Set<ServerWebSocket<unknown>>()
+  const broadcast = (data: unknown): void => {
+    const msg = JSON.stringify(data)
+    for (const ws of wsClients) {
+      // A dead/closing socket must not abort the fan-out to the rest.
+      try {
+        ws.send(msg)
+      } catch {
+        wsClients.delete(ws)
+      }
+    }
+  }
 
   const isAuthorized = (req: Request, url: URL, allowQueryToken: boolean): boolean => {
     if (!authToken) return true
@@ -291,6 +297,7 @@ export function startServer(
         clearTimeout(syncTimer)
         syncTimer = null
       }
+      wsClients.clear()
       server.stop(closeActiveConnections)
     },
   }
