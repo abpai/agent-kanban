@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns } from '../db'
+import { initSchema, seedDefaultColumns, resolveColumn } from '../db'
 import { LocalProvider } from '../providers/local'
 import { ErrorCode, KanbanError } from '../errors'
 
@@ -60,5 +60,15 @@ describe('local provider conflict detection', () => {
     expect(v1.version).toBe('1')
     const v2 = await provider.updateTask(created.id, { title: 'b' })
     expect(v2.version).toBe('2')
+  })
+
+  // moveTask(id, column) intentionally has no expectedVersion parameter, so moves
+  // are last-write-wins by design (drag-and-drop has no loaded version to check).
+  // This locks in that contract so a move is never rejected for a stale version.
+  test('moveTask has no expectedVersion contract (move after an update still succeeds)', async () => {
+    const created = await provider.createTask({ title: 'T1', column: 'backlog' })
+    await provider.updateTask(created.id, { title: 'bumped' })
+    const moved = await provider.moveTask(created.id, 'in-progress')
+    expect(moved.column_id).toBe(resolveColumn(db, 'in-progress').id)
   })
 })
