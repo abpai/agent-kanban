@@ -845,4 +845,54 @@ describe('JiraProvider read path', () => {
     saveTeamInfo(db, null)
     expect(loadTeamInfo(db)).toBeNull()
   })
+
+  // Regression: in server (background-managed) mode, request-path reads must serve
+  // the warm cache instead of blocking on a Jira sync — otherwise a stale-throttle
+  // read triggers a foreground network sync that can exceed the HTTP idle timeout
+  // (observed as /api/board ERR_EMPTY_RESPONSE).
+  const seedSyncedMeta = () =>
+    saveJiraSyncMeta(db, {
+      projectKey: 'ENG',
+      lastSyncAt: '2026-01-01T00:00:00.000Z',
+      lastFullSyncAt: '2026-01-01T00:00:00.000Z',
+      lastIssueUpdatedAt: '2026-01-01T00:00:00.000Z',
+    })
+  const wellPastThrottle = () => {
+    Date.now = () => Date.parse('2026-01-01T01:00:00.000Z') // +1h, throttle long expired
+  }
+
+  test('background-managed reads do NOT foreground-sync once the cache is warm', async () => {
+    const { provider, calls } = makeProvider(standardRoutes({}))
+    provider.setBackgroundManaged(true)
+    seedSyncedMeta()
+    wellPastThrottle()
+
+    await provider.listTasks()
+
+    expect(calls.some((c) => c.url.includes('/rest/api/3/search/jql'))).toBe(false)
+  })
+
+  test('non-managed reads still foreground-sync when the throttle has expired', async () => {
+    const { provider, calls } = makeProvider(standardRoutes({}))
+    // backgroundManaged left false (CLI / default)
+    seedSyncedMeta()
+    wellPastThrottle()
+
+    await provider.listTasks()
+
+    expect(calls.some((c) => c.url.includes('/rest/api/3/search/jql'))).toBe(true)
+  })
+
+  test('background warmer (syncCache) still syncs when background-managed', async () => {
+    const { provider, calls } = makeProvider(standardRoutes({}))
+    provider.setBackgroundManaged(true)
+    seedSyncedMeta()
+    wellPastThrottle()
+
+    // syncCache bypasses the managed read-path gate (viaWarmer), so the warmer
+    // keeps refreshing the cache even though plain reads would be suppressed.
+    await provider.syncCache()
+
+    expect(calls.some((c) => c.url.includes('/rest/api/3/search/jql'))).toBe(true)
+  })
 })

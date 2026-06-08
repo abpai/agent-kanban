@@ -309,23 +309,25 @@ export function addTask(
     .query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
     .get({ $col: column.id }) as { next: number }
 
-  db.query(
-    `INSERT INTO tasks (id, title, description, column_id, position, priority, assignee, project, labels, metadata)
-     VALUES ($id, $title, $desc, $col, $pos, $pri, $assignee, $project, $labels, $meta)`,
-  ).run({
-    $id: id,
-    $title: title,
-    $desc: opts.description ?? '',
-    $col: column.id,
-    $pos: maxPos.next,
-    $pri: opts.priority ?? 'medium',
-    $assignee: opts.assignee ?? '',
-    $project: opts.project ?? '',
-    $labels: JSON.stringify(labels),
-    $meta: opts.metadata ?? '{}',
-  })
-  logActivity(db, id, 'created', { new_value: title })
-  enterColumn(db, id, column.id)
+  db.transaction(() => {
+    db.query(
+      `INSERT INTO tasks (id, title, description, column_id, position, priority, assignee, project, labels, metadata)
+       VALUES ($id, $title, $desc, $col, $pos, $pri, $assignee, $project, $labels, $meta)`,
+    ).run({
+      $id: id,
+      $title: title,
+      $desc: opts.description ?? '',
+      $col: column.id,
+      $pos: maxPos.next,
+      $pri: opts.priority ?? 'medium',
+      $assignee: opts.assignee ?? '',
+      $project: opts.project ?? '',
+      $labels: JSON.stringify(labels),
+      $meta: opts.metadata ?? '{}',
+    })
+    logActivity(db, id, 'created', { new_value: title })
+    enterColumn(db, id, column.id)
+  })()
   return getTask(db, id)
 }
 
@@ -453,53 +455,57 @@ export function updateTask(
     params['$meta'] = updates.metadata
   }
 
-  db.query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $id`).run(params)
+  db.transaction(() => {
+    db.query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $id`).run(params)
 
-  if (updates.assignee !== undefined && updates.assignee !== existing.assignee) {
-    logActivity(db, id, 'assigned', {
-      field: 'assignee',
-      old_value: existing.assignee || null,
-      new_value: updates.assignee,
-    })
-  }
-  if (updates.priority !== undefined && updates.priority !== existing.priority) {
-    logActivity(db, id, 'prioritized', {
-      field: 'priority',
-      old_value: existing.priority,
-      new_value: updates.priority,
-    })
-  }
-  if (updates.project !== undefined && updates.project !== existing.project) {
-    logActivity(db, id, 'updated', {
-      field: 'project',
-      old_value: existing.project || null,
-      new_value: updates.project,
-    })
-  }
-  const fieldsToLog: Array<{ key: keyof typeof updates; field: string }> = [
-    { key: 'title', field: 'title' },
-    { key: 'description', field: 'description' },
-    { key: 'metadata', field: 'metadata' },
-  ]
-  for (const { key, field } of fieldsToLog) {
-    if (updates[key] !== undefined && updates[key] !== existing[key as keyof TaskWithColumn]) {
-      logActivity(db, id, 'updated', {
-        field,
-        old_value: String(existing[key as keyof TaskWithColumn] ?? ''),
-        new_value: String(updates[key]),
+    if (updates.assignee !== undefined && updates.assignee !== existing.assignee) {
+      logActivity(db, id, 'assigned', {
+        field: 'assignee',
+        old_value: existing.assignee || null,
+        new_value: updates.assignee,
       })
     }
-  }
+    if (updates.priority !== undefined && updates.priority !== existing.priority) {
+      logActivity(db, id, 'prioritized', {
+        field: 'priority',
+        old_value: existing.priority,
+        new_value: updates.priority,
+      })
+    }
+    if (updates.project !== undefined && updates.project !== existing.project) {
+      logActivity(db, id, 'updated', {
+        field: 'project',
+        old_value: existing.project || null,
+        new_value: updates.project,
+      })
+    }
+    const fieldsToLog: Array<{ key: keyof typeof updates; field: string }> = [
+      { key: 'title', field: 'title' },
+      { key: 'description', field: 'description' },
+      { key: 'metadata', field: 'metadata' },
+    ]
+    for (const { key, field } of fieldsToLog) {
+      if (updates[key] !== undefined && updates[key] !== existing[key as keyof TaskWithColumn]) {
+        logActivity(db, id, 'updated', {
+          field,
+          old_value: String(existing[key as keyof TaskWithColumn] ?? ''),
+          new_value: String(updates[key]),
+        })
+      }
+    }
+  })()
 
   return getTask(db, id)
 }
 
 export function deleteTask(db: Database, id: string): TaskWithColumn {
   const task = getTask(db, id)
-  exitColumn(db, id, task.column_id)
-  logActivity(db, id, 'deleted', { old_value: task.title })
-  db.query('DELETE FROM tasks WHERE id = $id').run({ $id: id })
-  renumberTasksInColumn(db, task.column_id)
+  db.transaction(() => {
+    exitColumn(db, id, task.column_id)
+    logActivity(db, id, 'deleted', { old_value: task.title })
+    db.query('DELETE FROM tasks WHERE id = $id').run({ $id: id })
+    renumberTasksInColumn(db, task.column_id)
+  })()
   return task
 }
 
@@ -602,23 +608,29 @@ export function moveTask(db: Database, id: string, columnIdOrName: string): Task
   const task = getTask(db, id)
   const column = resolveColumn(db, columnIdOrName)
 
+  // No-op move to the same column: skip the write so we don't fragment
+  // column-time tracking (spurious exit/enter) or re-append the task.
+  if (column.id === task.column_id) return task
+
   const maxPos = db
     .query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
     .get({ $col: column.id }) as { next: number }
 
   const oldColumnId = task.column_id
-  db.query(
-    "UPDATE tasks SET column_id = $col, position = $pos, updated_at = datetime('now'), revision = revision + 1 WHERE id = $id",
-  ).run({ $col: column.id, $pos: maxPos.next, $id: id })
-  renumberTasksInColumn(db, oldColumnId)
+  db.transaction(() => {
+    db.query(
+      "UPDATE tasks SET column_id = $col, position = $pos, updated_at = datetime('now'), revision = revision + 1 WHERE id = $id",
+    ).run({ $col: column.id, $pos: maxPos.next, $id: id })
+    renumberTasksInColumn(db, oldColumnId)
 
-  exitColumn(db, id, oldColumnId)
-  enterColumn(db, id, column.id)
-  logActivity(db, id, 'moved', {
-    field: 'column',
-    old_value: task.column_name,
-    new_value: column.name,
-  })
+    exitColumn(db, id, oldColumnId)
+    enterColumn(db, id, column.id)
+    logActivity(db, id, 'moved', {
+      field: 'column',
+      old_value: task.column_name,
+      new_value: column.name,
+    })
+  })()
 
   return getTask(db, id)
 }
@@ -661,6 +673,7 @@ export function bulkMoveAll(
 ): { moved: number } {
   const fromCol = resolveColumn(db, fromIdOrName)
   const toCol = resolveColumn(db, toIdOrName)
+  if (fromCol.id === toCol.id) return { moved: 0 }
 
   const maxPos = db
     .query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
@@ -673,16 +686,19 @@ export function bulkMoveAll(
   const stmt = db.prepare(
     "UPDATE tasks SET column_id = $toCol, position = $pos, updated_at = datetime('now') WHERE id = $id",
   )
-  tasks.forEach(({ id }, i) => {
-    stmt.run({ $toCol: toCol.id, $pos: maxPos.next + i, $id: id })
-    exitColumn(db, id, fromCol.id)
-    enterColumn(db, id, toCol.id)
-    logActivity(db, id, 'moved', {
-      field: 'column',
-      old_value: fromCol.name,
-      new_value: toCol.name,
+  db.transaction(() => {
+    tasks.forEach(({ id }, i) => {
+      stmt.run({ $toCol: toCol.id, $pos: maxPos.next + i, $id: id })
+      exitColumn(db, id, fromCol.id)
+      enterColumn(db, id, toCol.id)
+      logActivity(db, id, 'moved', {
+        field: 'column',
+        old_value: fromCol.name,
+        new_value: toCol.name,
+      })
     })
-  })
+    renumberTasksInColumn(db, toCol.id)
+  })()
 
   return { moved: tasks.length }
 }
@@ -697,11 +713,13 @@ export function bulkClearDone(db: Database): { deleted: number } {
   const tasks = db
     .query('SELECT id, title FROM tasks WHERE column_id = $col')
     .all({ $col: doneCol.id }) as { id: string; title: string }[]
-  for (const task of tasks) {
-    exitColumn(db, task.id, doneCol.id)
-    logActivity(db, task.id, 'deleted', { old_value: task.title })
-  }
-  db.query('DELETE FROM tasks WHERE column_id = $col').run({ $col: doneCol.id })
+  db.transaction(() => {
+    for (const task of tasks) {
+      exitColumn(db, task.id, doneCol.id)
+      logActivity(db, task.id, 'deleted', { old_value: task.title })
+    }
+    db.query('DELETE FROM tasks WHERE column_id = $col').run({ $col: doneCol.id })
+  })()
   return { deleted: tasks.length }
 }
 

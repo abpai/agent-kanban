@@ -103,6 +103,9 @@ export function startServer(
   }
 
   if (syncCache) {
+    // The background warmer owns cache refresh; let the provider serve reads from
+    // the warm cache instead of blocking each request on a provider network sync.
+    provider.setBackgroundManaged?.(true)
     void runBackgroundSync('startup').finally(() => {
       scheduleBackgroundSync()
     })
@@ -110,6 +113,11 @@ export function startServer(
 
   const server = Bun.serve({
     port,
+    // Default is 10s; a cold-start provider sync (e.g. a Jira full reconcile) can
+    // exceed that and Bun would otherwise close the connection mid-flight, surfacing
+    // as ERR_EMPTY_RESPONSE. Steady-state reads are served from the warm cache and
+    // return well under this ceiling; this is just a safety net for slow cold starts.
+    idleTimeout: 255,
     websocket: {
       open(ws) {
         wsClients.add(ws)

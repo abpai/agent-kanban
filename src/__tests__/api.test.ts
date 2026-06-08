@@ -132,7 +132,8 @@ describe('handleRequest', () => {
     expect(result.event?.type).toBe('task:upsert')
     if (result.event?.type !== 'task:upsert') throw new Error('unreachable')
     expect(result.event.task.title).toBe('Optimistic')
-    expect(result.event.columnName.toLowerCase()).toBe('backlog')
+    expect('columnId' in result.event).toBe(true)
+    expect('columnName' in result.event).toBe(false)
   })
 
   test('emits task:upsert event on move across columns', async () => {
@@ -148,7 +149,8 @@ describe('handleRequest', () => {
     expect(result.event?.type).toBe('task:upsert')
     if (result.event?.type !== 'task:upsert') throw new Error('unreachable')
     expect(result.event.task.id).toBe(task.id)
-    expect(result.event.columnName.toLowerCase()).toBe('in-progress')
+    expect('columnId' in result.event).toBe(true)
+    expect('columnName' in result.event).toBe(false)
   })
 
   test('emits task:delete event on delete', async () => {

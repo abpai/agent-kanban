@@ -156,6 +156,9 @@ export class PostgresJiraProvider implements KanbanProvider {
   private readonly ready: Promise<void>
   private readonly client: JiraClient
   private readonly pollingSyncIntervalMs: number
+  // When a server-side background warmer owns cache refresh, implicit request-path
+  // syncs are suppressed once the cache is warm so reads never block on Jira I/O.
+  private backgroundManaged = false
 
   constructor(
     private readonly sql: Sql,
@@ -440,34 +443,38 @@ export class PostgresJiraProvider implements KanbanProvider {
       updatedAt: string
     }>,
   ): Promise<void> {
-    for (const issue of issues) {
-      await this.sql`
-        INSERT INTO jira_issues (
-          id, key, summary, description_text, status_id, priority_name, issue_type_name,
-          assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
-        ) VALUES (
-          ${issue.id}, ${issue.key}, ${issue.summary}, ${issue.descriptionText}, ${issue.statusId},
-          ${issue.priorityName ?? ''}, ${issue.issueTypeName ?? ''}, ${issue.assigneeAccountId ?? null},
-          ${issue.assigneeName ?? ''}, ${JSON.stringify(issue.labels ?? [])}, ${issue.commentCount ?? 0},
-          ${issue.projectKey}, ${issue.url ?? null}, ${issue.createdAt}, ${issue.updatedAt}
-        )
-        ON CONFLICT(id) DO UPDATE SET
-          key = EXCLUDED.key,
-          summary = EXCLUDED.summary,
-          description_text = EXCLUDED.description_text,
-          status_id = EXCLUDED.status_id,
-          priority_name = EXCLUDED.priority_name,
-          issue_type_name = EXCLUDED.issue_type_name,
-          assignee_account_id = EXCLUDED.assignee_account_id,
-          assignee_name = EXCLUDED.assignee_name,
-          labels = EXCLUDED.labels,
-          comment_count = EXCLUDED.comment_count,
-          project_key = EXCLUDED.project_key,
-          url = EXCLUDED.url,
-          created_at = EXCLUDED.created_at,
-          updated_at = EXCLUDED.updated_at
-      `
-    }
+    if (issues.length === 0) return
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
+      for (const issue of issues) {
+        await tx`
+          INSERT INTO jira_issues (
+            id, key, summary, description_text, status_id, priority_name, issue_type_name,
+            assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
+          ) VALUES (
+            ${issue.id}, ${issue.key}, ${issue.summary}, ${issue.descriptionText}, ${issue.statusId},
+            ${issue.priorityName ?? ''}, ${issue.issueTypeName ?? ''}, ${issue.assigneeAccountId ?? null},
+            ${issue.assigneeName ?? ''}, ${JSON.stringify(issue.labels ?? [])}, ${issue.commentCount ?? 0},
+            ${issue.projectKey}, ${issue.url ?? null}, ${issue.createdAt}, ${issue.updatedAt}
+          )
+          ON CONFLICT(id) DO UPDATE SET
+            key = EXCLUDED.key,
+            summary = EXCLUDED.summary,
+            description_text = EXCLUDED.description_text,
+            status_id = EXCLUDED.status_id,
+            priority_name = EXCLUDED.priority_name,
+            issue_type_name = EXCLUDED.issue_type_name,
+            assignee_account_id = EXCLUDED.assignee_account_id,
+            assignee_name = EXCLUDED.assignee_name,
+            labels = EXCLUDED.labels,
+            comment_count = EXCLUDED.comment_count,
+            project_key = EXCLUDED.project_key,
+            url = EXCLUDED.url,
+            created_at = EXCLUDED.created_at,
+            updated_at = EXCLUDED.updated_at
+        `
+      }
+    })
   }
 
   private async deleteIssue(idOrKey: string): Promise<void> {
@@ -628,10 +635,16 @@ export class PostgresJiraProvider implements KanbanProvider {
     `
   }
 
-  private async sync(force = false): Promise<void> {
+  private async sync(force = false, viaWarmer = false): Promise<void> {
     await this.ready
     const meta = await this.loadSyncMeta()
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
+    // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
+    // Once warm, implicit request-path reads serve the warm cache instead of
+    // blocking on a Jira round-trip (a periodic full reconcile can take minutes and
+    // exceed the HTTP idle timeout). Forced syncs (write read-after-write) and the
+    // warmer still run; CLI mode and cold start sync synchronously.
+    if (this.backgroundManaged && !force && !viaWarmer && lastSyncAtMs) return
     const now = Date.now()
     if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
     // `force` bypasses the poll throttle (so create/move/update see their own
@@ -848,7 +861,13 @@ export class PostgresJiraProvider implements KanbanProvider {
   }
 
   async syncCache(): Promise<void> {
-    await this.sync()
+    // viaWarmer bypasses the backgroundManaged request-path suppression without
+    // forcing a full reconcile (force=false keeps the normal delta/full cadence).
+    await this.sync(false, true)
+  }
+
+  setBackgroundManaged(managed: boolean): void {
+    this.backgroundManaged = managed
   }
 
   async getSyncStatus(): Promise<ProviderSyncStatus> {

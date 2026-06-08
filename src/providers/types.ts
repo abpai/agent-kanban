@@ -77,6 +77,9 @@ export interface KanbanProvider {
   getConfig(): Promise<BoardConfig>
   patchConfig(input: Partial<BoardConfig>): Promise<BoardConfig>
   syncCache?(): Promise<void>
+  // Signals that a background warmer owns cache refresh (server mode), so the
+  // provider may serve reads from the warm cache without a blocking foreground sync.
+  setBackgroundManaged?(managed: boolean): void
   getSyncStatus?(): Promise<ProviderSyncStatus | null>
   handleWebhook?(payload: WebhookRequest): Promise<WebhookResult>
 }

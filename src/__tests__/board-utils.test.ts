@@ -95,11 +95,24 @@ describe('boardUtils', () => {
     const nextBoard = upsertTaskInColumn(
       board,
       makeTask({ id: 't-1', title: 'First edited', column_id: 'c-backlog', position: 0 }),
-      'backlog',
+      'c-backlog',
     )
 
-    expect(nextBoard.columns[0]!.tasks.map((task) => task.id)).toEqual(['t-1', 'tmp-1', 't-2'])
-    expect(nextBoard.columns[0]!.tasks[0]!.title).toBe('First edited')
+    expect(nextBoard).not.toBeNull()
+    expect(nextBoard!.columns[0]!.tasks.map((task) => task.id)).toEqual(['t-1', 'tmp-1', 't-2'])
+    expect(nextBoard!.columns[0]!.tasks[0]!.title).toBe('First edited')
+  })
+
+  test('upsertTaskInColumn returns null when the target column is not on the board', () => {
+    const board = makeBoard()
+
+    const nextBoard = upsertTaskInColumn(
+      board,
+      makeTask({ id: 't-9', title: 'Unknown column', column_id: 'status:10001', position: 0 }),
+      'status:10001',
+    )
+
+    expect(nextBoard).toBeNull()
   })
 
   test('moveTaskInBoard accepts a column id when column names repeat', () => {

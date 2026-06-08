@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import postgres from 'postgres'
 
 import { run } from '../index'
-import type { Task, TaskComment, TaskWithColumn } from '../types'
+import { openKanbanRuntime } from '../provider-runtime'
+import type { BoardMetrics, Task, TaskComment, TaskWithColumn } from '../types'
 
 const databaseUrl = process.env['KANBAN_PG_TEST_URL'] ?? process.env['DATABASE_URL']
 const pgTest = databaseUrl ? test : test.skip
@@ -130,5 +131,93 @@ describe('postgres local provider', () => {
     )
 
     expect(created.column_name).toBe('Todo')
+  })
+
+  async function positionsInColumn(
+    columnName: string,
+  ): Promise<Array<{ id: string; position: number }>> {
+    if (!sql) throw new Error('sql not initialized')
+    return sql<Array<{ id: string; position: number }>>`
+      SELECT t.id, t.position FROM tasks t
+      JOIN columns c ON t.column_id = c.id
+      WHERE c.name = ${columnName}
+      ORDER BY t.position
+    `
+  }
+
+  pgTest('move renumbers the source column and records column-time tracking', async () => {
+    const a = expectOk<TaskWithColumn>(await run(['task', 'add', 'A', '-c', 'backlog']))
+    const b = expectOk<TaskWithColumn>(await run(['task', 'add', 'B', '-c', 'backlog']))
+    const c = expectOk<TaskWithColumn>(await run(['task', 'add', 'C', '-c', 'backlog']))
+    expect((await positionsInColumn('backlog')).map((r) => r.id)).toEqual([a.id, b.id, c.id])
+
+    expectOk<Task>(await run(['task', 'move', b.id, 'in-progress']))
+
+    // Source column compacted to 0..n-1 with no gap left by B.
+    expect(await positionsInColumn('backlog')).toEqual([
+      { id: a.id, position: 0 },
+      { id: c.id, position: 1 },
+    ])
+
+    // B has a closed backlog interval and an open in-progress interval.
+    const tracking = await sql!<Array<{ column_name: string; exited_at: string | null }>>`
+      SELECT c.name AS column_name, ct.exited_at
+      FROM column_time_tracking ct JOIN columns c ON ct.column_id = c.id
+      WHERE ct.task_id = ${b.id}
+      ORDER BY ct.entered_at
+    `
+    expect(tracking.map((r) => r.column_name)).toEqual(['backlog', 'in-progress'])
+    expect(tracking[0]!.exited_at).not.toBeNull()
+    expect(tracking[1]!.exited_at).toBeNull()
+  })
+
+  pgTest('move to the same column is a no-op (no extra tracking, no reorder)', async () => {
+    const a = expectOk<TaskWithColumn>(await run(['task', 'add', 'A', '-c', 'backlog']))
+    const b = expectOk<TaskWithColumn>(await run(['task', 'add', 'B', '-c', 'backlog']))
+
+    expectOk<Task>(await run(['task', 'move', a.id, 'backlog']))
+
+    // Order preserved (no re-append of A to the end).
+    expect((await positionsInColumn('backlog')).map((r) => r.id)).toEqual([a.id, b.id])
+    // Only the single creation interval exists for A.
+    const trackingRows = await sql!<Array<{ count: string | number }>>`
+      SELECT COUNT(*) AS count FROM column_time_tracking WHERE task_id = ${a.id}
+    `
+    expect(Number(trackingRows[0]?.count ?? 0)).toBe(1)
+  })
+
+  pgTest('delete renumbers the remaining tasks in the column', async () => {
+    const a = expectOk<TaskWithColumn>(await run(['task', 'add', 'A', '-c', 'backlog']))
+    const b = expectOk<TaskWithColumn>(await run(['task', 'add', 'B', '-c', 'backlog']))
+    const c = expectOk<TaskWithColumn>(await run(['task', 'add', 'C', '-c', 'backlog']))
+
+    expectOk<Task>(await run(['task', 'delete', b.id]))
+
+    expect(await positionsInColumn('backlog')).toEqual([
+      { id: a.id, position: 0 },
+      { id: c.id, position: 1 },
+    ])
+  })
+
+  pgTest('getMetrics reports completion time for tasks that reached Done', async () => {
+    const a = expectOk<TaskWithColumn>(await run(['task', 'add', 'A', '-c', 'backlog']))
+    expectOk<TaskWithColumn>(await run(['task', 'add', 'B', '-c', 'backlog']))
+    expectOk<Task>(await run(['task', 'move', a.id, 'done']))
+
+    const runtime = await openKanbanRuntime()
+    let metrics: BoardMetrics
+    try {
+      metrics = await runtime.provider.getMetrics()
+    } finally {
+      await runtime.close()
+    }
+
+    expect(metrics.completedTasks).toBe(1)
+    // Bug fix: a task resting in Done now contributes to the average (no longer
+    // requires exited_at), and the value is a real number, not a string.
+    expect(typeof metrics.avgCompletionHours).toBe('number')
+    expect(metrics.avgCompletionHours!).toBeGreaterThanOrEqual(0)
+    expect(metrics.tasksCreatedThisWeek).toBe(2)
+    expect(metrics.inProgressCount).toBe(0)
   })
 })
