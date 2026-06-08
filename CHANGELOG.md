@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.6.0 - 2026-06-08
+
+- Fixed Jira issue sync to follow the `/rest/api/3/search/jql` cursor. That
+  endpoint omits `total` and paginates by an opaque `nextPageToken`, but the
+  sync loop still terminated on the legacy `accumulated < total` condition, so
+  once `total` came back `undefined` it stopped after the first page. On any
+  project with more than 100 issues, every issue beyond the oldest 100 (by
+  `updated ASC`) — including newly-created tickets — was silently never cached.
+  The loop now follows `nextPageToken` until `isLast` (or until the server stops
+  advancing the cursor — a repeated token is guarded against so a misbehaving
+  server cannot spin the poll cycle forever, and a non-last empty page is no
+  longer mistaken for the end). A scan aborted by a stalled cursor is treated as
+  incomplete: the partial result is not recorded as a clean sync at all — it does
+  not prune cached issues (which would delete issues that exist upstream on
+  unfetched pages), and `lastSyncAt`/`lastIssueUpdatedAt`/the full-reconcile
+  marker are all left unchanged, so the next sync is not throttled and retries
+  promptly. The issues that were fetched stay cached (additive). If a
+  non-standard server supplies the legacy `total` without a cursor, completeness
+  honors `total`/`startAt` rather than page size so a full final page is not
+  misread as "more pages remain". `JiraSearchPage`'s `startAt`/`maxResults`/`total`
+  are now optional and `nextPageToken`/`isLast` are exposed.
+- Jira create/update/move now perform read-after-write via `GET /issue/{key}`
+  instead of `sync(true)` + cache read, in both the SQLite and Postgres
+  providers. The direct issue endpoint has no search-index lag, so a just-created
+  or just-transitioned issue is reflected immediately. The previous pattern raced
+  the search index — creates reported "not yet visible", and a move's new status
+  sometimes failed to land, causing the poll loop to re-issue the same move
+  repeatedly. Hydration still ingests the issue changelog (best-effort), so a
+  just-applied transition is recorded in `jira_activity` immediately rather than
+  waiting for the next unthrottled sync.
+- A forced sync (`sync(true)`) no longer triggers a full 1970-based reconcile in
+  either provider. `force` still bypasses the poll throttle so a write sees its
+  own result, but the expensive whole-project issue re-fetch (plus a per-issue
+  changelog call) now runs only on the periodic full-reconcile schedule.
+- The Postgres provider's column/catalog (users, priorities, issue types)
+  refreshes are now race-safe. Each row is written with an idempotent UPSERT
+  (`ON CONFLICT DO UPDATE`) on every sync, replacing the previous
+  `DELETE`+`INSERT` that could trip `jira_priorities_pkey` (and peers) when
+  multiple replicas refresh the shared cache concurrently; because the upsert is
+  idempotent, a newly-created
+  Jira status, column, priority, or assignable user is reflected on the next sync
+  rather than only on a full reconcile. The obsolete-row delete (removing a row
+  whose id is no longer upstream) now runs only on the periodic full reconcile,
+  mirroring how upstream-missing issues are pruned: a delta sync's catalog
+  snapshot can be stale, and a stale snapshot's delete would drop a row another
+  replica just added with a fresher snapshot. Confining the delete to the full
+  reconcile (additions still self-heal via the every-sync upsert) keeps catalog
+  pruning consistent with issue pruning and off the common delta path.
+
 ## 0.5.1 - 2026-05-30
 
 - Fixed Jira board cache sync when Jira returns duplicate board column names.

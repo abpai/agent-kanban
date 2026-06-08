@@ -22,7 +22,13 @@ import {
   type JiraColumnRow,
 } from './jira-cache'
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
-import { JiraClient, normalizeJiraLabels, type JiraComment, type JiraIssue } from './jira-client'
+import {
+  JiraClient,
+  decideJiraPagination,
+  normalizeJiraLabels,
+  type JiraComment,
+  type JiraIssue,
+} from './jira-client'
 import type { JiraProviderConfig } from './jira'
 import { providerUpstreamError, unsupportedOperation } from './errors'
 import type {
@@ -325,6 +331,16 @@ export class PostgresJiraProvider implements KanbanProvider {
     }
   }
 
+  // Catalog refreshes (columns, priorities, issue types) UPSERT the current rows
+  // on every sync — UPSERT serializes per row and never collides on the primary
+  // key when multiple Dispatch replicas refresh concurrently, so a newly-created
+  // status/column/priority is reflected on the next sync. The obsolete-row DELETE
+  // (`prune`) runs ONLY on a full reconcile, mirroring how upstream-missing issues
+  // are pruned (see pruneIssuesMissingUpstream): a delta sync's snapshot can be
+  // stale, and a stale snapshot's DELETE would drop a row another replica just
+  // added with a fresher snapshot. Confining the delete to the periodic full
+  // reconcile (and self-healing via the every-sync UPSERT) keeps catalog pruning
+  // consistent with issue pruning and out of the common delta path.
   private async replaceColumns(
     columns: Array<{
       id: string
@@ -333,22 +349,28 @@ export class PostgresJiraProvider implements KanbanProvider {
       statusIds: string[]
       source: 'board' | 'status'
     }>,
+    prune: boolean,
   ): Promise<void> {
-    await this.sql.begin(async (tx) => {
-      await tx`DELETE FROM jira_columns`
-      for (const column of columns) {
-        await tx`
-          INSERT INTO jira_columns (id, name, position, status_ids, source)
-          VALUES (
-            ${column.id},
-            ${column.name},
-            ${column.position},
-            ${JSON.stringify(column.statusIds)},
-            ${column.source}
-          )
-        `
-      }
-    })
+    for (const column of columns) {
+      await this.sql`
+        INSERT INTO jira_columns (id, name, position, status_ids, source)
+        VALUES (
+          ${column.id},
+          ${column.name},
+          ${column.position},
+          ${JSON.stringify(column.statusIds)},
+          ${column.source}
+        )
+        ON CONFLICT(id) DO UPDATE SET
+          name = EXCLUDED.name,
+          position = EXCLUDED.position,
+          status_ids = EXCLUDED.status_ids,
+          source = EXCLUDED.source
+      `
+    }
+    if (prune) {
+      await this.sql`DELETE FROM jira_columns WHERE NOT (id = ANY(${columns.map((c) => c.id)}))`
+    }
   }
 
   private async upsertUsers(
@@ -366,28 +388,37 @@ export class PostgresJiraProvider implements KanbanProvider {
     }
   }
 
-  private async replacePriorities(priorities: Array<{ id: string; name: string }>): Promise<void> {
-    await this.sql.begin(async (tx) => {
-      await tx`DELETE FROM jira_priorities`
-      for (const priority of priorities) {
-        await tx`
-          INSERT INTO jira_priorities (id, name)
-          VALUES (${priority.id}, ${priority.name})
-        `
-      }
-    })
+  private async replacePriorities(
+    priorities: Array<{ id: string; name: string }>,
+    prune: boolean,
+  ): Promise<void> {
+    for (const priority of priorities) {
+      await this.sql`
+        INSERT INTO jira_priorities (id, name)
+        VALUES (${priority.id}, ${priority.name})
+        ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
+      `
+    }
+    if (prune) {
+      await this
+        .sql`DELETE FROM jira_priorities WHERE NOT (id = ANY(${priorities.map((p) => p.id)}))`
+    }
   }
 
-  private async replaceIssueTypes(types: Array<{ id: string; name: string }>): Promise<void> {
-    await this.sql.begin(async (tx) => {
-      await tx`DELETE FROM jira_issue_types`
-      for (const type of types) {
-        await tx`
-          INSERT INTO jira_issue_types (id, name)
-          VALUES (${type.id}, ${type.name})
-        `
-      }
-    })
+  private async replaceIssueTypes(
+    types: Array<{ id: string; name: string }>,
+    prune: boolean,
+  ): Promise<void> {
+    for (const type of types) {
+      await this.sql`
+        INSERT INTO jira_issue_types (id, name)
+        VALUES (${type.id}, ${type.name})
+        ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
+      `
+    }
+    if (prune) {
+      await this.sql`DELETE FROM jira_issue_types WHERE NOT (id = ANY(${types.map((t) => t.id)}))`
+    }
   }
 
   private async upsertIssues(
@@ -603,15 +634,26 @@ export class PostgresJiraProvider implements KanbanProvider {
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
     const now = Date.now()
     if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
-    const fullReconcile = force || shouldRunFullReconcile(meta.lastFullSyncAt, now)
+    // `force` bypasses the poll throttle (so create/move/update see their own
+    // write) but must NOT force a full 1970-based reconcile: on a large project
+    // that re-fetches every issue plus a per-issue changelog call (~minutes) on
+    // every write. A delta sync (updated >= lastIssueUpdatedAt) is cheap and
+    // still catches the just-written issue, which is always among the newest.
+    const fullReconcile = shouldRunFullReconcile(meta.lastFullSyncAt, now)
 
     const project = await this.client.getProject(this.config.projectKey)
     await this.saveTeamInfo({ id: project.id, key: project.key, name: project.name })
 
+    // Columns + catalogs (users/priorities/issue types) UPSERT on every sync so a
+    // newly-created Jira status/column/priority/user is reflected promptly; the
+    // obsolete-row prune is confined to the full reconcile (see replaceColumns).
     if (this.config.boardId !== undefined) {
       const boardCfg = await this.client.getBoardColumns(this.config.boardId)
       const boardId = this.config.boardId
-      await this.replaceColumns(jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns))
+      await this.replaceColumns(
+        jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns),
+        fullReconcile,
+      )
     } else {
       const statusCats = await this.client.getProjectStatuses(project.key)
       const seen = new Set<string>()
@@ -631,6 +673,7 @@ export class PostgresJiraProvider implements KanbanProvider {
           statusIds: [status.id],
           source: 'status' as const,
         })),
+        fullReconcile,
       )
     }
 
@@ -652,18 +695,17 @@ export class PostgresJiraProvider implements KanbanProvider {
     )
     await this.replacePriorities(
       priorities.map((priority) => ({ id: priority.id, name: priority.name })),
+      fullReconcile,
     )
     await this.replaceIssueTypes(
       issueTypes.map((issueType) => ({ id: issueType.id, name: issueType.name })),
+      fullReconcile,
     )
 
     const since = fullReconcile ? null : meta.lastIssueUpdatedAt
     const sinceClause = since ?? '1970-01-01 00:00'
     const jql = `project = ${project.key} AND updated >= "${sinceClause}" ORDER BY updated ASC`
-    let startAt = 0
     const maxResults = 100
-    let accumulated = 0
-    let total = Infinity
     let newestUpdatedAt: string | null = meta.lastIssueUpdatedAt
     const seenIssueIds = new Set<string>()
     const issueFields = [
@@ -680,10 +722,28 @@ export class PostgresJiraProvider implements KanbanProvider {
       'project',
     ]
 
-    while (accumulated < total) {
-      const page = await this.client.listIssues({ jql, startAt, maxResults, fields: issueFields })
-      total = page.total
-      if (page.issues.length === 0) break
+    // /rest/api/3/search/jql paginates by an opaque nextPageToken and omits
+    // `total`, so we follow the cursor until the server reports `isLast` or stops
+    // handing back a token. The previous total/startAt loop fetched only the first
+    // page (oldest 100 by updated ASC) once `total` came back undefined, so every
+    // issue beyond the first page — including newly-created tickets on a project
+    // with >100 issues — was never cached. seenPageTokens guards against a server
+    // that repeats a cursor, which would otherwise spin this loop forever and hang
+    // the poll cycle; an empty page is not treated as terminal because a non-last
+    // page may legitimately carry a token with zero issues.
+    const seenPageTokens = new Set<string>()
+    let nextPageToken: string | undefined
+    let firstPage = true
+    let paginationComplete = false
+    while (firstPage || nextPageToken !== undefined) {
+      firstPage = false
+      const page = await this.client.listIssues({
+        jql,
+        startAt: 0,
+        maxResults,
+        fields: issueFields,
+        nextPageToken,
+      })
 
       await this.upsertIssues(
         page.issues.map((issue) => ({
@@ -720,10 +780,37 @@ export class PostgresJiraProvider implements KanbanProvider {
         })
       }
 
-      accumulated += page.issues.length
-      startAt += page.issues.length
+      const decision = decideJiraPagination(page, seenPageTokens)
+      if (decision.nextToken !== undefined) {
+        seenPageTokens.add(decision.nextToken)
+        nextPageToken = decision.nextToken
+        continue
+      }
+      paginationComplete = decision.complete
+      if (!paginationComplete) {
+        // The server stopped advancing the cursor before reporting a definitive
+        // end (stalled/contradictory). seenIssueIds is only a partial scan, so we
+        // must not treat it as authoritative for pruning below.
+        console.warn(
+          `[jira] search/jql scan ended without a definitive last page; treating as incomplete`,
+        )
+      }
+      break
     }
 
+    if (!paginationComplete) {
+      // The scan ended early (stalled/contradictory cursor). Leave sync metadata
+      // unchanged so this partial result is not recorded as a clean sync: lastSyncAt
+      // is not advanced, so the next sync is not throttled and retries promptly, and
+      // the full-reconcile marker stays due. The issues we did fetch are already
+      // cached (additive); we only skip pruning — which would delete issues that
+      // exist upstream on pages we never fetched — and the metadata advance.
+      return
+    }
+
+    // Prune against seenIssueIds and advance lastFullSyncAt only on a full
+    // reconcile; a delta sync's seenIssueIds is intentionally partial. (The scan
+    // is known complete here — an incomplete scan returned above.)
     if (fullReconcile) {
       await this.pruneIssuesMissingUpstream(project.key, [...seenIssueIds])
     }
@@ -921,6 +1008,56 @@ export class PostgresJiraProvider implements KanbanProvider {
     await this.saveActivity(rows)
   }
 
+  // Read-after-write via the direct issue endpoint. Unlike JQL search (used by
+  // sync()), GET /issue/{key} has no search-index lag, so a just-created or
+  // just-transitioned issue is reflected immediately. This replaces the previous
+  // "transition/create then sync(true) then getCachedTask" pattern, which both
+  // raced the search index (create reported "not yet visible"; a move's new
+  // status didn't land, causing the daemon to re-issue the move in a loop) and
+  // forced a full whole-project reconcile (~minutes) on every write.
+  private async hydrateIssueByKey(key: string): Promise<Task> {
+    // getIssue throws on a missing key (404), so reaching this method means the
+    // issue exists upstream. A null read-back would therefore be a genuine cache
+    // anomaly (the upsert above did not land), not an ordinary not-found — surface
+    // it rather than threading an unreachable null through every caller.
+    const issue = await this.client.getIssue(key)
+    await this.upsertIssues([
+      {
+        id: issue.id,
+        key: issue.key,
+        summary: issue.fields.summary,
+        descriptionText: issue.fields.description
+          ? adfToPlainText(issue.fields.description as AdfDocument)
+          : '',
+        statusId: issue.fields.status.id,
+        priorityName: issue.fields.priority?.name ?? null,
+        issueTypeName: issue.fields.issuetype?.name ?? '',
+        assigneeAccountId: issue.fields.assignee?.accountId ?? null,
+        assigneeName: issue.fields.assignee?.displayName ?? null,
+        labels: issue.fields.labels ?? [],
+        commentCount: issue.fields.comment?.total ?? 0,
+        projectKey: issue.fields.project?.key ?? this.config.projectKey,
+        url: `${this.config.baseUrl}/browse/${issue.key}`,
+        createdAt: issue.fields.created,
+        updatedAt: issue.fields.updated,
+      },
+    ])
+    // Ingest the changelog like the sync loop does, so a just-applied transition
+    // is recorded in jira_activity immediately (backs getActivity and the
+    // poll-based `moved` trigger) rather than waiting for the next unthrottled
+    // sync. Best-effort: activity must not fail the mutation.
+    await this.ingestIssueActivity(issue.id).catch((err) => {
+      console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
+    })
+    const task = await this.getCachedTask(key)
+    if (!task) {
+      providerUpstreamError(
+        `Jira issue ${key} was hydrated from GET /issue but is missing from the cache.`,
+      )
+    }
+    return task
+  }
+
   async createTask(input: CreateTaskInput): Promise<Task> {
     await this.sync()
     this.normalizeProjectField(input.project)
@@ -941,14 +1078,7 @@ export class PostgresJiraProvider implements KanbanProvider {
     const labels = normalizeJiraLabels(input.labels)
     if (labels.length > 0) fields['labels'] = labels
     const created = await this.client.createIssue({ fields })
-    await this.sync(true)
-    const fresh = await this.getCachedTask(created.key)
-    if (!fresh) {
-      providerUpstreamError(
-        `Jira issue ${created.key} was created but is not yet visible in the cache after sync.`,
-      )
-    }
-    return fresh
+    return this.hydrateIssueByKey(created.key)
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task> {
@@ -976,10 +1106,7 @@ export class PostgresJiraProvider implements KanbanProvider {
         : null
     }
     if (Object.keys(fields).length > 0) await this.client.updateIssue(issueKey, { fields })
-    await this.sync(true)
-    const fresh = await this.getCachedTask(issueKey)
-    if (!fresh) providerUpstreamError(`Jira issue ${issueKey} disappeared from cache after update.`)
-    return fresh
+    return this.hydrateIssueByKey(issueKey)
   }
 
   async moveTask(idOrRef: string, column: string): Promise<Task> {
@@ -1013,10 +1140,7 @@ export class PostgresJiraProvider implements KanbanProvider {
       )
     }
     await this.client.transitionIssue(issueKey, match.id)
-    await this.sync(true)
-    const fresh = await this.getCachedTask(issueKey)
-    if (!fresh) providerUpstreamError(`Jira issue ${issueKey} missing from cache after transition.`)
-    return fresh
+    return this.hydrateIssueByKey(issueKey)
   }
 
   async deleteTask(_idOrRef: string): Promise<Task> {

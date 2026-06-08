@@ -45,10 +45,71 @@ export interface JiraIssue {
 }
 
 export interface JiraSearchPage {
-  startAt: number
-  maxResults: number
-  total: number
+  // The legacy /rest/api/3/search endpoint returned startAt/maxResults/total.
+  // The current /rest/api/3/search/jql endpoint omits `total` and paginates by
+  // an opaque `nextPageToken` (with `isLast`), so these are optional now.
+  startAt?: number
+  maxResults?: number
+  total?: number
+  nextPageToken?: string
+  isLast?: boolean
   issues: JiraIssue[]
+}
+
+export interface JiraPaginationDecision {
+  // When set, advance the scan to this cursor. When absent, the scan is over and
+  // `complete` says whether it ended definitively (safe to prune against the
+  // accumulated issue set) or was cut short (must NOT prune — issues on unfetched
+  // pages would be wrongly deleted).
+  nextToken?: string
+  complete: boolean
+}
+
+// Decide how a `/rest/api/3/search/jql` cursor scan should proceed after a page.
+// The endpoint signals continuation with `isLast`/`nextPageToken`, but real and
+// degraded servers vary, so termination must be conservative: a scan is reported
+// `complete` (safe to prune against the accumulated issue set) ONLY when the
+// server proves the end, never from a page-size guess.
+//   - usable cursor (fresh `nextPageToken`, isLast !== true) → advance.
+//   - isLast === true                                        → definitive end (complete).
+//   - isLast === false                                       → more pages exist; if the
+//                                                              cursor is missing/stale we
+//                                                              cannot fetch them, so the
+//                                                              scan is incomplete.
+//   - isLast absent, `total` present                         → legacy total/startAt proof:
+//                                                              complete once startAt+count
+//                                                              reaches `total`.
+//   - isLast absent, no `total`, no usable cursor            → NO completeness proof. A
+//                                                              short/empty page must NOT be
+//                                                              read as "the end": a degraded
+//                                                              `{ issues: [] }` would then
+//                                                              prune the entire cache on a
+//                                                              full reconcile. Treat as
+//                                                              incomplete and retry instead.
+// A cursor already in `seenPageTokens` counts as not usable (a stalled cursor
+// that would otherwise loop forever).
+export function decideJiraPagination(
+  page: Pick<JiraSearchPage, 'isLast' | 'nextPageToken' | 'issues' | 'total' | 'startAt'>,
+  seenPageTokens: ReadonlySet<string>,
+): JiraPaginationDecision {
+  const token = page.nextPageToken
+  const canAdvance = !!token && page.isLast !== true && !seenPageTokens.has(token)
+  if (canAdvance) return { nextToken: token, complete: false }
+  if (page.isLast === true) return { complete: true }
+  if (page.isLast === false) return { complete: false }
+  // isLast absent below. Prefer the legacy total/startAt signal when a
+  // (non-standard) server supplies it: complete once we have fetched everything
+  // `total` promises. The live /search/jql endpoint omits `total` and ignores
+  // `startAt`, so the loop never advances by offset — a `total` promising more
+  // than this page is reported incomplete rather than fetched.
+  if (typeof page.total === 'number') {
+    const issueCount = page.issues?.length ?? 0
+    return { complete: (page.startAt ?? 0) + issueCount >= page.total }
+  }
+  // No completeness signal at all (no isLast, no total, no usable cursor). We
+  // cannot prove the scan reached the end, so never guess `complete` from page
+  // size — that would prune the whole cache on a degraded short/empty response.
+  return { complete: false }
 }
 
 export interface JiraCreatePayload {
@@ -254,12 +315,17 @@ export class JiraClient {
     startAt: number
     maxResults: number
     fields?: string[]
+    nextPageToken?: string
   }): Promise<JiraSearchPage> {
     const query: QueryParams = {
       jql: params.jql,
-      startAt: params.startAt,
       maxResults: params.maxResults,
     }
+    // /rest/api/3/search/jql ignores startAt and paginates by nextPageToken.
+    // Send the cursor when we have one; only send startAt on the first page for
+    // back-compat with the legacy endpoint.
+    if (params.nextPageToken) query.nextPageToken = params.nextPageToken
+    else query.startAt = params.startAt
     if (params.fields && params.fields.length > 0) {
       query.fields = params.fields.join(',')
     }

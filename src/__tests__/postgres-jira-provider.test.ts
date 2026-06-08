@@ -146,6 +146,16 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
       },
     },
     {
+      // GET /rest/api/3/issue/{key} backs hydrateIssueByKey's read-after-write.
+      match: (url) => /\/rest\/api\/3\/issue\/ENG-\d+$/.test(new URL(url).pathname),
+      handler: (url) => {
+        const issueKey = new URL(url).pathname.match(/\/issue\/(ENG-\d+)$/)![1]!
+        const issue = issues.find((candidate) => String(candidate.key) === issueKey)
+        if (!issue) return jsonResponse({ errorMessages: ['missing'] }, 404)
+        return jsonResponse(issue)
+      },
+    },
+    {
       match: (url) => /\/rest\/api\/3\/issue\/ENG-\d+\/comment$/.test(new URL(url).pathname),
       handler: async (url, init) => {
         const issueKey = new URL(url).pathname.match(/\/issue\/(ENG-\d+)\/comment/)![1]!
@@ -400,5 +410,150 @@ describe('postgres jira provider', () => {
       externalRef: 'ENG-1',
       column_id: '20',
     })
+  })
+
+  pgTest(
+    'delta sync adds new catalog rows but only a full reconcile prunes obsolete ones',
+    async () => {
+      if (!sql) throw new Error('expected postgres test connection')
+      const prioritiesState = {
+        list: [
+          { id: '2', name: 'High' },
+          { id: '3', name: 'Medium' },
+        ] as Array<{ id: string; name: string }>,
+      }
+      const routes = standardRoutes()
+      const pIdx = routes.findIndex((route) =>
+        route.match('https://example.atlassian.net/rest/api/3/priority'),
+      )
+      routes[pIdx] = {
+        match: (url) => url.includes('/rest/api/3/priority'),
+        handler: () => jsonResponse(prioritiesState.list),
+      }
+      globalThis.fetch = jiraFetchStub(routes).fn
+      // pollingSyncIntervalMs: 0 lets every getBoard run; the first is a full
+      // reconcile (no lastFullSyncAt yet), later ones are delta syncs because the
+      // full-reconcile interval has not elapsed.
+      const provider = new PostgresJiraProvider(sql, {
+        baseUrl: 'https://example.atlassian.net',
+        email: 'user@example.com',
+        apiToken: 'token',
+        projectKey: 'ENG',
+        boardId: 1006,
+        pollingSyncIntervalMs: 0,
+      })
+      const priorityNames = async () =>
+        (await sql!<{ name: string }[]>`SELECT name FROM jira_priorities ORDER BY name`).map(
+          (row) => row.name,
+        )
+
+      await provider.getBoard()
+      expect(await priorityNames()).toEqual(['High', 'Medium'])
+
+      // Drop Medium, add Low upstream. A delta sync must pick up the new row
+      // (Low) via the every-sync UPSERT but must NOT prune the now-obsolete row
+      // (Medium): pruning on a possibly-stale delta snapshot could delete a row
+      // another replica just added. Pruning is confined to the full reconcile.
+      prioritiesState.list = [
+        { id: '2', name: 'High' },
+        { id: '4', name: 'Low' },
+      ]
+      await provider.getBoard()
+      expect(await priorityNames()).toEqual(['High', 'Low', 'Medium'])
+
+      // Force the next sync to be a full reconcile; only then is the obsolete
+      // Medium pruned.
+      await sql`DELETE FROM jira_sync_meta WHERE key = 'lastFullSyncAt'`
+      await provider.getBoard()
+      expect(await priorityNames()).toEqual(['High', 'Low'])
+    },
+  )
+
+  pgTest('concurrent catalog refreshes do not collide on a primary key', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    globalThis.fetch = jiraFetchStub(standardRoutes()).fn
+    const sql2 = postgres(databaseUrl as string, { max: 1, onnotice: () => {} })
+    try {
+      const config = {
+        baseUrl: 'https://example.atlassian.net',
+        email: 'user@example.com',
+        apiToken: 'token',
+        projectKey: 'ENG',
+        boardId: 1006,
+        pollingSyncIntervalMs: 0,
+      }
+      // Initialize schema sequentially first; concurrent CREATE TABLE IF NOT
+      // EXISTS races at the DDL level (a pre-existing Postgres quirk unrelated to
+      // catalog refresh). The race under test is the catalog DML below.
+      const p1 = new PostgresJiraProvider(sql, config)
+      await p1.initialize()
+      const p2 = new PostgresJiraProvider(sql2, config)
+      await p2.initialize()
+      // Two replicas on separate connections refreshing the same shared cache
+      // concurrently must not trip a primary-key collision. Both first syncs are
+      // full reconciles (no lastFullSyncAt yet), so this also exercises the
+      // obsolete-row DELETE running concurrently: UPSERT + conditional DELETE is
+      // idempotent and order-independent.
+      await Promise.all([p1.getBoard(), p2.getBoard()])
+      const rows = await sql<
+        { count: number }[]
+      >`SELECT COUNT(*)::int AS count FROM jira_priorities`
+      expect(rows[0]?.count ?? 0).toBeGreaterThan(0)
+    } finally {
+      await sql2.end({ timeout: 1 })
+    }
+  })
+
+  pgTest('full reconcile with a stalled cursor does not prune unfetched-page issues', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    // Mirror of the SQLite prune-safety coverage: if the cursor stalls (a
+    // repeated non-last token) mid-scan, seenIssueIds is only partial, so the
+    // incomplete scan must NOT prune issues that exist upstream on pages we never
+    // fetched.
+    let stalled = false
+    const routes = standardRoutes()
+    const sIdx = routes.findIndex((route) => route.match('https://x/rest/api/3/search/jql'))
+    routes[sIdx] = {
+      match: (url) => url.includes('/rest/api/3/search/jql'),
+      handler: () =>
+        stalled
+          ? // Later full reconcile: the cursor stalls after returning only ENG-1,
+            // so ENG-2's page is never reached. isLast=false + a repeated token =>
+            // incomplete.
+            jsonResponse({
+              nextPageToken: 'stuck',
+              isLast: false,
+              issues: [makeIssue({ id: '1', key: 'ENG-1' })],
+            })
+          : // First full reconcile: a clean single terminal page with both issues.
+            jsonResponse({
+              isLast: true,
+              issues: [makeIssue({ id: '1', key: 'ENG-1' }), makeIssue({ id: '2', key: 'ENG-2' })],
+            }),
+    }
+    globalThis.fetch = jiraFetchStub(routes).fn
+    const provider = new PostgresJiraProvider(sql, {
+      baseUrl: 'https://example.atlassian.net',
+      email: 'user@example.com',
+      apiToken: 'token',
+      projectKey: 'ENG',
+      boardId: 1006,
+      pollingSyncIntervalMs: 0,
+    })
+    const issueKeys = async () =>
+      (await sql!<{ key: string }[]>`SELECT key FROM jira_issues ORDER BY key`).map(
+        (row) => row.key,
+      )
+
+    await provider.getBoard()
+    expect(await issueKeys()).toEqual(['ENG-1', 'ENG-2'])
+
+    // Force the next sync to be a full reconcile and hit the stalled cursor.
+    stalled = true
+    await sql`DELETE FROM jira_sync_meta WHERE key = 'lastFullSyncAt'`
+    await provider.getBoard()
+
+    // ENG-2 must survive: the incomplete scan is not authoritative for pruning.
+    expect(await issueKeys()).toEqual(['ENG-1', 'ENG-2'])
   })
 })

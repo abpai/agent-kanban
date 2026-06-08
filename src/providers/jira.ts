@@ -20,7 +20,13 @@ import {
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
 import { JIRA_CAPABILITIES } from './capabilities'
 import { providerUpstreamError, unsupportedOperation } from './errors'
-import { JiraClient, normalizeJiraLabels, type JiraComment, type JiraIssue } from './jira-client'
+import {
+  JiraClient,
+  decideJiraPagination,
+  normalizeJiraLabels,
+  type JiraComment,
+  type JiraIssue,
+} from './jira-client'
 import {
   adjustJiraIssueCommentCount,
   decodeColumnStatusIds,
@@ -114,7 +120,11 @@ export class JiraProvider implements KanbanProvider {
     const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
     const now = Date.now()
     if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
-    const fullReconcile = force || shouldRunFullReconcile(meta.lastFullSyncAt, now)
+    // `force` only bypasses the poll throttle; it must NOT imply a full
+    // 1970-based reconcile, which re-fetches every issue plus a per-issue
+    // changelog call (~minutes). Writes get read-after-write freshness from
+    // hydrateIssueByKey instead, so a forced sync stays a cheap delta.
+    const fullReconcile = shouldRunFullReconcile(meta.lastFullSyncAt, now)
 
     // 1. Resolve project.
     const project = await this.client.getProject(this.config.projectKey)
@@ -181,10 +191,7 @@ export class JiraProvider implements KanbanProvider {
     const sinceClause = since ?? '1970-01-01 00:00'
     const jql = `project = ${project.key} AND updated >= "${sinceClause}" ORDER BY updated ASC`
 
-    let startAt = 0
     const maxResults = 100
-    let accumulated = 0
-    let total = Infinity
     let newestUpdatedAt: string | null = meta.lastIssueUpdatedAt
     const seenIssueIds = new Set<string>()
     const issueFields = [
@@ -200,12 +207,28 @@ export class JiraProvider implements KanbanProvider {
       'updated',
       'project',
     ]
-    // Terminates when accumulated reaches total, or when the server returns
-    // an empty page (defensive against buggy servers not advancing startAt).
-    while (accumulated < total) {
-      const page = await this.client.listIssues({ jql, startAt, maxResults, fields: issueFields })
-      total = page.total
-      if (page.issues.length === 0) break
+    // /rest/api/3/search/jql paginates by an opaque nextPageToken and omits
+    // `total`, so we follow the cursor until the server reports `isLast` or stops
+    // handing back a token. The previous total/startAt loop fetched only the first
+    // page (oldest 100 by updated ASC) once `total` came back undefined, so every
+    // issue beyond the first page — including newly-created tickets on a project
+    // with >100 issues — was never cached. seenPageTokens guards against a server
+    // that repeats a cursor, which would otherwise spin this loop forever and hang
+    // the poll cycle; an empty page is not treated as terminal because a non-last
+    // page may legitimately carry a token with zero issues.
+    const seenPageTokens = new Set<string>()
+    let nextPageToken: string | undefined
+    let firstPage = true
+    let paginationComplete = false
+    while (firstPage || nextPageToken !== undefined) {
+      firstPage = false
+      const page = await this.client.listIssues({
+        jql,
+        startAt: 0,
+        maxResults,
+        fields: issueFields,
+        nextPageToken,
+      })
 
       upsertJiraIssues(
         this.db,
@@ -249,10 +272,37 @@ export class JiraProvider implements KanbanProvider {
         })
       }
 
-      accumulated += page.issues.length
-      startAt += page.issues.length
+      const decision = decideJiraPagination(page, seenPageTokens)
+      if (decision.nextToken !== undefined) {
+        seenPageTokens.add(decision.nextToken)
+        nextPageToken = decision.nextToken
+        continue
+      }
+      paginationComplete = decision.complete
+      if (!paginationComplete) {
+        // The server stopped advancing the cursor before reporting a definitive
+        // end (stalled/contradictory). seenIssueIds is only a partial scan, so we
+        // must not treat it as authoritative for pruning below.
+        console.warn(
+          `[jira] search/jql scan ended without a definitive last page; treating as incomplete`,
+        )
+      }
+      break
     }
 
+    if (!paginationComplete) {
+      // The scan ended early (stalled/contradictory cursor). Leave sync metadata
+      // unchanged so this partial result is not recorded as a clean sync: lastSyncAt
+      // is not advanced, so the next sync is not throttled and retries promptly, and
+      // the full-reconcile marker stays due. The issues we did fetch are already
+      // cached (additive); we only skip pruning — which would delete issues that
+      // exist upstream on pages we never fetched — and the metadata advance.
+      return
+    }
+
+    // Prune against seenIssueIds and advance lastFullSyncAt only on a full
+    // reconcile; a delta sync's seenIssueIds is intentionally partial. (The scan
+    // is known complete here — an incomplete scan returned above.)
     if (fullReconcile) {
       pruneJiraIssuesMissingUpstream(this.db, project.key, [...seenIssueIds])
     }
@@ -452,6 +502,55 @@ export class JiraProvider implements KanbanProvider {
     }
   }
 
+  // Read-after-write via the direct issue endpoint. Unlike JQL search (used by
+  // sync()), GET /issue/{key} has no search-index lag, so a just-created or
+  // just-transitioned issue is reflected immediately. This replaces the previous
+  // "create/transition then sync(true) then getCachedTask" pattern, which raced
+  // the search index (creates reported "not yet visible"; a move's new status
+  // sometimes didn't land) and forced a full whole-project reconcile per write.
+  private async hydrateIssueByKey(key: string): Promise<Task> {
+    // getIssue throws on a missing key (404), so reaching this method means the
+    // issue exists upstream. A null read-back would therefore be a genuine cache
+    // anomaly (the upsert above did not land), not an ordinary not-found — surface
+    // it rather than threading an unreachable null through every caller.
+    const issue = await this.client.getIssue(key)
+    upsertJiraIssues(this.db, [
+      {
+        id: issue.id,
+        key: issue.key,
+        summary: issue.fields.summary,
+        descriptionText: issue.fields.description
+          ? adfToPlainText(issue.fields.description as AdfDocument)
+          : '',
+        statusId: issue.fields.status.id,
+        priorityName: issue.fields.priority?.name ?? null,
+        issueTypeName: issue.fields.issuetype?.name ?? '',
+        assigneeAccountId: issue.fields.assignee?.accountId ?? null,
+        assigneeName: issue.fields.assignee?.displayName ?? null,
+        labels: issue.fields.labels ?? [],
+        commentCount: issue.fields.comment?.total ?? 0,
+        projectKey: issue.fields.project?.key ?? this.config.projectKey,
+        url: `${this.config.baseUrl}/browse/${issue.key}`,
+        createdAt: issue.fields.created,
+        updatedAt: issue.fields.updated,
+      },
+    ])
+    // Ingest the changelog like the sync loop does, so a just-applied transition
+    // is recorded in jira_activity immediately (backs getActivity and the
+    // poll-based `moved` trigger) rather than waiting for the next unthrottled
+    // sync. Best-effort: activity must not fail the mutation.
+    await this.ingestIssueActivity(issue.id).catch((err) => {
+      console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
+    })
+    const task = getCachedTask(this.db, key)
+    if (!task) {
+      providerUpstreamError(
+        `Jira issue ${key} was hydrated from GET /issue but is missing from the cache.`,
+      )
+    }
+    return task
+  }
+
   async createTask(input: CreateTaskInput): Promise<Task> {
     await this.sync()
     this.normalizeProjectField(input.project)
@@ -479,14 +578,7 @@ export class JiraProvider implements KanbanProvider {
     // issues land in the project workflow's default start state. Use
     // `moveTask` after create to change status.
     const created = await this.client.createIssue({ fields })
-    await this.sync(true)
-    const fresh = getCachedTask(this.db, created.key)
-    if (!fresh) {
-      providerUpstreamError(
-        `Jira issue ${created.key} was created but is not yet visible in the cache after sync.`,
-      )
-    }
-    return fresh
+    return this.hydrateIssueByKey(created.key)
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task> {
@@ -521,12 +613,7 @@ export class JiraProvider implements KanbanProvider {
     if (Object.keys(fields).length > 0) {
       await this.client.updateIssue(issueKey, { fields })
     }
-    await this.sync(true)
-    const fresh = getCachedTask(this.db, issueKey)
-    if (!fresh) {
-      providerUpstreamError(`Jira issue ${issueKey} disappeared from cache after update.`)
-    }
-    return fresh
+    return this.hydrateIssueByKey(issueKey)
   }
 
   async moveTask(idOrRef: string, column: string): Promise<Task> {
@@ -563,12 +650,7 @@ export class JiraProvider implements KanbanProvider {
       )
     }
     await this.client.transitionIssue(issueKey, match.id)
-    await this.sync(true)
-    const fresh = getCachedTask(this.db, issueKey)
-    if (!fresh) {
-      providerUpstreamError(`Jira issue ${issueKey} missing from cache after transition.`)
-    }
-    return fresh
+    return this.hydrateIssueByKey(issueKey)
   }
 
   async deleteTask(_idOrRef: string): Promise<Task> {

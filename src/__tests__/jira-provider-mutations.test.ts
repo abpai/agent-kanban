@@ -195,6 +195,19 @@ function standardSyncRoutes(opts: SyncRoutesOpts): StubRoute[] {
       handler: () => jsonResponse(opts.issueTypes ?? []),
     },
     {
+      // GET /rest/api/3/issue/{key} backs hydrateIssueByKey's read-after-write.
+      // Serves the post-mutation issue from the same pool as /search so tests
+      // that push a created/updated issue into `opts.issues` see it here too.
+      match: (u, init) =>
+        /\/rest\/api\/3\/issue\/[A-Z]+-\d+$/.test(new URL(u).pathname) &&
+        (init?.method ?? 'GET') === 'GET',
+      handler: (u) => {
+        const key = new URL(u).pathname.split('/').pop()!
+        const found = (opts.issues ?? []).find((iss) => (iss as { key?: string }).key === key)
+        return found ? jsonResponse(found) : jsonResponse({ errorMessages: ['not found'] }, 404)
+      },
+    },
+    {
       match: (u) => u.includes('/rest/api/3/search/jql'),
       handler: () =>
         jsonResponse({
@@ -298,16 +311,16 @@ function fullSyncRoutes(extraIssues: Record<string, unknown>[] = []): StubRoute[
 describe('JiraProvider mutations', () => {
   test('createTask happy path: plainTextToAdf invoked, priority mapped, assignee and issueType resolved', async () => {
     fullSeed(db)
-    // Shared state so the POST /issue handler appends the created issue, which
-    // the subsequent sync(true)'s /search handler then returns so getCachedTask
-    // finds it after the post-mutation sync.
-    const createdIssues: Record<string, unknown>[] = []
+    // Shared issue pool: the POST /issue handler appends the created issue, which
+    // hydrateIssueByKey then reads back through the GET /issue/{key} route so the
+    // returned task reflects the create.
     const createdIssue = makeJiraIssueFixture({
       id: '600',
       key: 'ENG-10',
       statusId: '20000',
       summary: 'Fix',
     })
+    const issues: Record<string, unknown>[] = [makeJiraIssueFixture(seedIssues[0]!)]
     const syncRoutes: StubRoute[] = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [
@@ -317,28 +330,12 @@ describe('JiraProvider mutations', () => {
       users: seedUsers,
       priorities: seedPriorities,
       issueTypes: seedIssueTypes,
-      issues: [makeJiraIssueFixture(seedIssues[0]!)],
+      issues,
     })
-    // Replace the /search route to include createdIssues dynamically.
-    const searchRouteIndex = syncRoutes.findIndex((r) =>
-      r.match('https://example.atlassian.net/rest/api/3/search/jql'),
-    )
-    syncRoutes[searchRouteIndex] = {
-      match: (u) => u.includes('/rest/api/3/search/jql'),
-      handler: () => {
-        const all = [makeJiraIssueFixture(seedIssues[0]!), ...createdIssues]
-        return jsonResponse({
-          startAt: 0,
-          maxResults: 100,
-          total: all.length,
-          issues: all,
-        })
-      },
-    }
     const mutationRoute: StubRoute = {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
       handler: () => {
-        createdIssues.push(createdIssue)
+        issues.push(createdIssue)
         return jsonResponse({
           id: '600',
           key: 'ENG-10',
@@ -483,6 +480,62 @@ describe('JiraProvider mutations', () => {
     expect(body.transition.id).toBe('21')
   })
 
+  test('moveTask ingests the moved issue changelog via hydration (activity recorded immediately)', async () => {
+    // seedCache sets a recent lastSyncAt, so moveTask's pre-move sync() is
+    // throttled and fetches no changelog. The only changelog call must therefore
+    // come from hydrateIssueByKey's read-after-write — proving the transition
+    // lands in jira_activity immediately rather than waiting for a later sync.
+    seedCache(db, {
+      priorities: seedPriorities,
+      users: seedUsers,
+      issueTypes: seedIssueTypes,
+      columns: seedColumns,
+      issues: [{ id: '501', key: 'ENG-1', statusId: '20000' }],
+      projectKey: 'ENG',
+    })
+    const syncRoutes = fullSyncRoutes()
+    let changelogCalls = 0
+    const changelogRoute: StubRoute = {
+      match: (u) => /\/rest\/api\/3\/issue\/501\/changelog/.test(new URL(u).pathname),
+      handler: () => {
+        changelogCalls += 1
+        return jsonResponse({
+          values: [
+            {
+              id: 'h1',
+              created: '2026-01-06T00:00:00Z',
+              items: [{ field: 'status', from: '20000', to: '10001' }],
+            },
+          ],
+        })
+      },
+    }
+    const transitionsRoute: StubRoute = {
+      match: (u, init) =>
+        u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'GET',
+      handler: () =>
+        jsonResponse({
+          transitions: [{ id: '21', name: 'Done', to: { id: '10001', name: 'Done' } }],
+        }),
+    }
+    const postTransitionRoute: StubRoute = {
+      match: (u, init) =>
+        u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'POST',
+      handler: () => emptyResponse(204),
+    }
+    const { provider } = makeProvider(db, [
+      changelogRoute,
+      transitionsRoute,
+      postTransitionRoute,
+      ...syncRoutes,
+    ])
+    await provider.moveTask('ENG-1', 'Done')
+
+    expect(changelogCalls).toBe(1)
+    const activity = await provider.getActivity(50, 'jira:501')
+    expect(activity.length).toBeGreaterThan(0)
+  })
+
   test('moveTask no-match failure: error message names target and lists available transitions', async () => {
     seedCache(db, {
       priorities: seedPriorities,
@@ -492,7 +545,9 @@ describe('JiraProvider mutations', () => {
       issues: [{ id: '501', key: 'ENG-1', statusId: '20000' }],
       projectKey: 'ENG',
     })
-    // No standard sync routes — the mutation throws before sync(true).
+    // No standard sync/hydrate routes needed: the move resolves against the
+    // seeded cache and throws at transition resolution (no transition reaches the
+    // target status) before any read-after-write hydration runs.
     const transitionsRoute: StubRoute = {
       match: (u, init) =>
         u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'GET',
@@ -652,13 +707,13 @@ describe('JiraProvider mutations', () => {
 
   test('createTask project field omitted is accepted', async () => {
     fullSeed(db)
-    const createdIssues: Record<string, unknown>[] = []
     const createdIssue = makeJiraIssueFixture({
       id: '600',
       key: 'ENG-10',
       statusId: '20000',
       summary: 'x',
     })
+    const issues: Record<string, unknown>[] = [makeJiraIssueFixture(seedIssues[0]!)]
     const syncRoutes = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [
@@ -668,27 +723,12 @@ describe('JiraProvider mutations', () => {
       users: seedUsers,
       priorities: seedPriorities,
       issueTypes: seedIssueTypes,
-      issues: [makeJiraIssueFixture(seedIssues[0]!)],
+      issues,
     })
-    const searchIdx = syncRoutes.findIndex((r) =>
-      r.match('https://example.atlassian.net/rest/api/3/search/jql'),
-    )
-    syncRoutes[searchIdx] = {
-      match: (u) => u.includes('/rest/api/3/search/jql'),
-      handler: () => {
-        const all = [makeJiraIssueFixture(seedIssues[0]!), ...createdIssues]
-        return jsonResponse({
-          startAt: 0,
-          maxResults: 100,
-          total: all.length,
-          issues: all,
-        })
-      },
-    }
     const mutationRoute: StubRoute = {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
       handler: () => {
-        createdIssues.push(createdIssue)
+        issues.push(createdIssue)
         return jsonResponse({ id: '600', key: 'ENG-10', self: 'x' })
       },
     }
@@ -706,13 +746,13 @@ describe('JiraProvider mutations', () => {
 
   test('createTask project field matching configured projectKey is accepted', async () => {
     fullSeed(db)
-    const createdIssues: Record<string, unknown>[] = []
     const createdIssue = makeJiraIssueFixture({
       id: '601',
       key: 'ENG-11',
       statusId: '20000',
       summary: 'x',
     })
+    const issues: Record<string, unknown>[] = [makeJiraIssueFixture(seedIssues[0]!)]
     const syncRoutes = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [
@@ -722,27 +762,12 @@ describe('JiraProvider mutations', () => {
       users: seedUsers,
       priorities: seedPriorities,
       issueTypes: seedIssueTypes,
-      issues: [makeJiraIssueFixture(seedIssues[0]!)],
+      issues,
     })
-    const searchIdx = syncRoutes.findIndex((r) =>
-      r.match('https://example.atlassian.net/rest/api/3/search/jql'),
-    )
-    syncRoutes[searchIdx] = {
-      match: (u) => u.includes('/rest/api/3/search/jql'),
-      handler: () => {
-        const all = [makeJiraIssueFixture(seedIssues[0]!), ...createdIssues]
-        return jsonResponse({
-          startAt: 0,
-          maxResults: 100,
-          total: all.length,
-          issues: all,
-        })
-      },
-    }
     const mutationRoute: StubRoute = {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
       handler: () => {
-        createdIssues.push(createdIssue)
+        issues.push(createdIssue)
         return jsonResponse({ id: '601', key: 'ENG-11', self: 'x' })
       },
     }
