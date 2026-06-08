@@ -1,7 +1,7 @@
 import { KanbanError, ErrorCode } from './errors'
 import type { BoardConfig, CliOutput, Task } from './types'
 import type { CreateTaskInput, UpdateTaskInput, KanbanProvider } from './providers/types'
-import { normalizeLabels } from './labels'
+import * as useCases from './use-cases'
 
 export type WsEvent =
   | { type: 'task:upsert'; task: Task; columnId: string }
@@ -85,28 +85,40 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
   if (path === '/api/bootstrap' && method === 'GET') {
     return {
-      response: await wrapHandler(async () => ({ ok: true, data: await provider.getBootstrap() })),
+      response: await wrapHandler(async () => ({
+        ok: true,
+        data: await useCases.getBootstrap(provider),
+      })),
       mutated: false,
     }
   }
 
   if (path === '/api/provider' && method === 'GET') {
     return {
-      response: await wrapHandler(async () => ({ ok: true, data: await provider.getContext() })),
+      response: await wrapHandler(async () => ({
+        ok: true,
+        data: await useCases.getContext(provider),
+      })),
       mutated: false,
     }
   }
 
   if (path === '/api/board' && method === 'GET') {
     return {
-      response: await wrapHandler(async () => ({ ok: true, data: await provider.getBoard() })),
+      response: await wrapHandler(async () => ({
+        ok: true,
+        data: await useCases.getBoard(provider),
+      })),
       mutated: false,
     }
   }
 
   if (path === '/api/columns' && method === 'GET') {
     return {
-      response: await wrapHandler(async () => ({ ok: true, data: await provider.listColumns() })),
+      response: await wrapHandler(async () => ({
+        ok: true,
+        data: await useCases.listColumns(provider),
+      })),
       mutated: false,
     }
   }
@@ -122,7 +134,14 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
         const limit = parseOptionalInt(url.searchParams.get('limit'))
         return {
           ok: true,
-          data: await provider.listTasks({ column, priority, assignee, project, sort, limit }),
+          data: await useCases.listTasks(provider, {
+            column,
+            priority,
+            assignee,
+            project,
+            sort,
+            limit,
+          }),
         }
       }),
       mutated: false,
@@ -134,14 +153,14 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     if (!body.title) return { response: missingArgument('title'), mutated: false }
     let created: Task | null = null
     const response = await wrapHandler(async () => {
-      created = await provider.createTask({
+      created = await useCases.createTask(provider, {
         title: body.title!,
         description: body.description,
         column: body.column,
         priority: body.priority,
         assignee: body.assignee,
         project: body.project,
-        labels: normalizeLabels(body.labels),
+        labels: body.labels,
         metadata: body.metadata,
       })
       return { ok: true, data: created }
@@ -156,7 +175,10 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
     if (method === 'GET') {
       return {
-        response: await wrapHandler(async () => ({ ok: true, data: await provider.getTask(id) })),
+        response: await wrapHandler(async () => ({
+          ok: true,
+          data: await useCases.getTask(provider, id),
+        })),
         mutated: false,
       }
     }
@@ -165,7 +187,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
       const body = (await req.json()) as UpdateTaskInput
       let updated: Task | null = null
       const response = await wrapHandler(async () => {
-        updated = await provider.updateTask(id, body)
+        updated = await useCases.updateTask(provider, id, body)
         return { ok: true, data: updated }
       })
       const event = response.ok && updated ? upsertEvent(updated) : undefined
@@ -175,7 +197,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     if (method === 'DELETE') {
       const response = await wrapHandler(async () => ({
         ok: true,
-        data: await provider.deleteTask(id),
+        data: await useCases.deleteTask(provider, id),
       }))
       const event: WsEvent | undefined = response.ok ? { type: 'task:delete', id } : undefined
       return { response, mutated: response.ok, event }
@@ -189,7 +211,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     if (!body.column) return { response: missingArgument('column'), mutated: false }
     let moved: Task | null = null
     const response = await wrapHandler(async () => {
-      moved = await provider.moveTask(id, body.column!)
+      moved = await useCases.moveTask(provider, id, body.column!)
       return { ok: true, data: moved }
     })
     const event = response.ok && moved ? upsertEvent(moved) : undefined
@@ -203,7 +225,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
       return {
         response: await wrapHandler(async () => ({
           ok: true,
-          data: await provider.listComments(id),
+          data: await useCases.listComments(provider, id),
         })),
         mutated: false,
       }
@@ -214,7 +236,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
       if (!body.body) return { response: missingArgument('body'), mutated: false }
       const response = await wrapHandler(async () => ({
         ok: true,
-        data: await provider.comment(id, body.body!),
+        data: await useCases.addComment(provider, id, body.body!),
       }))
       return { response, mutated: response.ok }
     }
@@ -230,7 +252,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
       if (!body.body) return { response: missingArgument('body'), mutated: false }
       const response = await wrapHandler(async () => ({
         ok: true,
-        data: await provider.updateComment(id, commentId, body.body!),
+        data: await useCases.updateComment(provider, id, commentId, body.body!),
       }))
       return { response, mutated: response.ok }
     }
@@ -241,7 +263,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
       response: await wrapHandler(async () => {
         const taskId = url.searchParams.get('taskId') ?? undefined
         const limit = parseOptionalInt(url.searchParams.get('limit'))
-        return { ok: true, data: await provider.getActivity(limit, taskId) }
+        return { ok: true, data: await useCases.getActivity(provider, limit, taskId) }
       }),
       mutated: false,
     }
@@ -249,14 +271,20 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
   if (path === '/api/metrics' && method === 'GET') {
     return {
-      response: await wrapHandler(async () => ({ ok: true, data: await provider.getMetrics() })),
+      response: await wrapHandler(async () => ({
+        ok: true,
+        data: await useCases.getMetrics(provider),
+      })),
       mutated: false,
     }
   }
 
   if (path === '/api/config' && method === 'GET') {
     return {
-      response: await wrapHandler(async () => ({ ok: true, data: await provider.getConfig() })),
+      response: await wrapHandler(async () => ({
+        ok: true,
+        data: await useCases.getConfig(provider),
+      })),
       mutated: false,
     }
   }
@@ -265,7 +293,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     const body = (await req.json()) as Partial<BoardConfig>
     const response = await wrapHandler(async () => ({
       ok: true,
-      data: await provider.patchConfig(body),
+      data: await useCases.patchConfig(provider, body),
     }))
     return { response, mutated: response.ok }
   }
