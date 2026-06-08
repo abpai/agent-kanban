@@ -25,6 +25,9 @@ import {
   bulkClearDone,
   resetBoard,
   migrateSchema,
+  addComment,
+  updateComment,
+  listComments,
 } from '../db'
 import { KanbanError } from '../errors'
 
@@ -355,5 +358,41 @@ describe('resetBoard', () => {
     resetBoard(db)
     expect(listColumns(db)).toHaveLength(5)
     expect(listTasks(db)).toHaveLength(0)
+  })
+})
+
+describe('comment atomicity', () => {
+  const countActivity = (taskId: string): number =>
+    (
+      db
+        .query('SELECT COUNT(*) AS count FROM activity_log WHERE task_id = $task_id')
+        .get({ $task_id: taskId }) as { count: number }
+    ).count
+
+  test('addComment writes the comment and its activity entry together', () => {
+    const task = addTask(db, 'Has comments')
+    const before = countActivity(task.id)
+    addComment(db, task.id, 'hello')
+    expect(listComments(db, task.id)).toHaveLength(1)
+    expect(countActivity(task.id)).toBe(before + 1)
+  })
+
+  test('addComment rolls back the comment if the activity write fails', () => {
+    const task = addTask(db, 'Atomic add')
+    // Force the second write (logActivity) to fail mid-transaction.
+    db.run('DROP TABLE activity_log')
+    expect(() => addComment(db, task.id, 'orphan?')).toThrow()
+    // The comment INSERT must not survive the failed transaction.
+    expect(listComments(db, task.id)).toHaveLength(0)
+  })
+
+  test('updateComment rolls back the body change if the activity write fails', () => {
+    const task = addTask(db, 'Atomic update')
+    const comment = addComment(db, task.id, 'original')
+    db.run('DROP TABLE activity_log')
+    expect(() => updateComment(db, task.id, comment.id, 'changed')).toThrow()
+    // The body must remain unchanged after the rolled-back transaction.
+    const [persisted] = listComments(db, task.id)
+    expect(persisted?.body).toBe('original')
   })
 })
