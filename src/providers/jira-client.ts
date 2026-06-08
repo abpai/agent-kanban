@@ -56,6 +56,40 @@ export interface JiraSearchPage {
   issues: JiraIssue[]
 }
 
+export interface JiraPaginationDecision {
+  // When set, advance the scan to this cursor. When absent, the scan is over and
+  // `complete` says whether it ended definitively (safe to prune against the
+  // accumulated issue set) or was cut short (must NOT prune — issues on unfetched
+  // pages would be wrongly deleted).
+  nextToken?: string
+  complete: boolean
+}
+
+// Decide how a `/rest/api/3/search/jql` cursor scan should proceed after a page.
+// The endpoint signals continuation with `isLast`/`nextPageToken`, but real and
+// degraded servers vary, so termination must be conservative about completeness:
+//   - isLast === true                  → definitive end (complete).
+//   - isLast === false, usable cursor  → advance.
+//   - isLast === false, no cursor      → server claims more pages but gave no way
+//                                        to fetch them: incomplete, do not prune.
+//   - isLast absent (legacy/empty)     → advance on a usable cursor; otherwise a
+//                                        full page implies more remain (incomplete),
+//                                        a short/empty page is the end (complete).
+// A cursor already in `seenPageTokens` counts as not usable (a stalled cursor
+// that would otherwise loop forever).
+export function decideJiraPagination(
+  page: Pick<JiraSearchPage, 'isLast' | 'nextPageToken' | 'issues'>,
+  maxResults: number,
+  seenPageTokens: ReadonlySet<string>,
+): JiraPaginationDecision {
+  const token = page.nextPageToken
+  const canAdvance = !!token && page.isLast !== true && !seenPageTokens.has(token)
+  if (canAdvance) return { nextToken: token, complete: false }
+  if (page.isLast === true) return { complete: true }
+  if (page.isLast === false) return { complete: false }
+  return { complete: (page.issues?.length ?? 0) < maxResults }
+}
+
 export interface JiraCreatePayload {
   fields: Record<string, unknown>
 }

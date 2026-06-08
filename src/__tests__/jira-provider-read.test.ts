@@ -527,6 +527,43 @@ describe('JiraProvider read path', () => {
     ).toEqual(['ENG-1', 'ENG-2'])
   })
 
+  test('full reconcile does not prune when the server reports isLast=false but omits a cursor', async () => {
+    // A server can contradict itself: claim more pages (isLast=false) while giving
+    // no nextPageToken. That must be treated as an incomplete scan, not a complete
+    // one, so a partial result never prunes issues that still exist upstream.
+    let degraded = false
+    const searchHandler: StubHandler = () => {
+      if (!degraded) {
+        return jsonResponse({
+          isLast: true,
+          issues: [
+            makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' }),
+            makeIssue({ id: '2', key: 'ENG-2', statusId: '10001' }),
+          ],
+        })
+      }
+      return jsonResponse({
+        isLast: false,
+        issues: [makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' })],
+      })
+    }
+    const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+    const baseNow = originalDateNow()
+
+    Date.now = () => baseNow
+    await provider.getBoard()
+
+    degraded = true
+    Date.now = () => baseNow + 5 * 60_000 + 31_000
+    await provider.getBoard()
+
+    expect(
+      getCachedTasks(db)
+        .map((task) => task.externalRef)
+        .sort(),
+    ).toEqual(['ENG-1', 'ENG-2'])
+  })
+
   test('listTasks filters by columnId with many-to-one mapping', async () => {
     const { provider } = makeProvider(standardRoutes({}))
     // Sync first (populates statuses-based columns)

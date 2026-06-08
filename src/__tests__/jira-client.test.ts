@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { Buffer } from 'node:buffer'
 import { ErrorCode, KanbanError } from '../errors'
-import { JiraClient } from '../providers/jira-client'
+import { JiraClient, decideJiraPagination } from '../providers/jira-client'
+import type { JiraIssue } from '../providers/jira-client'
 
 const origFetch = globalThis.fetch
 let lastRequest: { url: string; init?: RequestInit } | null = null
@@ -165,5 +166,68 @@ describe('JiraClient', () => {
     expect(lastRequest!.init!.method).toBe('POST')
     const sentBody = String(lastRequest!.init!.body)
     expect(sentBody).toContain('"transition":{"id":"11"}')
+  })
+})
+
+describe('decideJiraPagination', () => {
+  const MAX = 100
+  // Only issues.length matters to the decision; build a right-sized stub array.
+  const issuesOfLength = (n: number): JiraIssue[] =>
+    Array.from({ length: n }, () => ({})) as unknown as JiraIssue[]
+
+  test('isLast=false with a fresh cursor advances', () => {
+    const d = decideJiraPagination(
+      { isLast: false, nextPageToken: 'p2', issues: issuesOfLength(MAX) },
+      MAX,
+      new Set(),
+    )
+    expect(d).toEqual({ nextToken: 'p2', complete: false })
+  })
+
+  test('isLast=true is a definitive complete end even if a token is present', () => {
+    const d = decideJiraPagination(
+      { isLast: true, nextPageToken: 'p2', issues: issuesOfLength(MAX) },
+      MAX,
+      new Set(),
+    )
+    expect(d).toEqual({ complete: true })
+  })
+
+  test('isLast=false with no cursor is incomplete (server claims more but gave no way to fetch)', () => {
+    const d = decideJiraPagination({ isLast: false, issues: issuesOfLength(MAX) }, MAX, new Set())
+    expect(d).toEqual({ complete: false })
+  })
+
+  test('isLast=false with a repeated cursor is incomplete (stalled, not a false complete)', () => {
+    const d = decideJiraPagination(
+      { isLast: false, nextPageToken: 'seen', issues: issuesOfLength(MAX) },
+      MAX,
+      new Set(['seen']),
+    )
+    expect(d).toEqual({ complete: false })
+  })
+
+  test('isLast absent: a full page with no cursor implies more pages (incomplete)', () => {
+    const d = decideJiraPagination({ issues: issuesOfLength(MAX) }, MAX, new Set())
+    expect(d).toEqual({ complete: false })
+  })
+
+  test('isLast absent: a short page with no cursor is the end (complete)', () => {
+    const d = decideJiraPagination({ issues: issuesOfLength(MAX - 1) }, MAX, new Set())
+    expect(d).toEqual({ complete: true })
+  })
+
+  test('isLast absent: an empty page is the end (complete)', () => {
+    const d = decideJiraPagination({ issues: [] }, MAX, new Set())
+    expect(d).toEqual({ complete: true })
+  })
+
+  test('isLast absent: a full page with a fresh cursor advances', () => {
+    const d = decideJiraPagination(
+      { nextPageToken: 'p2', issues: issuesOfLength(MAX) },
+      MAX,
+      new Set(),
+    )
+    expect(d).toEqual({ nextToken: 'p2', complete: false })
   })
 })

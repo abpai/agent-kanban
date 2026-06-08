@@ -22,7 +22,13 @@ import {
   type JiraColumnRow,
 } from './jira-cache'
 import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
-import { JiraClient, normalizeJiraLabels, type JiraComment, type JiraIssue } from './jira-client'
+import {
+  JiraClient,
+  decideJiraPagination,
+  normalizeJiraLabels,
+  type JiraComment,
+  type JiraIssue,
+} from './jira-client'
 import type { JiraProviderConfig } from './jira'
 import { providerUpstreamError, unsupportedOperation } from './errors'
 import type {
@@ -753,21 +759,22 @@ export class PostgresJiraProvider implements KanbanProvider {
         })
       }
 
-      const token = page.isLast ? undefined : page.nextPageToken
-      if (!token) {
-        // No continuation cursor (isLast, or the server returned no token): the
-        // scan reached a definitive end and seenIssueIds is the full upstream set.
-        paginationComplete = true
-        break
+      const decision = decideJiraPagination(page, maxResults, seenPageTokens)
+      if (decision.nextToken !== undefined) {
+        seenPageTokens.add(decision.nextToken)
+        nextPageToken = decision.nextToken
+        continue
       }
-      if (seenPageTokens.has(token)) {
-        // The cursor stalled (a repeated token while not last). seenIssueIds is
-        // only a partial scan, so we must not treat it as authoritative below.
-        console.warn(`[jira] search/jql cursor stalled on a repeated token; scan incomplete`)
-        break
+      paginationComplete = decision.complete
+      if (!paginationComplete) {
+        // The server stopped advancing the cursor before reporting a definitive
+        // end (stalled/contradictory). seenIssueIds is only a partial scan, so we
+        // must not treat it as authoritative for pruning below.
+        console.warn(
+          `[jira] search/jql scan ended without a definitive last page; treating as incomplete`,
+        )
       }
-      seenPageTokens.add(token)
-      nextPageToken = token
+      break
     }
 
     // Only prune against seenIssueIds and advance lastFullSyncAt when the scan
