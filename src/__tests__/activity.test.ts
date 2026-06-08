@@ -90,6 +90,18 @@ describe('activity logging', () => {
     expect(moves).toHaveLength(2)
   })
 
+  test('bulkMoveAll to the same column does not add moved activity or tracking rows', () => {
+    const task = addTask(db, 'A', { column: 'recurring' })
+
+    bulkMoveAll(db, 'recurring', 'recurring')
+
+    const activities = listActivity(db)
+    expect(activities.filter((a) => a.action === 'moved')).toHaveLength(0)
+    const entries = getColumnTimeEntries(task.id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.exited_at).toBeNull()
+  })
+
   test('bulkClearDone logs deleted activity for each task', () => {
     addTask(db, 'Done A', { column: 'done' })
     addTask(db, 'Done B', { column: 'done' })

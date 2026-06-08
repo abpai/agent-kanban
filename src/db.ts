@@ -673,6 +673,7 @@ export function bulkMoveAll(
 ): { moved: number } {
   const fromCol = resolveColumn(db, fromIdOrName)
   const toCol = resolveColumn(db, toIdOrName)
+  if (fromCol.id === toCol.id) return { moved: 0 }
 
   const maxPos = db
     .query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
@@ -712,11 +713,13 @@ export function bulkClearDone(db: Database): { deleted: number } {
   const tasks = db
     .query('SELECT id, title FROM tasks WHERE column_id = $col')
     .all({ $col: doneCol.id }) as { id: string; title: string }[]
-  for (const task of tasks) {
-    exitColumn(db, task.id, doneCol.id)
-    logActivity(db, task.id, 'deleted', { old_value: task.title })
-  }
-  db.query('DELETE FROM tasks WHERE column_id = $col').run({ $col: doneCol.id })
+  db.transaction(() => {
+    for (const task of tasks) {
+      exitColumn(db, task.id, doneCol.id)
+      logActivity(db, task.id, 'deleted', { old_value: task.title })
+    }
+    db.query('DELETE FROM tasks WHERE column_id = $col').run({ $col: doneCol.id })
+  })()
   return { deleted: tasks.length }
 }
 

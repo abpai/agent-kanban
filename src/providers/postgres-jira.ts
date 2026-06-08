@@ -443,34 +443,38 @@ export class PostgresJiraProvider implements KanbanProvider {
       updatedAt: string
     }>,
   ): Promise<void> {
-    for (const issue of issues) {
-      await this.sql`
-        INSERT INTO jira_issues (
-          id, key, summary, description_text, status_id, priority_name, issue_type_name,
-          assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
-        ) VALUES (
-          ${issue.id}, ${issue.key}, ${issue.summary}, ${issue.descriptionText}, ${issue.statusId},
-          ${issue.priorityName ?? ''}, ${issue.issueTypeName ?? ''}, ${issue.assigneeAccountId ?? null},
-          ${issue.assigneeName ?? ''}, ${JSON.stringify(issue.labels ?? [])}, ${issue.commentCount ?? 0},
-          ${issue.projectKey}, ${issue.url ?? null}, ${issue.createdAt}, ${issue.updatedAt}
-        )
-        ON CONFLICT(id) DO UPDATE SET
-          key = EXCLUDED.key,
-          summary = EXCLUDED.summary,
-          description_text = EXCLUDED.description_text,
-          status_id = EXCLUDED.status_id,
-          priority_name = EXCLUDED.priority_name,
-          issue_type_name = EXCLUDED.issue_type_name,
-          assignee_account_id = EXCLUDED.assignee_account_id,
-          assignee_name = EXCLUDED.assignee_name,
-          labels = EXCLUDED.labels,
-          comment_count = EXCLUDED.comment_count,
-          project_key = EXCLUDED.project_key,
-          url = EXCLUDED.url,
-          created_at = EXCLUDED.created_at,
-          updated_at = EXCLUDED.updated_at
-      `
-    }
+    if (issues.length === 0) return
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
+      for (const issue of issues) {
+        await tx`
+          INSERT INTO jira_issues (
+            id, key, summary, description_text, status_id, priority_name, issue_type_name,
+            assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
+          ) VALUES (
+            ${issue.id}, ${issue.key}, ${issue.summary}, ${issue.descriptionText}, ${issue.statusId},
+            ${issue.priorityName ?? ''}, ${issue.issueTypeName ?? ''}, ${issue.assigneeAccountId ?? null},
+            ${issue.assigneeName ?? ''}, ${JSON.stringify(issue.labels ?? [])}, ${issue.commentCount ?? 0},
+            ${issue.projectKey}, ${issue.url ?? null}, ${issue.createdAt}, ${issue.updatedAt}
+          )
+          ON CONFLICT(id) DO UPDATE SET
+            key = EXCLUDED.key,
+            summary = EXCLUDED.summary,
+            description_text = EXCLUDED.description_text,
+            status_id = EXCLUDED.status_id,
+            priority_name = EXCLUDED.priority_name,
+            issue_type_name = EXCLUDED.issue_type_name,
+            assignee_account_id = EXCLUDED.assignee_account_id,
+            assignee_name = EXCLUDED.assignee_name,
+            labels = EXCLUDED.labels,
+            comment_count = EXCLUDED.comment_count,
+            project_key = EXCLUDED.project_key,
+            url = EXCLUDED.url,
+            created_at = EXCLUDED.created_at,
+            updated_at = EXCLUDED.updated_at
+        `
+      }
+    })
   }
 
   private async deleteIssue(idOrKey: string): Promise<void> {

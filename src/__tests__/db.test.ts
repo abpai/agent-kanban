@@ -308,6 +308,16 @@ describe('bulk operations', () => {
     expect(listTasks(db, { column: 'recurring' })).toHaveLength(0)
   })
 
+  test('bulkMoveAll to the same column is a no-op', () => {
+    const a = addTask(db, 'A', { column: 'recurring' })
+    const b = addTask(db, 'B', { column: 'recurring' })
+
+    const result = bulkMoveAll(db, 'recurring', 'recurring')
+
+    expect(result.moved).toBe(0)
+    expect(listTasks(db, { column: 'recurring' }).map((task) => task.id)).toEqual([a.id, b.id])
+  })
+
   test('bulkClearDone removes tasks in done column', () => {
     addTask(db, 'Finished', { column: 'done' })
     addTask(db, 'Also done', { column: 'done' })
