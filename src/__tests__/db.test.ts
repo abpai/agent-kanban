@@ -79,6 +79,27 @@ describe('schema', () => {
     expect(listColumns(db)).toHaveLength(5)
   })
 
+  test('seedDefaultColumns honors provided column names (KANBAN_DEFAULT_COLUMNS)', () => {
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    seedDefaultColumns(fresh, ['Todo', 'In Progress', 'Done'])
+    const cols = listColumns(fresh)
+    expect(cols.map((c) => c.name)).toEqual(['Todo', 'In Progress', 'Done'])
+    expect(cols.map((c) => c.position)).toEqual([0, 1, 2])
+  })
+
+  test('seedDefaultColumns falls back to defaults for an empty list', () => {
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    seedDefaultColumns(fresh, [])
+    expect(listColumns(fresh)).toHaveLength(5)
+  })
+
+  test('resetBoard reseeds with provided column names', () => {
+    resetBoard(db, ['Alpha', 'Beta'])
+    expect(listColumns(db).map((c) => c.name)).toEqual(['Alpha', 'Beta'])
+  })
+
   test('migrateSchema adds project and labels columns to legacy tasks table', () => {
     const legacy = new Database(':memory:')
     legacy.run(

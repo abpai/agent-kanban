@@ -28,6 +28,6 @@ export function createProvider(
   }
 
   initSchema(db)
-  seedDefaultColumns(db)
+  seedDefaultColumns(db, config.defaultColumns)
   return new LocalProvider(db, dbPath)
 }
