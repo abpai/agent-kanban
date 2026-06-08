@@ -146,6 +146,16 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
       },
     },
     {
+      // GET /rest/api/3/issue/{key} backs hydrateIssueByKey's read-after-write.
+      match: (url) => /\/rest\/api\/3\/issue\/ENG-\d+$/.test(new URL(url).pathname),
+      handler: (url) => {
+        const issueKey = new URL(url).pathname.match(/\/issue\/(ENG-\d+)$/)![1]!
+        const issue = issues.find((candidate) => String(candidate.key) === issueKey)
+        if (!issue) return jsonResponse({ errorMessages: ['missing'] }, 404)
+        return jsonResponse(issue)
+      },
+    },
+    {
       match: (url) => /\/rest\/api\/3\/issue\/ENG-\d+\/comment$/.test(new URL(url).pathname),
       handler: async (url, init) => {
         const issueKey = new URL(url).pathname.match(/\/issue\/(ENG-\d+)\/comment/)![1]!

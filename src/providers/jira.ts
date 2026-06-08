@@ -181,10 +181,7 @@ export class JiraProvider implements KanbanProvider {
     const sinceClause = since ?? '1970-01-01 00:00'
     const jql = `project = ${project.key} AND updated >= "${sinceClause}" ORDER BY updated ASC`
 
-    let startAt = 0
     const maxResults = 100
-    let accumulated = 0
-    let total = Infinity
     let newestUpdatedAt: string | null = meta.lastIssueUpdatedAt
     const seenIssueIds = new Set<string>()
     const issueFields = [
@@ -200,11 +197,22 @@ export class JiraProvider implements KanbanProvider {
       'updated',
       'project',
     ]
-    // Terminates when accumulated reaches total, or when the server returns
-    // an empty page (defensive against buggy servers not advancing startAt).
-    while (accumulated < total) {
-      const page = await this.client.listIssues({ jql, startAt, maxResults, fields: issueFields })
-      total = page.total
+    // /rest/api/3/search/jql paginates by an opaque nextPageToken and omits
+    // `total`, so we follow the cursor until `isLast`. The previous total/startAt
+    // loop fetched only the first page (oldest 100 by updated ASC) once `total`
+    // came back undefined, so every issue beyond the first page — including
+    // newly-created tickets on a project with >100 issues — was never cached.
+    let nextPageToken: string | undefined
+    let firstPage = true
+    while (firstPage || nextPageToken) {
+      firstPage = false
+      const page = await this.client.listIssues({
+        jql,
+        startAt: 0,
+        maxResults,
+        fields: issueFields,
+        nextPageToken,
+      })
       if (page.issues.length === 0) break
 
       upsertJiraIssues(
@@ -249,8 +257,7 @@ export class JiraProvider implements KanbanProvider {
         })
       }
 
-      accumulated += page.issues.length
-      startAt += page.issues.length
+      nextPageToken = page.isLast ? undefined : page.nextPageToken
     }
 
     if (fullReconcile) {

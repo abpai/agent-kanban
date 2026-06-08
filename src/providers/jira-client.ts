@@ -45,9 +45,14 @@ export interface JiraIssue {
 }
 
 export interface JiraSearchPage {
-  startAt: number
-  maxResults: number
-  total: number
+  // The legacy /rest/api/3/search endpoint returned startAt/maxResults/total.
+  // The current /rest/api/3/search/jql endpoint omits `total` and paginates by
+  // an opaque `nextPageToken` (with `isLast`), so these are optional now.
+  startAt?: number
+  maxResults?: number
+  total?: number
+  nextPageToken?: string
+  isLast?: boolean
   issues: JiraIssue[]
 }
 
@@ -254,12 +259,17 @@ export class JiraClient {
     startAt: number
     maxResults: number
     fields?: string[]
+    nextPageToken?: string
   }): Promise<JiraSearchPage> {
     const query: QueryParams = {
       jql: params.jql,
-      startAt: params.startAt,
       maxResults: params.maxResults,
     }
+    // /rest/api/3/search/jql ignores startAt and paginates by nextPageToken.
+    // Send the cursor when we have one; only send startAt on the first page for
+    // back-compat with the legacy endpoint.
+    if (params.nextPageToken) query.nextPageToken = params.nextPageToken
+    else query.startAt = params.startAt
     if (params.fields && params.fields.length > 0) {
       query.fields = params.fields.join(',')
     }

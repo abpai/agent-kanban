@@ -331,6 +331,43 @@ describe('JiraProvider read path', () => {
     )
   })
 
+  test('sync follows the nextPageToken cursor across pages when total is omitted', async () => {
+    // /rest/api/3/search/jql omits `total` and paginates by an opaque
+    // nextPageToken. The previous offset/total loop stopped after page 1 once
+    // `total` came back undefined, so every issue beyond the first 100 (by
+    // updated ASC) — including newly-created tickets — was silently dropped.
+    const requestedTokens: Array<string | null> = []
+    const searchHandler: StubHandler = (url) => {
+      const token = new URL(url).searchParams.get('nextPageToken')
+      requestedTokens.push(token)
+      if (token === null) {
+        return jsonResponse({
+          nextPageToken: 'page-2',
+          isLast: false,
+          issues: [makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' })],
+        })
+      }
+      if (token === 'page-2') {
+        return jsonResponse({
+          isLast: true,
+          issues: [makeIssue({ id: '2', key: 'ENG-2', statusId: '10002' })],
+        })
+      }
+      return jsonResponse({ isLast: true, issues: [] })
+    }
+    const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+    await provider.getBoard()
+
+    // Both pages land in the cache, not just page 1.
+    expect(
+      getCachedTasks(db)
+        .map((task) => task.externalRef)
+        .sort(),
+    ).toEqual(['ENG-1', 'ENG-2'])
+    // Page 1 sends no cursor; page 2 follows the returned token; then it stops.
+    expect(requestedTokens).toEqual([null, 'page-2'])
+  })
+
   test('periodic full reconciliation prunes cached issues missing upstream', async () => {
     const capturedJql: string[] = []
     let searchCalls = 0
@@ -628,7 +665,7 @@ describe('JiraProvider read path', () => {
   })
 
   test('sync paginates listIssues across multiple pages', async () => {
-    const searchCalls: Array<{ startAt: number }> = []
+    const searchCalls: Array<{ token: string | null }> = []
     const page1Issues = Array.from({ length: 100 }, (_, i) =>
       makeIssue({
         id: String(i + 1),
@@ -645,38 +682,31 @@ describe('JiraProvider read path', () => {
         updated: '2026-01-02T00:00:00Z',
       }),
     )
+    // /rest/api/3/search/jql paginates by an opaque nextPageToken (no `total`);
+    // the loop follows the cursor until `isLast`.
     const searchHandler: StubHandler = (url) => {
-      const parsed = new URL(url)
-      const startAt = Number(parsed.searchParams.get('startAt') ?? '0')
-      searchCalls.push({ startAt })
-      if (startAt === 0) {
+      const token = new URL(url).searchParams.get('nextPageToken')
+      searchCalls.push({ token })
+      if (token === null) {
         return jsonResponse({
-          startAt: 0,
-          maxResults: 100,
-          total: 150,
+          nextPageToken: 'page-2',
+          isLast: false,
           issues: page1Issues,
         })
       }
-      if (startAt === 100) {
+      if (token === 'page-2') {
         return jsonResponse({
-          startAt: 100,
-          maxResults: 100,
-          total: 150,
+          isLast: true,
           issues: page2Issues,
         })
       }
-      return jsonResponse({
-        startAt,
-        maxResults: 100,
-        total: 150,
-        issues: [],
-      })
+      return jsonResponse({ isLast: true, issues: [] })
     }
     const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
     await provider.getBoard()
     expect(searchCalls).toHaveLength(2)
-    expect(searchCalls[0]!.startAt).toBe(0)
-    expect(searchCalls[1]!.startAt).toBe(100)
+    expect(searchCalls[0]!.token).toBeNull()
+    expect(searchCalls[1]!.token).toBe('page-2')
     expect(getCachedTasks(db)).toHaveLength(150)
   })
 
