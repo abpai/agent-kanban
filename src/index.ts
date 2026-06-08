@@ -297,21 +297,22 @@ async function routeBoard(
   db: Database,
   provider: KanbanProvider,
   action: string | undefined,
+  columnNames?: string[],
 ): Promise<CliOutput> {
   switch (action) {
     case 'init':
       requireLocalProvider(provider.type, 'Board initialization')
-      return boardInit(db)
+      return boardInit(db, columnNames)
     case 'view':
     case undefined:
       if (provider.type === 'local') {
         initSchema(db)
-        seedDefaultColumns(db)
+        seedDefaultColumns(db, columnNames)
       }
       return success(await provider.getBoard())
     case 'reset':
       requireLocalProvider(provider.type, 'Board reset')
-      return boardReset(db)
+      return boardReset(db, columnNames)
     default:
       throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown board command '${action}'`)
   }
@@ -328,12 +329,18 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
   })
 
   try {
-    const { provider, sqliteDb, dbPath } = runtime
+    const { provider, sqliteDb, dbPath, trackerConfig } = runtime
     const group = positionals[0]
     const action = positionals[1]
+    const defaultColumns =
+      trackerConfig.provider === 'local' ? trackerConfig.defaultColumns : undefined
 
     if (!group) {
-      if (sqliteDb) return { output: await routeBoard(sqliteDb, provider, undefined), exitCode: 0 }
+      if (sqliteDb)
+        return {
+          output: await routeBoard(sqliteDb, provider, undefined, defaultColumns),
+          exitCode: 0,
+        }
       return { output: success(await provider.getBoard()), exitCode: 0 }
     }
 
@@ -341,7 +348,7 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
     switch (group) {
       case 'board':
         if (sqliteDb) {
-          output = await routeBoard(sqliteDb, provider, action)
+          output = await routeBoard(sqliteDb, provider, action, defaultColumns)
         } else {
           if (action === 'view' || action === undefined) output = success(await provider.getBoard())
           else unsupportedOperation(`board ${action} is not available with KANBAN_STORAGE=postgres`)

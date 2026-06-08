@@ -137,13 +137,19 @@ export function migrateSchema(db: Database): void {
   db.run('CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project)')
 }
 
-export function seedDefaultColumns(db: Database): void {
+export function seedDefaultColumns(db: Database, columnNames?: string[]): void {
   const existing = db.query('SELECT COUNT(*) as count FROM columns').get() as {
     count: number
   }
   if (existing.count > 0) return
+  // Honor KANBAN_DEFAULT_COLUMNS (passed through as columnNames) when provided,
+  // matching the Postgres local provider; otherwise fall back to the built-in set.
+  const columns =
+    columnNames && columnNames.length > 0
+      ? columnNames.map((name, position) => ({ name, position }))
+      : DEFAULT_COLUMNS
   const stmt = db.prepare('INSERT INTO columns (id, name, position) VALUES ($id, $name, $position)')
-  for (const col of DEFAULT_COLUMNS) {
+  for (const col of columns) {
     stmt.run({ $id: generateId('c'), $name: col.name, $position: col.position })
   }
 }
@@ -723,12 +729,12 @@ export function bulkClearDone(db: Database): { deleted: number } {
   return { deleted: tasks.length }
 }
 
-export function resetBoard(db: Database): void {
+export function resetBoard(db: Database, columnNames?: string[]): void {
   db.run('DROP TABLE IF EXISTS comments')
   db.run('DROP TABLE IF EXISTS column_time_tracking')
   db.run('DROP TABLE IF EXISTS activity_log')
   db.run('DROP TABLE IF EXISTS tasks')
   db.run('DROP TABLE IF EXISTS columns')
   initSchema(db)
-  seedDefaultColumns(db)
+  seedDefaultColumns(db, columnNames)
 }
