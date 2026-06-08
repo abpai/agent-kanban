@@ -534,26 +534,43 @@ if (import.meta.main) {
         : {}),
     })
     const { startServer } = await import('./server')
-    startServer(runtime.provider, opts.port, {
+    const server = startServer(runtime.provider, opts.port, {
       syncIntervalMs: runtime.syncIntervalMs,
       ...(opts.authToken ? { authToken: opts.authToken } : {}),
       ...(opts.allowedOrigin ? { allowedOrigin: opts.allowedOrigin } : {}),
     })
 
+    let tunnelHandle: { stop: () => void } | null = null
     if (opts.tunnel) {
       const { startCloudflareTunnel } = await import('./tunnel')
       try {
-        const handle = startCloudflareTunnel(opts.port)
-        const shutdown = (): void => {
-          handle.stop()
-          process.exit(0)
-        }
-        process.on('SIGINT', shutdown)
-        process.on('SIGTERM', shutdown)
+        tunnelHandle = startCloudflareTunnel(opts.port)
       } catch {
         // startCloudflareTunnel already logged a friendly message
       }
     }
+
+    // Shut down gracefully on signals regardless of tunnel mode: stop the tunnel
+    // and server (which clears the background-sync timer), then close the runtime
+    // so the Postgres pool / SQLite handle is released.
+    let shuttingDown = false
+    const shutdown = async (): Promise<void> => {
+      if (shuttingDown) return
+      shuttingDown = true
+      // try/finally so a cleanup failure (e.g. runtime.close() rejecting) still
+      // exits the process instead of leaving an unhandled rejection and a hang.
+      try {
+        tunnelHandle?.stop()
+        server.stop()
+        await runtime.close()
+      } catch (err) {
+        console.error('Error during shutdown:', err instanceof Error ? err.message : err)
+      } finally {
+        process.exit(0)
+      }
+    }
+    process.on('SIGINT', () => void shutdown())
+    process.on('SIGTERM', () => void shutdown())
   } else {
     let exitCode = 0
     const pretty = argv.includes('--pretty')
