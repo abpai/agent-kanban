@@ -411,4 +411,83 @@ describe('postgres jira provider', () => {
       column_id: '20',
     })
   })
+
+  pgTest('delta sync refreshes catalogs and removes obsolete priorities', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    const prioritiesState = {
+      list: [
+        { id: '2', name: 'High' },
+        { id: '3', name: 'Medium' },
+      ] as Array<{ id: string; name: string }>,
+    }
+    const routes = standardRoutes()
+    const pIdx = routes.findIndex((route) =>
+      route.match('https://example.atlassian.net/rest/api/3/priority'),
+    )
+    routes[pIdx] = {
+      match: (url) => url.includes('/rest/api/3/priority'),
+      handler: () => jsonResponse(prioritiesState.list),
+    }
+    globalThis.fetch = jiraFetchStub(routes).fn
+    // pollingSyncIntervalMs: 0 lets the second getBoard run; it is a delta sync
+    // because the full-reconcile interval has not elapsed since the first.
+    const provider = new PostgresJiraProvider(sql, {
+      baseUrl: 'https://example.atlassian.net',
+      email: 'user@example.com',
+      apiToken: 'token',
+      projectKey: 'ENG',
+      boardId: 1006,
+      pollingSyncIntervalMs: 0,
+    })
+
+    await provider.getBoard()
+    const afterFull = (
+      await sql<{ name: string }[]>`SELECT name FROM jira_priorities ORDER BY name`
+    ).map((row) => row.name)
+    expect(afterFull).toEqual(['High', 'Medium'])
+
+    // Drop Medium, add Low upstream; a delta sync must still pick this up.
+    prioritiesState.list = [
+      { id: '2', name: 'High' },
+      { id: '4', name: 'Low' },
+    ]
+    await provider.getBoard()
+    const afterDelta = (
+      await sql<{ name: string }[]>`SELECT name FROM jira_priorities ORDER BY name`
+    ).map((row) => row.name)
+    expect(afterDelta).toEqual(['High', 'Low'])
+  })
+
+  pgTest('concurrent catalog refreshes do not collide on a primary key', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    globalThis.fetch = jiraFetchStub(standardRoutes()).fn
+    const sql2 = postgres(databaseUrl as string, { max: 1, onnotice: () => {} })
+    try {
+      const config = {
+        baseUrl: 'https://example.atlassian.net',
+        email: 'user@example.com',
+        apiToken: 'token',
+        projectKey: 'ENG',
+        boardId: 1006,
+        pollingSyncIntervalMs: 0,
+      }
+      // Initialize schema sequentially first; concurrent CREATE TABLE IF NOT
+      // EXISTS races at the DDL level (a pre-existing Postgres quirk unrelated to
+      // catalog refresh). The race under test is the catalog DML below.
+      const p1 = new PostgresJiraProvider(sql, config)
+      await p1.initialize()
+      const p2 = new PostgresJiraProvider(sql2, config)
+      await p2.initialize()
+      // Two replicas on separate connections refreshing the same shared cache
+      // concurrently must not trip a primary-key collision; UPSERT +
+      // obsolete-delete is idempotent.
+      await Promise.all([p1.getBoard(), p2.getBoard()])
+      const rows = await sql<
+        { count: number }[]
+      >`SELECT COUNT(*)::int AS count FROM jira_priorities`
+      expect(rows[0]?.count ?? 0).toBeGreaterThan(0)
+    } finally {
+      await sql2.end({ timeout: 1 })
+    }
+  })
 })

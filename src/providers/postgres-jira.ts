@@ -331,6 +331,12 @@ export class PostgresJiraProvider implements KanbanProvider {
     }
   }
 
+  // Catalog refreshes (columns, priorities, issue types) UPSERT the current rows
+  // and then delete only rows whose id is no longer upstream. Unlike DELETE-all +
+  // INSERT, this never collides on the primary key when multiple Dispatch
+  // replicas refresh the same catalog concurrently — UPSERT serializes per row
+  // and the obsolete DELETE is idempotent — so the refresh is safe to run on
+  // every sync rather than only on a full reconcile.
   private async replaceColumns(
     columns: Array<{
       id: string
@@ -340,21 +346,24 @@ export class PostgresJiraProvider implements KanbanProvider {
       source: 'board' | 'status'
     }>,
   ): Promise<void> {
-    await this.sql.begin(async (tx) => {
-      await tx`DELETE FROM jira_columns`
-      for (const column of columns) {
-        await tx`
-          INSERT INTO jira_columns (id, name, position, status_ids, source)
-          VALUES (
-            ${column.id},
-            ${column.name},
-            ${column.position},
-            ${JSON.stringify(column.statusIds)},
-            ${column.source}
-          )
-        `
-      }
-    })
+    for (const column of columns) {
+      await this.sql`
+        INSERT INTO jira_columns (id, name, position, status_ids, source)
+        VALUES (
+          ${column.id},
+          ${column.name},
+          ${column.position},
+          ${JSON.stringify(column.statusIds)},
+          ${column.source}
+        )
+        ON CONFLICT(id) DO UPDATE SET
+          name = EXCLUDED.name,
+          position = EXCLUDED.position,
+          status_ids = EXCLUDED.status_ids,
+          source = EXCLUDED.source
+      `
+    }
+    await this.sql`DELETE FROM jira_columns WHERE NOT (id = ANY(${columns.map((c) => c.id)}))`
   }
 
   private async upsertUsers(
@@ -373,27 +382,25 @@ export class PostgresJiraProvider implements KanbanProvider {
   }
 
   private async replacePriorities(priorities: Array<{ id: string; name: string }>): Promise<void> {
-    await this.sql.begin(async (tx) => {
-      await tx`DELETE FROM jira_priorities`
-      for (const priority of priorities) {
-        await tx`
-          INSERT INTO jira_priorities (id, name)
-          VALUES (${priority.id}, ${priority.name})
-        `
-      }
-    })
+    for (const priority of priorities) {
+      await this.sql`
+        INSERT INTO jira_priorities (id, name)
+        VALUES (${priority.id}, ${priority.name})
+        ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
+      `
+    }
+    await this.sql`DELETE FROM jira_priorities WHERE NOT (id = ANY(${priorities.map((p) => p.id)}))`
   }
 
   private async replaceIssueTypes(types: Array<{ id: string; name: string }>): Promise<void> {
-    await this.sql.begin(async (tx) => {
-      await tx`DELETE FROM jira_issue_types`
-      for (const type of types) {
-        await tx`
-          INSERT INTO jira_issue_types (id, name)
-          VALUES (${type.id}, ${type.name})
-        `
-      }
-    })
+    for (const type of types) {
+      await this.sql`
+        INSERT INTO jira_issue_types (id, name)
+        VALUES (${type.id}, ${type.name})
+        ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
+      `
+    }
+    await this.sql`DELETE FROM jira_issue_types WHERE NOT (id = ANY(${types.map((t) => t.id)}))`
   }
 
   private async upsertIssues(
@@ -619,67 +626,59 @@ export class PostgresJiraProvider implements KanbanProvider {
     const project = await this.client.getProject(this.config.projectKey)
     await this.saveTeamInfo({ id: project.id, key: project.key, name: project.name })
 
-    // Columns + catalogs (users/priorities/issue types) change rarely and use
-    // DELETE+INSERT, which races when multiple Dispatch replicas poll the same
-    // shared Postgres cache concurrently and trips e.g. jira_priorities_pkey.
-    // Refresh them only on a full reconcile (which the poll loop runs every
-    // FULL_RECONCILE_INTERVAL_MS); delta syncs reuse the cached catalogs.
-    // Trade-off: a Jira status/column created since the last full reconcile is
-    // unmapped — and issues in it absent from the board projection — until the
-    // next full reconcile (bounded by that interval). Acceptable because new
-    // statuses are rare admin actions and transitions between existing columns,
-    // the hot path, are unaffected. The single-process SQLite provider has no
-    // such concurrency and so refreshes catalogs on every sync instead.
-    if (fullReconcile) {
-      if (this.config.boardId !== undefined) {
-        const boardCfg = await this.client.getBoardColumns(this.config.boardId)
-        const boardId = this.config.boardId
-        await this.replaceColumns(jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns))
-      } else {
-        const statusCats = await this.client.getProjectStatuses(project.key)
-        const seen = new Set<string>()
-        const uniqueStatuses: Array<{ id: string; name: string }> = []
-        for (const category of statusCats) {
-          for (const status of category.statuses) {
-            if (seen.has(status.id)) continue
-            seen.add(status.id)
-            uniqueStatuses.push({ id: status.id, name: status.name })
-          }
+    // Columns + catalogs (users/priorities/issue types) refresh on every sync.
+    // The writes are race-safe (UPSERT + obsolete-row DELETE, see replaceColumns),
+    // so concurrent replica refreshes can't collide on a primary key, and a
+    // newly-created Jira status/column/priority/user is reflected on the next
+    // sync rather than only on a full reconcile.
+    if (this.config.boardId !== undefined) {
+      const boardCfg = await this.client.getBoardColumns(this.config.boardId)
+      const boardId = this.config.boardId
+      await this.replaceColumns(jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns))
+    } else {
+      const statusCats = await this.client.getProjectStatuses(project.key)
+      const seen = new Set<string>()
+      const uniqueStatuses: Array<{ id: string; name: string }> = []
+      for (const category of statusCats) {
+        for (const status of category.statuses) {
+          if (seen.has(status.id)) continue
+          seen.add(status.id)
+          uniqueStatuses.push({ id: status.id, name: status.name })
         }
-        await this.replaceColumns(
-          uniqueStatuses.map((status, index) => ({
-            id: `status:${status.id}`,
-            name: status.name,
-            position: index,
-            statusIds: [status.id],
-            source: 'status' as const,
-          })),
-        )
       }
-
-      const [users, priorities, issueTypes] = await Promise.all([
-        this.client.listAssignableUsers({
-          projectKey: project.key,
-          startAt: 0,
-          maxResults: 100,
-        }),
-        this.client.listPriorities(),
-        this.client.listIssueTypes({ projectId: project.id }),
-      ])
-      await this.upsertUsers(
-        users.map((user) => ({
-          accountId: user.accountId,
-          displayName: user.displayName,
-          active: user.active ?? true,
+      await this.replaceColumns(
+        uniqueStatuses.map((status, index) => ({
+          id: `status:${status.id}`,
+          name: status.name,
+          position: index,
+          statusIds: [status.id],
+          source: 'status' as const,
         })),
       )
-      await this.replacePriorities(
-        priorities.map((priority) => ({ id: priority.id, name: priority.name })),
-      )
-      await this.replaceIssueTypes(
-        issueTypes.map((issueType) => ({ id: issueType.id, name: issueType.name })),
-      )
     }
+
+    const [users, priorities, issueTypes] = await Promise.all([
+      this.client.listAssignableUsers({
+        projectKey: project.key,
+        startAt: 0,
+        maxResults: 100,
+      }),
+      this.client.listPriorities(),
+      this.client.listIssueTypes({ projectId: project.id }),
+    ])
+    await this.upsertUsers(
+      users.map((user) => ({
+        accountId: user.accountId,
+        displayName: user.displayName,
+        active: user.active ?? true,
+      })),
+    )
+    await this.replacePriorities(
+      priorities.map((priority) => ({ id: priority.id, name: priority.name })),
+    )
+    await this.replaceIssueTypes(
+      issueTypes.map((issueType) => ({ id: issueType.id, name: issueType.name })),
+    )
 
     const since = fullReconcile ? null : meta.lastIssueUpdatedAt
     const sinceClause = since ?? '1970-01-01 00:00'

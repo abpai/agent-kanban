@@ -27,13 +27,16 @@
   waiting for the next unthrottled sync.
 - A forced sync (`sync(true)`) no longer triggers a full 1970-based reconcile in
   either provider. `force` still bypasses the poll throttle so a write sees its
-  own result, but the expensive whole-project re-fetch (plus a per-issue
+  own result, but the expensive whole-project issue re-fetch (plus a per-issue
   changelog call) now runs only on the periodic full-reconcile schedule.
-  Additionally, on the Postgres provider, column and catalog
-  (users/priorities/issue types) refreshes — which use racy `DELETE`+`INSERT` —
-  are gated to full reconciles to avoid primary-key collisions when multiple
-  replicas poll the shared cache concurrently; the single-process SQLite provider
-  has no such race and refreshes catalogs every sync.
+- The Postgres provider's column/catalog (users, priorities, issue types)
+  refreshes are now race-safe: each is an `INSERT ... ON CONFLICT DO UPDATE`
+  followed by a delete of only the rows whose id is no longer upstream, replacing
+  the previous `DELETE`+`INSERT` that could trip `jira_priorities_pkey` (and
+  peers) when multiple replicas refresh the shared cache concurrently. Because
+  the writes are idempotent they run on every sync again, so a newly-created Jira
+  status, column, priority, or assignable user is reflected on the next sync
+  rather than only on a full reconcile.
 
 ## 0.5.1 - 2026-05-30
 
