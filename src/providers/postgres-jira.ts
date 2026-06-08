@@ -30,6 +30,7 @@ import {
   type JiraIssue,
 } from './jira-client'
 import type { JiraProviderConfig } from './jira'
+import { buildDeltaJql, safeDeltaSince } from './jira-jql'
 import { providerUpstreamError, unsupportedOperation } from './errors'
 import type {
   CreateTaskInput,
@@ -715,11 +716,13 @@ export class PostgresJiraProvider implements KanbanProvider {
       fullReconcile,
     )
 
-    const since = fullReconcile ? null : meta.lastIssueUpdatedAt
-    const sinceClause = since ?? '1970-01-01 00:00'
-    const jql = `project = ${project.key} AND updated >= "${sinceClause}" ORDER BY updated ASC`
+    // Sanitize the stored cursor once: an unsafe value is treated as absent so it
+    // is never carried into the JQL or re-persisted as `newestUpdatedAt`.
+    const storedSince = safeDeltaSince(meta.lastIssueUpdatedAt)
+    const since = fullReconcile ? null : storedSince
+    const jql = buildDeltaJql(project.key, since)
     const maxResults = 100
-    let newestUpdatedAt: string | null = meta.lastIssueUpdatedAt
+    let newestUpdatedAt: string | null = storedSince
     const seenIssueIds = new Set<string>()
     const issueFields = [
       'summary',
