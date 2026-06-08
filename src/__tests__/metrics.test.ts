@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns, addTask } from '../db'
+import { initSchema, seedDefaultColumns, addTask, addColumn, moveTask } from '../db'
 import { getBoardMetrics } from '../metrics'
 
 let db: Database
@@ -60,5 +60,41 @@ describe('getBoardMetrics', () => {
     expect(metrics.completedTasks).toBe(0)
     expect(metrics.tasksByColumn).toHaveLength(5)
     expect(metrics.tasksByPriority).toHaveLength(0)
+  })
+})
+
+describe('getBoardMetrics with custom column names', () => {
+  function customBoard(columnNames: string[]): Database {
+    const db = new Database(':memory:')
+    db.run('PRAGMA foreign_keys = ON')
+    initSchema(db)
+    for (const name of columnNames) addColumn(db, name)
+    return db
+  }
+
+  test('classifies done/in-progress by role despite custom case and spacing', () => {
+    const db = customBoard(['Todo', 'In Progress', 'Human Review', 'Merging', 'Done'])
+    addTask(db, 'a', { column: 'Todo' })
+    const b = addTask(db, 'b', { column: 'Todo' })
+    const c = addTask(db, 'c', { column: 'Todo' })
+    moveTask(db, b.id, 'In Progress')
+    moveTask(db, c.id, 'Done')
+
+    const metrics = getBoardMetrics(db)
+    // 'In Progress' (space + caps) used to never match the literal 'in-progress'.
+    expect(metrics.inProgressCount).toBe(1)
+    expect(metrics.completedTasks).toBe(1)
+    expect(metrics.completionPercent).toBe(33)
+  })
+
+  test('falls back to the terminal column for completed when no done-named column', () => {
+    const db = customBoard(['Todo', 'Doing', 'Shipping'])
+    const t = addTask(db, 'a', { column: 'Todo' })
+    moveTask(db, t.id, 'Shipping')
+
+    const metrics = getBoardMetrics(db)
+    expect(metrics.completedTasks).toBe(1)
+    // 'Doing' is a recognized in-progress synonym.
+    expect(metrics.inProgressCount).toBe(0)
   })
 })

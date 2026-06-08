@@ -2,6 +2,7 @@ import type { Sql, TransactionSql } from 'postgres'
 
 import { ErrorCode, KanbanError } from '../errors'
 import { generateId } from '../id'
+import { selectDoneColumnIds, selectInProgressColumnIds } from '../column-roles'
 import type {
   ActivityEntry,
   BoardBootstrap,
@@ -566,14 +567,20 @@ export class PostgresLocalProvider implements KanbanProvider {
     const [total] = await this.sql<
       { count: string | number }[]
     >`SELECT COUNT(*) AS count FROM tasks`
-    const [doneColumn] = await this.sql<{ id: string }[]>`
-      SELECT id FROM columns WHERE LOWER(name) = 'done' LIMIT 1
+    // Classify columns by role (custom names / KANBAN_DEFAULT_COLUMNS) instead of
+    // matching the literal 'done' / 'in-progress'. Kept in lockstep with the
+    // SQLite copy in metrics.ts:getBoardMetrics.
+    const columns = await this.sql<{ id: string; name: string; position: number }[]>`
+      SELECT id, name, position FROM columns ORDER BY position
     `
-    const [completed] = doneColumn
-      ? await this.sql<{ count: string | number }[]>`
-          SELECT COUNT(*) AS count FROM tasks WHERE column_id = ${doneColumn.id}
+    const doneColumnIds = selectDoneColumnIds(columns)
+    const inProgressColumnIds = selectInProgressColumnIds(columns)
+    const [completed] =
+      doneColumnIds.length > 0
+        ? await this.sql<{ count: string | number }[]>`
+          SELECT COUNT(*) AS count FROM tasks WHERE column_id IN ${this.sql(doneColumnIds)}
         `
-      : [{ count: 0 }]
+        : [{ count: 0 }]
     const tasksByColumn = await this.sql<{ column_name: string; count: string | number }[]>`
       SELECT columns.name AS column_name, COUNT(tasks.id) AS count
       FROM columns
@@ -593,15 +600,16 @@ export class PostgresLocalProvider implements KanbanProvider {
     // in Done; MIN() handles tasks that re-enter Done. Cast to timestamptz so the
     // ISO-UTC strings compare correctly regardless of the server timezone. Kept
     // in lockstep with the SQLite copy in metrics.ts:getBoardMetrics.
-    const [avgResult] = await this.sql<{ avg_hours: string | number | null }[]>`
+    const [avgResult] =
+      doneColumnIds.length > 0
+        ? await this.sql<{ avg_hours: string | number | null }[]>`
       SELECT AVG(
         EXTRACT(EPOCH FROM (done_enter.entered_at - first_enter.entered_at)) / 3600
       ) AS avg_hours
       FROM (
         SELECT ct.task_id, MIN(ct.entered_at::timestamptz) AS entered_at
         FROM column_time_tracking ct
-        JOIN columns c ON ct.column_id = c.id
-        WHERE LOWER(c.name) = 'done'
+        WHERE ct.column_id IN ${this.sql(doneColumnIds)}
         GROUP BY ct.task_id
       ) done_enter
       JOIN (
@@ -609,11 +617,17 @@ export class PostgresLocalProvider implements KanbanProvider {
         FROM column_time_tracking GROUP BY task_id
       ) first_enter ON first_enter.task_id = done_enter.task_id
     `
+        : [{ avg_hours: null }]
     const [weekCount] = await this.sql<{ count: string | number }[]>`
       SELECT COUNT(*) AS count FROM tasks
       WHERE created_at::timestamptz >= NOW() - INTERVAL '7 days'
     `
-    const inProgress = tasksByColumn.find((row) => row.column_name === 'in-progress')
+    const inProgressNames = new Set(
+      columns.filter((c) => inProgressColumnIds.includes(c.id)).map((c) => c.name),
+    )
+    const inProgressCount = tasksByColumn
+      .filter((row) => inProgressNames.has(row.column_name))
+      .reduce((sum, row) => sum + Number(row.count), 0)
     return {
       tasksByColumn: tasksByColumn.map((row) => ({
         column_name: row.column_name,
@@ -628,7 +642,7 @@ export class PostgresLocalProvider implements KanbanProvider {
       avgCompletionHours: avgResult?.avg_hours != null ? Number(avgResult.avg_hours) : null,
       recentActivity: await this.getActivity(20),
       tasksCreatedThisWeek: Number(weekCount?.count ?? 0),
-      inProgressCount: inProgress ? Number(inProgress.count) : 0,
+      inProgressCount,
       completionPercent: totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100),
       assignees,
       projects,
