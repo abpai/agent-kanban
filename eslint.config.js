@@ -47,6 +47,15 @@ export default [
       ecmaVersion: 'latest',
       sourceType: 'module',
       parser: tsParser,
+      parserOptions: {
+        // Type-aware linting (enables rules like no-floating-promises). Standalone
+        // scripts and config files aren't in a tsconfig `include`, so allow them
+        // to use the default inferred program instead of erroring.
+        projectService: {
+          allowDefaultProject: ['scripts/*.ts', 'ui/*.ts', '*.ts', '*.mjs'],
+        },
+        tsconfigRootDir: import.meta.dirname,
+      },
       globals: bunGlobals,
     },
     plugins: {
@@ -77,6 +86,7 @@ export default [
           allow: ['warn', 'error', 'info'],
         },
       ],
+      '@typescript-eslint/no-floating-promises': 'error',
     },
   },
   {

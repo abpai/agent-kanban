@@ -298,7 +298,7 @@ export function startServer(
         syncTimer = null
       }
       wsClients.clear()
-      server.stop(closeActiveConnections)
+      void server.stop(closeActiveConnections)
     },
   }
 }
