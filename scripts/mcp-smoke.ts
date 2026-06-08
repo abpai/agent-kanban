@@ -94,6 +94,6 @@ try {
 } finally {
   await client.close()
   await tracker.close()
-  httpServer.stop(true)
+  void httpServer.stop(true)
   db.close()
 }

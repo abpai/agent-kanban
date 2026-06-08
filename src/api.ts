@@ -6,6 +6,8 @@ import { normalizeLabels } from './labels'
 export type WsEvent =
   | { type: 'task:upsert'; task: Task; columnId: string }
   | { type: 'task:delete'; id: string }
+  // Fallback when a mutation has no precise event; the UI does a full refresh.
+  | { type: 'refresh' }
 
 interface MoveTaskBody {
   column?: string
@@ -34,7 +36,8 @@ function statusForCode(code: string): number {
   if (
     code === ErrorCode.TASK_NOT_FOUND ||
     code === ErrorCode.COLUMN_NOT_FOUND ||
-    code === ErrorCode.COMMENT_NOT_FOUND
+    code === ErrorCode.COMMENT_NOT_FOUND ||
+    code === ErrorCode.NOT_FOUND
   )
     return 404
   if (code === ErrorCode.PROVIDER_AUTH_FAILED) return 401
@@ -329,7 +332,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
   return {
     response: json(
-      { ok: false, error: { code: 'NOT_FOUND', message: `No route: ${method} ${path}` } },
+      { ok: false, error: { code: ErrorCode.NOT_FOUND, message: `No route: ${method} ${path}` } },
       404,
     ),
     mutated: false,

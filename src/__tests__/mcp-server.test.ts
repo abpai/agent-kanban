@@ -85,7 +85,7 @@ function startTrackerServer(
     url,
     async close() {
       await tracker.close()
-      httpServer.stop(true)
+      void httpServer.stop(true)
     },
   }
 }
@@ -246,7 +246,7 @@ describe('createTrackerMcpServer', () => {
         message: 'Tracker MCP server is closed',
       })
     } finally {
-      runtime.httpServer.stop(true)
+      void runtime.httpServer.stop(true)
     }
   })
 })

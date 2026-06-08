@@ -337,7 +337,7 @@ export const useStore = create<AppState>((set, get) => ({
             // ids, or a newly-added column); fall back to a full refresh so the
             // update is not silently dropped.
             if (next) set({ board: next })
-            else get().fetchAll()
+            else void get().fetchAll()
           }
           return
         }
@@ -346,7 +346,7 @@ export const useStore = create<AppState>((set, get) => ({
           if (current) set({ board: removeTaskById(current, data.id) })
           return
         }
-        get().fetchAll()
+        void get().fetchAll()
       } catch {
         // ignore malformed messages
       }
@@ -380,7 +380,7 @@ export const useStore = create<AppState>((set, get) => ({
   startPolling: (intervalMs = 5000) => {
     get().stopPolling()
     set({ pollingEnabled: true })
-    get().fetchAll()
+    void get().fetchAll()
     get().connectWebSocket()
 
     const scheduleNextPoll = () => {
