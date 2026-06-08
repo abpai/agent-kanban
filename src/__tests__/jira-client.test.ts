@@ -217,6 +217,15 @@ describe('decideJiraPagination', () => {
     expect(d).toEqual({ complete: true })
   })
 
+  test('isLast absent: a repeated cursor on a short page is still incomplete (cursor wins over page size)', () => {
+    const d = decideJiraPagination(
+      { nextPageToken: 'seen', issues: issuesOfLength(1) },
+      MAX,
+      new Set(['seen']),
+    )
+    expect(d).toEqual({ complete: false })
+  })
+
   test('isLast absent: an empty page is the end (complete)', () => {
     const d = decideJiraPagination({ issues: [] }, MAX, new Set())
     expect(d).toEqual({ complete: true })

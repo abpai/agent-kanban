@@ -72,9 +72,13 @@ export interface JiraPaginationDecision {
 //   - isLast === false, usable cursor  → advance.
 //   - isLast === false, no cursor      → server claims more pages but gave no way
 //                                        to fetch them: incomplete, do not prune.
-//   - isLast absent (legacy/empty)     → advance on a usable cursor; otherwise a
-//                                        full page implies more remain (incomplete),
-//                                        a short/empty page is the end (complete).
+//   - isLast absent (legacy/empty)     → advance on a usable cursor; if a cursor
+//                                        is present but unusable (already seen),
+//                                        the server still offered more pages, so
+//                                        the scan is incomplete; with no cursor at
+//                                        all a full page implies more remain
+//                                        (incomplete) and a short/empty page is the
+//                                        end (complete).
 // A cursor already in `seenPageTokens` counts as not usable (a stalled cursor
 // that would otherwise loop forever).
 export function decideJiraPagination(
@@ -87,6 +91,10 @@ export function decideJiraPagination(
   if (canAdvance) return { nextToken: token, complete: false }
   if (page.isLast === true) return { complete: true }
   if (page.isLast === false) return { complete: false }
+  // isLast absent: a present-but-unusable (already-seen) cursor still signals
+  // more pages, so the scan is incomplete. Only fall back to page size when there
+  // is no cursor at all.
+  if (token) return { complete: false }
   return { complete: (page.issues?.length ?? 0) < maxResults }
 }
 
