@@ -76,6 +76,9 @@ function toLinearPriority(priority: Task['priority'] | undefined): number | unde
 export class LinearProvider implements KanbanProvider {
   readonly type = 'linear' as const
   private readonly client: LinearClient
+  // When a server-side background warmer owns cache refresh, request-path syncs
+  // are suppressed once the cache is warm so reads/writes never block on Linear I/O.
+  private backgroundManaged = false
 
   constructor(
     private readonly db: Database,
@@ -101,10 +104,16 @@ export class LinearProvider implements KanbanProvider {
     return configuredTeam
   }
 
-  private async sync(force = false): Promise<void> {
+  private async sync(force = false, viaWarmer = false): Promise<void> {
     const meta = loadSyncMeta(this.db)
     const lastSyncAtMs = parseTimestamp(meta.lastSyncAt)
     const lastFullSyncAtMs = parseTimestamp(meta.lastFullSyncAt)
+    // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
+    // Once the cache has synced at least once, implicit request-path reads serve the
+    // warm cache instead of blocking on a Linear round-trip, which could exceed the
+    // HTTP idle timeout. Forced syncs (writes' read-after-write) and the warmer
+    // still run; CLI mode and cold start sync synchronously.
+    if (this.backgroundManaged && !force && !viaWarmer && lastSyncAtMs) return
     const now = Date.now()
     if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
 
@@ -279,7 +288,13 @@ export class LinearProvider implements KanbanProvider {
   }
 
   async syncCache(): Promise<void> {
-    await this.sync()
+    // viaWarmer bypasses the backgroundManaged request-path suppression without
+    // forcing a full reconcile (force=false keeps the normal delta/full cadence).
+    await this.sync(false, true)
+  }
+
+  setBackgroundManaged(managed: boolean): void {
+    this.backgroundManaged = managed
   }
 
   async getSyncStatus(): Promise<ProviderSyncStatus> {
