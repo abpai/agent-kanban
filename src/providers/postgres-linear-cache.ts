@@ -3,13 +3,14 @@ import type { Sql } from 'postgres'
 import type { BoardConfig, BoardView, ProviderTeamInfo, Task } from '../types'
 import { ensureWebhookEventsSchema } from '../webhook-events'
 import type { LinearCachePort } from './linear-core'
-import type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
+import {
+  clampActivityValue,
+  type LinearActivityRow,
+  type LinearStateRow,
+  type LinearSyncMeta,
+} from './linear-cache'
 
 export type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
-
-const ACTIVITY_VALUE_MAX_CHARS = 4096
-const ACTIVITY_TRUNCATION_SUFFIX = '...[truncated]'
-const ACTIVITY_VALUE_BUDGET = ACTIVITY_VALUE_MAX_CHARS - ACTIVITY_TRUNCATION_SUFFIX.length
 
 export interface LinearIssueRow {
   id: string
@@ -76,11 +77,6 @@ function taskFromRow(row: LinearIssueRow): Task {
     version: row.updated_at,
     source_updated_at: row.updated_at,
   }
-}
-
-function clampActivityValue(value: string): string {
-  if (value.length <= ACTIVITY_VALUE_MAX_CHARS) return value
-  return value.slice(0, ACTIVITY_VALUE_BUDGET) + ACTIVITY_TRUNCATION_SUFFIX
 }
 
 /**
