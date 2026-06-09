@@ -19,6 +19,7 @@ export function NewTaskModal() {
   const [priority, setPriority] = useState<Priority>('medium')
   const [assignee, setAssignee] = useState('')
   const [project, setProject] = useState('')
+  const [labels, setLabels] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   const resetForm = useCallback(() => {
@@ -28,6 +29,7 @@ export function NewTaskModal() {
     setPriority('medium')
     setAssignee('')
     setProject('')
+    setLabels('')
   }, [newTaskDefaultColumn])
 
   useEffect(() => {
@@ -61,6 +63,10 @@ export function NewTaskModal() {
     if (!title.trim()) return
     setSubmitting(true)
     try {
+      const parsedLabels = labels
+        .split(',')
+        .map((label) => label.trim())
+        .filter(Boolean)
       await createTask({
         title: title.trim(),
         description: description.trim() || undefined,
@@ -68,6 +74,7 @@ export function NewTaskModal() {
         priority,
         assignee: assignee || undefined,
         project: project || undefined,
+        labels: parsedLabels.length > 0 ? parsedLabels : undefined,
       })
       setShowNewTaskModal(false)
     } finally {
@@ -166,6 +173,17 @@ export function NewTaskModal() {
                 ))}
               </select>
             </div>
+          </div>
+
+          <div className="formField">
+            <label className="formLabel">Labels</label>
+            <input
+              className="formInput"
+              type="text"
+              value={labels}
+              onChange={(e) => setLabels(e.target.value)}
+              placeholder="Comma-separated, e.g. bug, frontend"
+            />
           </div>
 
           <div className="modalActions">

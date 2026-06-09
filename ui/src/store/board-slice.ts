@@ -77,6 +77,7 @@ export interface BoardSlice {
     priority?: Priority
     assignee?: string
     project?: string
+    labels?: string[]
   }) => Promise<void>
   updateTask: (
     id: string,
@@ -156,7 +157,7 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
       priority: data.priority ?? 'medium',
       assignee: data.assignee ?? '',
       assignees: data.assignee ? [data.assignee] : [],
-      labels: [],
+      labels: data.labels ?? [],
       comment_count: 0,
       project: data.project ?? '',
       metadata: '{}',
