@@ -37,6 +37,41 @@ describe('handleRequest', () => {
     expect(result.mutated).toBe(false)
   })
 
+  test('returns the error envelope for a malformed JSON body', async () => {
+    const req = new Request('http://localhost/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{ not valid json',
+    })
+    const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as {
+      ok: boolean
+      error: { code: string; message: string }
+    }
+
+    expect(result.response.status).toBe(400)
+    expect(result.mutated).toBe(false)
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('INVALID_REQUEST_BODY')
+  })
+
+  test('still returns MISSING_ARGUMENT when a valid body omits a required field', async () => {
+    const req = new Request('http://localhost/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'no title' }),
+    })
+    const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as {
+      ok: boolean
+      error: { code: string }
+    }
+
+    expect(result.response.status).toBe(400)
+    expect(result.mutated).toBe(false)
+    expect(body.error.code).toBe('MISSING_ARGUMENT')
+  })
+
   test('marks successful task creation as mutated', async () => {
     const req = new Request('http://localhost/api/tasks', {
       method: 'POST',
