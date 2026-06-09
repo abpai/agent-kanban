@@ -74,6 +74,7 @@ export const api = {
     priority?: Priority
     assignee?: string
     project?: string
+    labels?: string[]
   }) =>
     fetchJson<Task>('/tasks', {
       method: 'POST',
