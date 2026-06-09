@@ -113,6 +113,53 @@ describe('postgres local provider', () => {
     expect(comments[0]!.body).toBe('Projection comment stored in Postgres')
   })
 
+  pgTest('migrates a pre-existing tasks table missing project/labels/revision', async () => {
+    // Simulate an older Postgres-local database created before project, labels,
+    // and revision columns existed. CREATE TABLE IF NOT EXISTS would not add
+    // them, so the provider's migration must backfill before any insert.
+    await sql!`
+      CREATE TABLE columns (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        position INTEGER NOT NULL,
+        color TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `
+    await sql!`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        column_id TEXT NOT NULL REFERENCES columns(id) ON DELETE RESTRICT,
+        position INTEGER NOT NULL DEFAULT 0,
+        priority TEXT NOT NULL DEFAULT 'medium',
+        assignee TEXT NOT NULL DEFAULT '',
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `
+
+    // First provider use runs ensureSchema/migrateTasksTable and must succeed.
+    const created = expectOk<TaskWithColumn>(
+      await run(['task', 'add', 'After migration', '--project', 'Dispatch', '--label', 'smoke']),
+    )
+    expect(created.title).toBe('After migration')
+    expect(created.project).toBe('Dispatch')
+    expect(created.labels).toEqual(['smoke'])
+    expect(created.version).toBe('0')
+
+    const columnRows = await sql!<{ column_name: string }[]>`
+      SELECT column_name FROM information_schema.columns WHERE table_name = 'tasks'
+    `
+    const columnNames = columnRows.map((row) => row.column_name)
+    expect(columnNames).toContain('project')
+    expect(columnNames).toContain('labels')
+    expect(columnNames).toContain('revision')
+  })
+
   pgTest('seeds custom default columns for Garage local compose', async () => {
     process.env['KANBAN_DEFAULT_COLUMNS'] = 'Todo,In Progress,Human Review,Merging,Done'
 
