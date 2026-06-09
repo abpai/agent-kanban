@@ -72,6 +72,19 @@ describe('handleRequest', () => {
     expect(body.error.code).toBe('MISSING_ARGUMENT')
   })
 
+  test('rejects an invalid limit query parameter through the envelope', async () => {
+    const req = new Request('http://localhost/api/tasks?limit=-5', { method: 'GET' })
+    const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as {
+      ok: boolean
+      error: { code: string }
+    }
+
+    expect(result.response.status).toBe(400)
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('INVALID_ARGUMENT')
+  })
+
   test('marks successful task creation as mutated', async () => {
     const req = new Request('http://localhost/api/tasks', {
       method: 'POST',

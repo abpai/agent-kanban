@@ -9,6 +9,7 @@ import { boardInit, boardReset } from './commands/board'
 import { columnAdd, columnDelete, columnList, columnRename, columnReorder } from './commands/column'
 import { bulkClearDoneCmd, bulkMoveAllCmd } from './commands/bulk'
 import { getConfigPath, loadConfig, saveConfig } from './config'
+import { parsePositiveInt } from './transport-input'
 import type { CliOutput, Priority } from './types'
 import { unsupportedOperation } from './providers/errors'
 import { openKanbanRuntime } from './provider-runtime'
@@ -83,7 +84,7 @@ async function routeTask(
           priority: values.p as string | undefined,
           assignee: values.a as string | undefined,
           project: values.project as string | undefined,
-          limit: values.l ? parseInt(values.l as string, 10) : undefined,
+          limit: parsePositiveInt(values.l as string | undefined),
           sort: values.sort as string | undefined,
         }),
       )
