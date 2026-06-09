@@ -460,6 +460,29 @@ export class PostgresLocalProvider implements KanbanProvider {
           tx,
         )
       }
+      if (input.project !== undefined && input.project !== current.project) {
+        await this.insertActivity(
+          current.id,
+          'updated',
+          'project',
+          current.project || null,
+          input.project,
+          tx,
+        )
+      }
+      if (input.description !== undefined && input.description !== current.description) {
+        await this.insertActivity(
+          current.id,
+          'updated',
+          'description',
+          current.description,
+          input.description,
+          tx,
+        )
+      }
+      if (metadata !== undefined && metadata !== current.metadata) {
+        await this.insertActivity(current.id, 'updated', 'metadata', current.metadata, metadata, tx)
+      }
     })
     return this.getTask(current.id)
   }
@@ -538,22 +561,33 @@ export class PostgresLocalProvider implements KanbanProvider {
     const task = await this.requireTask(idOrRef)
     const id = generateId('cm')
     const timestamp = nowIso()
-    const [comment] = await this.sql<TaskComment[]>`
-      INSERT INTO comments (id, task_id, body, author, created_at, updated_at)
-      VALUES (${id}, ${task.id}, ${body}, ${null}, ${timestamp}, ${timestamp})
-      RETURNING *
-    `
+    // Comment writes are part of task history (parity with SQLite addComment):
+    // insert and activity in one transaction so they commit or roll back together.
+    const comment = await this.sql.begin(async (tx) => {
+      const [row] = await tx<TaskComment[]>`
+        INSERT INTO comments (id, task_id, body, author, created_at, updated_at)
+        VALUES (${id}, ${task.id}, ${body}, ${null}, ${timestamp}, ${timestamp})
+        RETURNING *
+      `
+      await this.insertActivity(task.id, 'updated', 'comment', null, body, tx)
+      return row
+    })
     return comment!
   }
 
   async updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment> {
     const existing = await this.getComment(idOrRef, commentId)
-    const [comment] = await this.sql<TaskComment[]>`
-      UPDATE comments
-      SET body = ${body}, updated_at = ${nowIso()}
-      WHERE id = ${existing.id}
-      RETURNING *
-    `
+    const timestamp = nowIso()
+    const comment = await this.sql.begin(async (tx) => {
+      const [row] = await tx<TaskComment[]>`
+        UPDATE comments
+        SET body = ${body}, updated_at = ${timestamp}
+        WHERE id = ${existing.id}
+        RETURNING *
+      `
+      await this.insertActivity(existing.task_id, 'updated', 'comment', existing.body, body, tx)
+      return row
+    })
     return comment!
   }
 
