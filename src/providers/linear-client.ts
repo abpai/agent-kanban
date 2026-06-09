@@ -357,11 +357,63 @@ export class LinearClient {
         `,
         { teamId, after, updatedAfter: updatedAfter ?? '1970-01-01T00:00:00.000Z' },
       )
-      issues.push(...data.issues.nodes.map(toLinearIssue))
+      const pageIssues = data.issues.nodes.map(toLinearIssue)
+      // Linear connections expose no totalCount, and the inline comments page is
+      // capped at 250. When an issue has more, the loaded length undercounts, so
+      // continue paging the (id-only) comment cursor to get an accurate count
+      // instead of advertising a partial page length as the total.
+      await Promise.all(
+        data.issues.nodes.map(async (node, index) => {
+          const info = node.comments?.pageInfo
+          if (info?.hasNextPage && info.endCursor) {
+            pageIssues[index]!.commentCount = await this.countIssueComments(
+              node.id,
+              info.endCursor,
+              node.comments?.nodes?.length ?? 0,
+            )
+          }
+        }),
+      )
+      issues.push(...pageIssues)
       after = data.issues.pageInfo.hasNextPage ? data.issues.pageInfo.endCursor : null
     } while (after)
 
     return issues
+  }
+
+  // Continue paging an issue's comment cursor (id-only) to count comments beyond
+  // the inline first page. Only invoked when the first page reported hasNextPage.
+  private async countIssueComments(
+    issueId: string,
+    startCursor: string,
+    loaded: number,
+  ): Promise<number> {
+    let count = loaded
+    let after: string | null = startCursor
+
+    while (after) {
+      const data: {
+        issue: { comments: { nodes: Array<{ id: string }>; pageInfo: PageInfo } } | null
+      } = await this.query(
+        `
+          query IssueCommentCount($id: String!, $after: String) {
+            issue(id: $id) {
+              comments(first: 250, after: $after) {
+                nodes { id }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        `,
+        { id: issueId, after },
+      )
+      const comments = data.issue?.comments
+      if (!comments) break
+      count += comments.nodes.length
+      after = comments.pageInfo.hasNextPage ? comments.pageInfo.endCursor : null
+    }
+
+    return count
   }
 
   async createIssue(input: {

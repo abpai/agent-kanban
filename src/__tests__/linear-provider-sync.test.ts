@@ -612,6 +612,114 @@ describe('LinearProvider sync', () => {
     expect(loadSyncMeta(db).lastFullSyncAt).not.toBeNull()
   })
 
+  test('counts comments beyond the inline first page instead of capping at the page length', async () => {
+    saveSyncMeta(db, {
+      team: { id: 'team-1', key: 'R2P', name: 'R2pi' },
+      lastSyncAt: '2026-01-01T00:00:00Z',
+      lastFullSyncAt: '2026-01-01T00:00:00Z',
+      lastIssueUpdatedAt: '2026-01-01T00:00:00Z',
+    })
+
+    let commentCountQueries = 0
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string
+        variables: Record<string, unknown>
+      }
+
+      if (body.query.includes('query TeamSnapshot')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              team: {
+                id: 'team-1',
+                key: 'R2P',
+                name: 'R2pi',
+                states: { nodes: [{ id: 'state-1', name: 'Todo', position: 0 }] },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Users')) {
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Projects')) {
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query IssueCommentCount')) {
+        commentCountQueries += 1
+        // Second comment page: three more comments, no further pages.
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: {
+                comments: {
+                  nodes: [{ id: 'c3' }, { id: 'c4' }, { id: 'c5' }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Issues')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issues: {
+                nodes: [
+                  linearIssue({
+                    comments: {
+                      nodes: [{ id: 'c1' }, { id: 'c2' }],
+                      pageInfo: { hasNextPage: true, endCursor: 'comment-cursor-1' },
+                    },
+                  }),
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query IssueHistory')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: { history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const originalDateNow = Date.now
+    Date.now = () => Date.parse('2026-01-01T00:06:00Z')
+    try {
+      const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
+      const task = await provider.getTask('R2P-1')
+      expect(task.comment_count).toBe(5)
+      expect(commentCountQueries).toBe(1)
+    } finally {
+      Date.now = originalDateNow
+    }
+  })
+
   test('polling keeps upstream comment counts instead of resetting them to zero', async () => {
     upsertIssues(db, [
       {
