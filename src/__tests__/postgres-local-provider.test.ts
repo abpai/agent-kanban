@@ -141,6 +141,54 @@ describe('postgres local provider', () => {
     }
   })
 
+  pgTest('listTasks pushes filter, sort, and limit down to SQL', async () => {
+    const runtime = await openKanbanRuntime()
+    try {
+      const provider = runtime.provider
+      const alpha = await provider.createTask({
+        title: 'Alpha',
+        priority: 'low',
+        assignee: 'amy',
+        project: 'Dispatch',
+      })
+      await provider.createTask({
+        title: 'Beta',
+        priority: 'high',
+        assignee: 'amy',
+        project: 'Dispatch',
+      })
+      await provider.createTask({
+        title: 'Gamma',
+        priority: 'high',
+        assignee: 'bob',
+        project: 'Other',
+      })
+
+      // Filter pushdown: only amy's Dispatch tasks come back.
+      const byAssignee = await provider.listTasks({ assignee: 'amy', project: 'Dispatch' })
+      expect(byAssignee.map((task) => task.title).sort()).toEqual(['Alpha', 'Beta'])
+
+      // Filter + priority pushdown.
+      const highPriority = await provider.listTasks({ priority: 'high' })
+      expect(highPriority.map((task) => task.title).sort()).toEqual(['Beta', 'Gamma'])
+
+      // Sort + limit pushdown: title order, capped at one row.
+      const firstByTitle = await provider.listTasks({ sort: 'title', limit: 1 })
+      expect(firstByTitle).toHaveLength(1)
+      expect(firstByTitle[0]?.title).toBe('Alpha')
+
+      // Comment counts are scoped per returned row.
+      await provider.comment(alpha.id, 'a note')
+      const withCounts = await provider.listTasks({ assignee: 'amy', project: 'Dispatch' })
+      const alphaRow = withCounts.find((task) => task.id === alpha.id)
+      const betaRow = withCounts.find((task) => task.title === 'Beta')
+      expect(alphaRow?.comment_count).toBe(1)
+      expect(betaRow?.comment_count).toBe(0)
+    } finally {
+      await runtime.close()
+    }
+  })
+
   pgTest('reports configEdit:false and refuses config edits', async () => {
     const runtime = await openKanbanRuntime()
     try {

@@ -340,27 +340,44 @@ export class PostgresLocalProvider implements KanbanProvider {
 
   async listTasks(filters: TaskListFilters = {}): Promise<Task[]> {
     await this.ready
-    const rows = await this.sql<TaskRow[]>`
-      SELECT tasks.*, columns.name AS column_name
-      FROM tasks
-      JOIN columns ON columns.id = tasks.column_id
-      ORDER BY tasks.created_at
-    `
-    const counts = await this.commentCountsByTask()
-    let tasks = rows.map((task) => this.enrichTask(task, counts.get(task.id) ?? 0))
 
+    // Push filtering, ordering, and the row cap into SQL instead of loading the
+    // whole table and a full comments group-by to filter in JS. Mirrors the
+    // SQLite path (db.ts:listTasks) so both backends share filter/sort semantics.
+    const conditions = []
     if (filters.column) {
       const column = await this.resolveColumn(filters.column)
-      tasks = tasks.filter((task) => task.column_id === column.id)
+      conditions.push(this.sql`tasks.column_id = ${column.id}`)
     }
-    if (filters.priority) tasks = tasks.filter((task) => task.priority === filters.priority)
-    if (filters.assignee) tasks = tasks.filter((task) => task.assignee === filters.assignee)
-    if (filters.project) tasks = tasks.filter((task) => task.project === filters.project)
-    if (filters.sort === 'title') tasks = [...tasks].sort((a, b) => a.title.localeCompare(b.title))
-    if (filters.sort === 'updated')
-      tasks = [...tasks].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    if (filters.limit) tasks = tasks.slice(0, filters.limit)
-    return tasks
+    if (filters.priority) conditions.push(this.sql`tasks.priority = ${filters.priority}`)
+    if (filters.assignee) conditions.push(this.sql`tasks.assignee = ${filters.assignee}`)
+    if (filters.project) conditions.push(this.sql`tasks.project = ${filters.project}`)
+    const where = conditions.length
+      ? conditions.reduce((acc, cond) => this.sql`${acc} AND ${cond}`)
+      : this.sql`TRUE`
+
+    // Whitelisted ORDER BY fragments; the sort key never reaches SQL as data.
+    const orderByMap: Record<string, ReturnType<typeof this.sql>> = {
+      priority: this
+        .sql`CASE tasks.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END`,
+      created: this.sql`tasks.created_at`,
+      updated: this.sql`tasks.updated_at`,
+      position: this.sql`tasks.position`,
+      title: this.sql`tasks.title`,
+    }
+    const orderBy = orderByMap[filters.sort ?? 'position'] ?? orderByMap['position']!
+    const limit = filters.limit ? this.sql`LIMIT ${filters.limit}` : this.sql``
+
+    const rows = await this.sql<Array<TaskRow & { comment_count: string | number }>>`
+      SELECT tasks.*, columns.name AS column_name,
+        (SELECT COUNT(*) FROM comments WHERE comments.task_id = tasks.id) AS comment_count
+      FROM tasks
+      JOIN columns ON columns.id = tasks.column_id
+      WHERE ${where}
+      ORDER BY ${orderBy}
+      ${limit}
+    `
+    return rows.map((row) => this.enrichTask(row, Number(row.comment_count ?? 0)))
   }
 
   async getTask(idOrRef: string): Promise<Task> {
