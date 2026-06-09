@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
 import type { ActivityEntry, BoardMetrics } from './types'
-import { selectDoneColumnIds, selectInProgressColumnIds } from './column-roles'
+import { assembleBoardMetrics, classifyColumnRoles } from './metrics-spec'
 
 function getDistinctTaskFieldValues(db: Database, field: 'assignee' | 'project'): string[] {
   return (
@@ -23,52 +23,34 @@ export function getDiscoveredProjects(db: Database): string[] {
 }
 
 export function getBoardMetrics(db: Database): BoardMetrics {
-  const columnCounts = db
-    .query(
-      `SELECT c.id as id, c.name as column_name, c.position as position, COUNT(t.id) as count
-       FROM columns c LEFT JOIN tasks t ON t.column_id = c.id
-       GROUP BY c.id ORDER BY c.position`,
-    )
-    .all() as { id: string; column_name: string; position: number; count: number }[]
+  const columnCounts = (
+    db
+      .query(
+        `SELECT c.id as id, c.name as name, c.position as position, COUNT(t.id) as count
+         FROM columns c LEFT JOIN tasks t ON t.column_id = c.id
+         GROUP BY c.id ORDER BY c.position`,
+      )
+      .all() as { id: string; name: string; position: number; count: number }[]
+  ).map((row) => ({ id: row.id, name: row.name, position: row.position, count: row.count }))
 
-  const tasksByColumn = columnCounts.map((row) => ({
-    column_name: row.column_name,
-    count: row.count,
-  }))
+  // Done/in-progress classification and all derived fields live in metrics-spec;
+  // here we only gather the raw aggregates this backend's SQL produces. The done
+  // ids are needed up front to scope the average-completion query.
+  const { doneColumnIds } = classifyColumnRoles(columnCounts)
 
-  // Classify columns by role (handles custom names / KANBAN_DEFAULT_COLUMNS)
-  // instead of matching the literal strings 'done' / 'in-progress'.
-  const columns = columnCounts.map((row) => ({
-    id: row.id,
-    name: row.column_name,
-    position: row.position,
-  }))
-  const doneColumnIds = new Set(selectDoneColumnIds(columns))
-  const inProgressColumnIds = new Set(selectInProgressColumnIds(columns))
-
-  const tasksByPriority = db
-    .query(
-      `SELECT priority, COUNT(*) as count FROM tasks
-       GROUP BY priority ORDER BY CASE priority
-         WHEN 'urgent' THEN 0 WHEN 'high' THEN 1
-         WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END`,
-    )
+  const priorityCounts = db
+    .query(`SELECT priority, COUNT(*) as count FROM tasks GROUP BY priority`)
     .all() as { priority: string; count: number }[]
 
   const totalTasks = getCount(db, 'SELECT COUNT(*) as count FROM tasks')
 
-  const completedTasks = columnCounts
-    .filter((row) => doneColumnIds.has(row.id))
-    .reduce((sum, row) => sum + row.count, 0)
-
   // Average completion time = first time a task was tracked (creation) until the
   // first time it entered a Done column. Measuring the Done *entry* (not exit)
   // means tasks that reach Done and stay there are counted; MIN() over Done rows
-  // handles tasks that re-enter Done. Kept in lockstep with the Postgres copy in
-  // postgres-local.ts:getMetrics — update both together.
-  const donePlaceholders = [...doneColumnIds].map(() => '?').join(', ')
-  const avgResult = (
-    doneColumnIds.size === 0
+  // handles tasks that re-enter Done.
+  const donePlaceholders = doneColumnIds.map(() => '?').join(', ')
+  const avgResult =
+    doneColumnIds.length === 0
       ? { avg_hours: null }
       : (db
           .query(
@@ -87,7 +69,6 @@ export function getBoardMetrics(db: Database): BoardMetrics {
        ) first_enter ON first_enter.task_id = done_enter.task_id`,
           )
           .get(...doneColumnIds) as { avg_hours: number | null })
-  ) as { avg_hours: number | null }
 
   const recentActivity = db
     .query('SELECT * FROM activity_log ORDER BY timestamp DESC, rowid DESC LIMIT 20')
@@ -98,26 +79,14 @@ export function getBoardMetrics(db: Database): BoardMetrics {
     "SELECT COUNT(*) as count FROM tasks WHERE created_at >= datetime('now', '-7 days')",
   )
 
-  const inProgressCount = columnCounts
-    .filter((row) => inProgressColumnIds.has(row.id))
-    .reduce((sum, row) => sum + row.count, 0)
-
-  const completionPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
-
-  const assignees = getDiscoveredAssignees(db)
-  const projects = getDiscoveredProjects(db)
-
-  return {
-    tasksByColumn,
-    tasksByPriority,
+  return assembleBoardMetrics({
+    columnCounts,
+    priorityCounts,
     totalTasks,
-    completedTasks,
+    tasksCreatedThisWeek,
     avgCompletionHours: avgResult.avg_hours,
     recentActivity,
-    tasksCreatedThisWeek,
-    inProgressCount,
-    completionPercent,
-    assignees,
-    projects,
-  }
+    assignees: getDiscoveredAssignees(db),
+    projects: getDiscoveredProjects(db),
+  })
 }

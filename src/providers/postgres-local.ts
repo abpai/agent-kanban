@@ -2,7 +2,7 @@ import type { Sql, TransactionSql } from 'postgres'
 
 import { ErrorCode, KanbanError } from '../errors'
 import { generateId } from '../id'
-import { selectDoneColumnIds, selectInProgressColumnIds } from '../column-roles'
+import { assembleBoardMetrics, classifyColumnRoles } from '../metrics-spec'
 import type {
   ActivityEntry,
   BoardBootstrap,
@@ -630,39 +630,39 @@ export class PostgresLocalProvider implements KanbanProvider {
     const [total] = await this.sql<
       { count: string | number }[]
     >`SELECT COUNT(*) AS count FROM tasks`
-    // Classify columns by role (custom names / KANBAN_DEFAULT_COLUMNS) instead of
-    // matching the literal 'done' / 'in-progress'. Kept in lockstep with the
-    // SQLite copy in metrics.ts:getBoardMetrics.
-    const columns = await this.sql<{ id: string; name: string; position: number }[]>`
-      SELECT id, name, position FROM columns ORDER BY position
-    `
-    const doneColumnIds = selectDoneColumnIds(columns)
-    const inProgressColumnIds = selectInProgressColumnIds(columns)
-    const [completed] =
-      doneColumnIds.length > 0
-        ? await this.sql<{ count: string | number }[]>`
-          SELECT COUNT(*) AS count FROM tasks WHERE column_id IN ${this.sql(doneColumnIds)}
-        `
-        : [{ count: 0 }]
-    const tasksByColumn = await this.sql<{ column_name: string; count: string | number }[]>`
-      SELECT columns.name AS column_name, COUNT(tasks.id) AS count
+
+    // Gather raw aggregates with Postgres SQL; metrics-spec owns the derived
+    // fields (role classification, completion math, priority ordering) so both
+    // backends stay identical without manual lockstep.
+    const columnRows = await this.sql<
+      { id: string; name: string; position: number; count: string | number }[]
+    >`
+      SELECT columns.id AS id, columns.name AS name, columns.position AS position,
+        COUNT(tasks.id) AS count
       FROM columns
       LEFT JOIN tasks ON tasks.column_id = columns.id
       GROUP BY columns.id, columns.name, columns.position
       ORDER BY columns.position
     `
-    const tasksByPriority = await this.sql<{ priority: string; count: string | number }[]>`
-      SELECT priority, COUNT(*) AS count FROM tasks GROUP BY priority ORDER BY priority
-    `
-    const assignees = await this.discoveredAssignees()
-    const projects = await this.discoveredProjects()
-    const totalTasks = Number(total?.count ?? 0)
-    const completedTasks = Number(completed?.count ?? 0)
+    const columnCounts = columnRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      position: Number(row.position),
+      count: Number(row.count),
+    }))
+    // Done ids are needed up front to scope the average-completion query.
+    const { doneColumnIds } = classifyColumnRoles(columnCounts)
+
+    const priorityCounts = (
+      await this.sql<{ priority: string; count: string | number }[]>`
+        SELECT priority, COUNT(*) AS count FROM tasks GROUP BY priority
+      `
+    ).map((row) => ({ priority: row.priority, count: Number(row.count) }))
+
     // Average completion time = first tracked entry (creation) -> first time the
     // task entered Done. Using the Done *entry* (not exit) counts tasks resting
     // in Done; MIN() handles tasks that re-enter Done. Cast to timestamptz so the
-    // ISO-UTC strings compare correctly regardless of the server timezone. Kept
-    // in lockstep with the SQLite copy in metrics.ts:getBoardMetrics.
+    // ISO-UTC strings compare correctly regardless of the server timezone.
     const [avgResult] =
       doneColumnIds.length > 0
         ? await this.sql<{ avg_hours: string | number | null }[]>`
@@ -685,31 +685,17 @@ export class PostgresLocalProvider implements KanbanProvider {
       SELECT COUNT(*) AS count FROM tasks
       WHERE created_at::timestamptz >= NOW() - INTERVAL '7 days'
     `
-    const inProgressNames = new Set(
-      columns.filter((c) => inProgressColumnIds.includes(c.id)).map((c) => c.name),
-    )
-    const inProgressCount = tasksByColumn
-      .filter((row) => inProgressNames.has(row.column_name))
-      .reduce((sum, row) => sum + Number(row.count), 0)
-    return {
-      tasksByColumn: tasksByColumn.map((row) => ({
-        column_name: row.column_name,
-        count: Number(row.count),
-      })),
-      tasksByPriority: tasksByPriority.map((row) => ({
-        priority: row.priority,
-        count: Number(row.count),
-      })),
-      totalTasks,
-      completedTasks,
+
+    return assembleBoardMetrics({
+      columnCounts,
+      priorityCounts,
+      totalTasks: Number(total?.count ?? 0),
+      tasksCreatedThisWeek: Number(weekCount?.count ?? 0),
       avgCompletionHours: avgResult?.avg_hours != null ? Number(avgResult.avg_hours) : null,
       recentActivity: await this.getActivity(20),
-      tasksCreatedThisWeek: Number(weekCount?.count ?? 0),
-      inProgressCount,
-      completionPercent: totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100),
-      assignees,
-      projects,
-    }
+      assignees: await this.discoveredAssignees(),
+      projects: await this.discoveredProjects(),
+    })
   }
 
   private async discoveredAssignees(): Promise<string[]> {
