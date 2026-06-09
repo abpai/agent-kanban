@@ -20,7 +20,7 @@ import {
 import { LINEAR_CAPABILITIES } from './capabilities'
 import { LinearClient, resolveLabelIdsForCreate, type LinearComment } from './linear-client'
 import type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
-import { unsupportedOperation } from './errors'
+import { providerUpstreamError, unsupportedOperation } from './errors'
 import type {
   CreateTaskInput,
   KanbanProvider,
@@ -318,14 +318,25 @@ export class LinearProviderCore implements KanbanProvider {
     return match
   }
 
-  private async resolveAssigneeId(name?: string): Promise<string | undefined> {
-    if (!name) return undefined
-    return (await this.cache.findUserIdByName(name)) ?? undefined
+  // Only invoked for non-empty names. A name that the cache cannot resolve is a
+  // hard error rather than a silent drop/clear: callers handle "not provided"
+  // (undefined) and "clear" (empty string) before calling this.
+  private async resolveAssigneeId(name: string): Promise<string> {
+    const id = await this.cache.findUserIdByName(name)
+    if (!id) {
+      providerUpstreamError(
+        `Linear assignee '${name}' was not found in the cached user list. Try 'kanban task list --assignee' to see cached names.`,
+      )
+    }
+    return id
   }
 
-  private async resolveProjectId(name?: string): Promise<string | undefined> {
-    if (!name) return undefined
-    return (await this.cache.findProjectIdByName(name)) ?? undefined
+  private async resolveProjectId(name: string): Promise<string> {
+    const id = await this.cache.findProjectIdByName(name)
+    if (!id) {
+      providerUpstreamError(`Linear project '${name}' was not found in the cached project list.`)
+    }
+    return id
   }
 
   private toTaskComment(task: Task, comment: LinearComment): TaskComment {
@@ -423,8 +434,8 @@ export class LinearProviderCore implements KanbanProvider {
       title: input.title,
       description: input.description,
       priority: toLinearPriority(input.priority),
-      assigneeId: await this.resolveAssigneeId(input.assignee),
-      projectId: await this.resolveProjectId(input.project),
+      assigneeId: input.assignee ? await this.resolveAssigneeId(input.assignee) : undefined,
+      projectId: input.project ? await this.resolveProjectId(input.project) : undefined,
       labelIds,
     })
     if (!result.success || !result.issue) {
@@ -469,9 +480,11 @@ export class LinearProviderCore implements KanbanProvider {
     if (input.description !== undefined) updateInput['description'] = input.description
     if (input.priority !== undefined) updateInput['priority'] = toLinearPriority(input.priority)
     if (input.assignee !== undefined)
-      updateInput['assigneeId'] = (await this.resolveAssigneeId(input.assignee)) ?? null
+      updateInput['assigneeId'] = input.assignee
+        ? await this.resolveAssigneeId(input.assignee)
+        : null
     if (input.project !== undefined)
-      updateInput['projectId'] = (await this.resolveProjectId(input.project)) ?? null
+      updateInput['projectId'] = input.project ? await this.resolveProjectId(input.project) : null
     if (input.metadata !== undefined) {
       unsupportedOperation('Linear mode does not support metadata updates')
     }
