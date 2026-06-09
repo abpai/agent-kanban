@@ -25,10 +25,15 @@ export const LOCAL_CAPABILITIES: ProviderCapabilities = capabilities({
   configEdit: true,
 })
 
-// Postgres-local shares most local capabilities, but has no persistent config
-// repository, so config edits are unsupported until persistence exists.
+// Postgres-local shares most local capabilities, but board administration
+// (column CRUD, bulk ops) and config editing have no Postgres provider path —
+// the CLI implements column/bulk against a raw SQLite Database and blocks them
+// under KANBAN_STORAGE=postgres. Advertise that honestly so clients don't offer
+// operations the provider can't perform.
 export const POSTGRES_LOCAL_CAPABILITIES: ProviderCapabilities = {
   ...LOCAL_CAPABILITIES,
+  columnCrud: false,
+  bulk: false,
   configEdit: false,
 }
 

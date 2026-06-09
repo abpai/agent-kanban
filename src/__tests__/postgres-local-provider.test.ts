@@ -118,6 +118,9 @@ describe('postgres local provider', () => {
     try {
       const context = await runtime.provider.getContext()
       expect(context.capabilities.configEdit).toBe(false)
+      // Board administration has no Postgres provider path.
+      expect(context.capabilities.columnCrud).toBe(false)
+      expect(context.capabilities.bulk).toBe(false)
 
       await expect(runtime.provider.patchConfig({ projects: ['Anything'] })).rejects.toMatchObject({
         code: 'UNSUPPORTED_OPERATION',
