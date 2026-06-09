@@ -375,6 +375,10 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
         output = routeBulk(sqliteDb, provider.type, action, positionals)
         break
       case 'config':
+        // routeConfig persists to the SQLite-side config file, so it only runs
+        // when a SQLite database is present. Postgres-local has no config
+        // repository (configEdit:false), so edits are refused here — matching the
+        // HTTP API, which fails through the provider's patchConfig.
         if (sqliteDb) {
           output = await routeConfig(provider, dbPath, action, positionals, values)
         } else {

@@ -15,7 +15,8 @@ import type {
   TaskComment,
   TaskWithColumn,
 } from '../types'
-import { LOCAL_CAPABILITIES } from './capabilities'
+import { POSTGRES_LOCAL_CAPABILITIES } from './capabilities'
+import { unsupportedOperation } from './errors'
 import type {
   CreateTaskInput,
   KanbanProvider,
@@ -295,7 +296,7 @@ export class PostgresLocalProvider implements KanbanProvider {
 
   async getContext(): Promise<ProviderContext> {
     await this.ready
-    return { provider: this.type, capabilities: LOCAL_CAPABILITIES, team: null }
+    return { provider: this.type, capabilities: POSTGRES_LOCAL_CAPABILITIES, team: null }
   }
 
   async getBootstrap(): Promise<BoardBootstrap> {
@@ -303,7 +304,7 @@ export class PostgresLocalProvider implements KanbanProvider {
     const metrics = await this.getMetrics()
     return {
       provider: this.type,
-      capabilities: LOCAL_CAPABILITIES,
+      capabilities: POSTGRES_LOCAL_CAPABILITIES,
       board: await this.getBoard(),
       config: await this.getConfig(),
       metrics,
@@ -718,14 +719,12 @@ export class PostgresLocalProvider implements KanbanProvider {
     }
   }
 
-  async patchConfig(input: Partial<BoardConfig>): Promise<BoardConfig> {
-    await this.ready
-    const config = await this.getConfig()
-    return {
-      ...config,
-      members: input.members ?? config.members,
-      projects: input.projects ?? config.projects,
-    }
+  async patchConfig(_input: Partial<BoardConfig>): Promise<BoardConfig> {
+    // No persistent config repository exists for Postgres-local (getConfig is
+    // reconstructed from task data). Rather than silently merge-and-return
+    // without persisting, advertise the capability honestly (configEdit:false)
+    // and fail loudly so the HTTP API and CLI agree.
+    unsupportedOperation('Editing board config is not supported with KANBAN_STORAGE=postgres')
   }
 
   async getSyncStatus(): Promise<ProviderSyncStatus | null> {

@@ -25,6 +25,13 @@ export const LOCAL_CAPABILITIES: ProviderCapabilities = capabilities({
   configEdit: true,
 })
 
+// Postgres-local shares most local capabilities, but has no persistent config
+// repository, so config edits are unsupported until persistence exists.
+export const POSTGRES_LOCAL_CAPABILITIES: ProviderCapabilities = {
+  ...LOCAL_CAPABILITIES,
+  configEdit: false,
+}
+
 export const LINEAR_CAPABILITIES: ProviderCapabilities = capabilities()
 
 export const JIRA_CAPABILITIES: ProviderCapabilities = capabilities()
