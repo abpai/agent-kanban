@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns, resolveColumn } from '../db'
+import { initSchema, seedDefaultColumns, resolveColumn, bulkMoveAll } from '../db'
 import { LocalProvider } from '../providers/local'
 import { ErrorCode, KanbanError } from '../errors'
 
@@ -60,6 +60,30 @@ describe('local provider conflict detection', () => {
     expect(v1.version).toBe('1')
     const v2 = await provider.updateTask(created.id, { title: 'b' })
     expect(v2.version).toBe('2')
+  })
+
+  test('bulkMoveAll bumps the task version so a stale expectedVersion conflicts', async () => {
+    const created = await provider.createTask({ title: 'T1', column: 'backlog' })
+    expect(created.version).toBe('0')
+
+    const { moved } = bulkMoveAll(db, 'backlog', 'in-progress')
+    expect(moved).toBe(1)
+
+    // The move is a real mutation, so the version must change.
+    const after = await provider.getTask(created.id)
+    expect(after.version).toBe('1')
+
+    let err: unknown
+    try {
+      await provider.updateTask(created.id, {
+        title: 'stale',
+        expectedVersion: created.version ?? undefined,
+      })
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(KanbanError)
+    expect((err as KanbanError).code).toBe(ErrorCode.CONFLICT)
   })
 
   // moveTask(id, column) intentionally has no expectedVersion parameter, so moves

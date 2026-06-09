@@ -697,7 +697,7 @@ export function bulkMoveAll(
     .all({ $col: fromCol.id }) as { id: string }[]
 
   const stmt = db.prepare(
-    "UPDATE tasks SET column_id = $toCol, position = $pos, updated_at = datetime('now') WHERE id = $id",
+    "UPDATE tasks SET column_id = $toCol, position = $pos, updated_at = datetime('now'), revision = revision + 1 WHERE id = $id",
   )
   db.transaction(() => {
     tasks.forEach(({ id }, i) => {
