@@ -115,6 +115,60 @@ describe('createTrackerCore', () => {
     expect(seenCommentBody === 'visible comment').toBe(true)
   })
 
+  test('filters board tasks via policy and reports the visible task count', async () => {
+    const visible = addTask(db, 'visible task')
+    addTask(db, 'hidden task')
+    const hookResults: Array<{ tool: string; result?: Record<string, unknown> }> = []
+
+    const core = createTrackerCore<TestScope>({
+      provider,
+      policy: {
+        canReadTicket() {},
+        canPostComment() {},
+        canUpdateComment() {},
+        canMoveTicket() {},
+        filterTask(_scope, task) {
+          return task.title.startsWith('visible')
+        },
+      },
+      hooks: {
+        onToolResult(event) {
+          hookResults.push({ tool: event.tool, result: event.result })
+        },
+      },
+    })
+
+    const board = await core.handlers.getBoard({ scope: { actor: 'agent' } })
+    const tasks = board.columns.flatMap((column) => column.tasks)
+
+    expect(tasks.map((task) => task.id)).toEqual([visible.id])
+    expect(hookResults).toEqual([{ tool: 'getBoard', result: { taskCount: 1 } }])
+  })
+
+  test('denies board reads when canReadBoard throws', async () => {
+    addTask(db, 'Core task')
+    const core = createTrackerCore<TestScope>({
+      provider,
+      policy: {
+        canReadTicket() {},
+        canPostComment() {},
+        canUpdateComment() {},
+        canMoveTicket() {},
+        canReadBoard() {
+          throw new TrackerMcpError({
+            code: 'policy_denied',
+            publicMessage: 'forbidden_board',
+          })
+        },
+      },
+    })
+
+    await expect(core.handlers.getBoard({ scope: { actor: 'agent' } })).rejects.toMatchObject({
+      code: 'policy_denied',
+      publicMessage: 'forbidden_board',
+    })
+  })
+
   test('normalizes policy denials into TrackerMcpError and reports them through hooks', async () => {
     const task = addTask(db, 'Core task')
     const toolErrors: Array<{ tool: string; code: string; message?: string }> = []

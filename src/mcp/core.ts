@@ -1,5 +1,5 @@
 import type { KanbanProvider } from '../providers/types'
-import type { Task, TaskComment } from '../types'
+import type { BoardView, Task, TaskComment } from '../types'
 import * as useCases from '../use-cases'
 import { TrackerMcpError, toTrackerMcpError } from './errors'
 import type { TrackerMcpHooks, TrackerMcpPolicy } from './types'
@@ -50,6 +50,21 @@ async function filterComments<TScope>(
     comments.map((comment) => policy.filterComment!(scope, comment)),
   )
   return comments.filter((_, index) => allowed[index])
+}
+
+async function filterBoard<TScope>(
+  scope: TScope,
+  board: BoardView,
+  policy: TrackerMcpPolicy<TScope>,
+): Promise<BoardView> {
+  if (!policy.filterTask) return board
+  const columns = await Promise.all(
+    board.columns.map(async (column) => {
+      const allowed = await Promise.all(column.tasks.map((task) => policy.filterTask!(scope, task)))
+      return { ...column, tasks: column.tasks.filter((_, index) => allowed[index]) }
+    }),
+  )
+  return { ...board, columns }
 }
 
 export function createTrackerCore<TScope>(input: {
@@ -146,7 +161,14 @@ export function createTrackerCore<TScope>(input: {
         return runTool({
           scope,
           tool: 'getBoard',
-          execute: async () => useCases.getBoard(provider),
+          execute: async () => {
+            await policy.canReadBoard?.(scope)
+            const board = await useCases.getBoard(provider)
+            return filterBoard(scope, board, policy)
+          },
+          resultMeta: (board) => ({
+            taskCount: board.columns.reduce((total, column) => total + column.tasks.length, 0),
+          }),
         })
       },
 

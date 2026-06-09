@@ -1,6 +1,6 @@
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js'
 import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation'
-import type { TaskComment } from '../types'
+import type { Task, TaskComment } from '../types'
 import type { TrackerMcpError, TrackerMcpErrorCode } from './errors'
 
 export type TrackerMcpAuthResolver<TScope> = (ctx: {
@@ -20,6 +20,17 @@ export interface TrackerMcpPolicy<TScope> {
   ): Promise<void> | void
   canMoveTicket(scope: TScope, ticketId: string, destinationColumn: string): Promise<void> | void
   filterComment?(scope: TScope, comment: TaskComment): Promise<boolean> | boolean
+  /**
+   * Gate the aggregate board read. Throw to deny access to the whole board.
+   * Omit to allow board reads (individual tickets can still be hidden via `filterTask`).
+   */
+  canReadBoard?(scope: TScope): Promise<void> | void
+  /**
+   * Decide whether a single board task is visible to this scope. Return `false`
+   * to drop it from `getBoard`. Without this, the board exposes every ticket,
+   * bypassing per-ticket `canReadTicket` gates.
+   */
+  filterTask?(scope: TScope, task: Task): Promise<boolean> | boolean
 }
 
 export interface TrackerMcpHooks<TScope> {
