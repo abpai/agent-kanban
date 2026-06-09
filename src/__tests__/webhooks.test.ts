@@ -690,8 +690,8 @@ describe('Linear webhook', () => {
   })
 })
 
-describe('webhook fail-closed when secret is unset', () => {
-  test('Jira rejects unauthenticated webhooks when JIRA_WEBHOOK_SECRET is unset', async () => {
+describe('webhook open dev mode when secret is unset', () => {
+  test('Jira accepts webhooks when JIRA_WEBHOOK_SECRET is unset', async () => {
     const prev = process.env['JIRA_WEBHOOK_SECRET']
     delete process.env['JIRA_WEBHOOK_SECRET']
     try {
@@ -703,17 +703,33 @@ describe('webhook fail-closed when secret is unset', () => {
         apiToken: jiraConfig.apiToken,
       })
       const provider = new JiraProvider(db, jiraConfig, client)
-      const body = JSON.stringify({ webhookEvent: 'jira:issue_created', issue: { id: '1' } })
+      const body = JSON.stringify({
+        webhookEvent: 'jira:issue_created',
+        issue: {
+          id: '100',
+          key: 'ENG-100',
+          fields: {
+            summary: 'New issue',
+            status: { id: '1', name: 'To Do' },
+            issuetype: { id: '10000', name: 'Task' },
+            assignee: null,
+            labels: [],
+            comment: { total: 0 },
+            created: '2025-02-01T00:00:00.000Z',
+            updated: '2025-02-01T00:00:00.000Z',
+            project: { id: '1', key: 'ENG' },
+          },
+        },
+      })
       const result = await provider.handleWebhook({ headers: {}, rawBody: body })
-      expect(result.handled).toBe(false)
-      expect(result.unauthorized).toBe(true)
+      expect(result.unauthorized).not.toBe(true)
     } finally {
       if (prev === undefined) delete process.env['JIRA_WEBHOOK_SECRET']
       else process.env['JIRA_WEBHOOK_SECRET'] = prev
     }
   })
 
-  test('Linear rejects unauthenticated webhooks when LINEAR_WEBHOOK_SECRET is unset', async () => {
+  test('Linear accepts webhooks when LINEAR_WEBHOOK_SECRET is unset', async () => {
     const prev = process.env['LINEAR_WEBHOOK_SECRET']
     delete process.env['LINEAR_WEBHOOK_SECRET']
     try {
@@ -721,9 +737,9 @@ describe('webhook fail-closed when secret is unset', () => {
       seedLinear(db)
       const provider = new LinearProvider(db, 'tid', 'key')
       const body = JSON.stringify({ action: 'create', type: 'Issue', data: { id: 'i1' } })
-      const result = await provider.handleWebhook({ headers: {}, rawBody: body })
-      expect(result.handled).toBe(false)
-      expect(result.unauthorized).toBe(true)
+      // Auth passes; downstream may fail for other reasons (e.g. API credentials)
+      const result = await provider.handleWebhook({ headers: {}, rawBody: body }).catch(() => null)
+      expect(result?.unauthorized).not.toBe(true)
     } finally {
       if (prev === undefined) delete process.env['LINEAR_WEBHOOK_SECRET']
       else process.env['LINEAR_WEBHOOK_SECRET'] = prev

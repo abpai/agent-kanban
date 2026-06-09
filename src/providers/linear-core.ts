@@ -579,6 +579,11 @@ export class LinearProviderCore implements KanbanProvider {
   // Shared webhook dispatch. Postgres wraps this with webhook-event auditing;
   // SQLite calls it directly via the default handleWebhook above.
   protected async handleWebhookCore(payload: WebhookRequest): Promise<WebhookResult> {
+    if (!process.env['LINEAR_WEBHOOK_SECRET']) {
+      console.warn(
+        '[linear] LINEAR_WEBHOOK_SECRET is not set — accepting webhook without signature verification (open dev mode)',
+      )
+    }
     const auth = authorizeWebhook({
       secret: process.env['LINEAR_WEBHOOK_SECRET'],
       rawBody: payload.rawBody,
