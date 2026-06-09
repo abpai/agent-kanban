@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2 - 2026-06-09
+
+- Webhook authorization now accepts payloads when no signing secret is
+  configured (open dev mode), instead of failing closed. When a secret is set,
+  HMAC signature verification still runs unchanged. A `console.warn` is emitted
+  per-request when the secret env var is absent so misconfigured production
+  deployments are visible in logs.
+
 ## 0.6.1 - 2026-06-08
 
 - Added optional bearer-token authentication and CORS controls for the HTTP API,
