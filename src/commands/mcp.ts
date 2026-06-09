@@ -9,6 +9,7 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import { createTrackerCore, defaultTools, TrackerMcpError } from '../mcp/index'
 import type { TrackerMcpPolicy, TrackerMcpTool } from '../mcp/index'
 import type { KanbanProvider } from '../providers/types'
+import { VERSION } from '../version'
 
 type LocalScope = Record<string, never>
 
@@ -38,7 +39,7 @@ export async function startStdioMcpServer(provider: KanbanProvider): Promise<voi
   )
 
   const server = new Server(
-    { name: 'agent-kanban', version: '1.0.0' },
+    { name: 'agent-kanban', version: VERSION },
     { capabilities: { tools: {} } },
   )
 
