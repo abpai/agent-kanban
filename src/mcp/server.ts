@@ -16,6 +16,7 @@ import type {
 import type { TrackerCore } from './core'
 import { TrackerMcpError, toMcpError, toTrackerMcpError, trackerMcpJsonRpcCode } from './errors'
 import type { TrackerMcpAuthResolver, TrackerMcpServer, TrackerMcpTool } from './types'
+import { VERSION } from '../version'
 
 const EMPTY_OBJECT_SCHEMA = {
   type: 'object',
@@ -169,7 +170,7 @@ function createSessionServer<TScope>(
   entry: SessionEntry<TScope>,
 ): Server {
   const server = new Server(
-    { name: 'agent-kanban-tracker-mcp', version: '1.0.0' },
+    { name: 'agent-kanban-tracker-mcp', version: VERSION },
     { capabilities: { tools: {} } },
   )
 

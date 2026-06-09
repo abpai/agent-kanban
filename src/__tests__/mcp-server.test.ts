@@ -5,6 +5,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { addTask, initSchema, seedDefaultColumns } from '../db'
 import { createTrackerCore, createTrackerMcpServer, TrackerMcpError } from '../mcp/index'
 import { LocalProvider } from '../providers/local'
+import { VERSION } from '../version'
 
 interface TestScope {
   actor: string
@@ -124,6 +125,22 @@ describe('createTrackerMcpServer', () => {
           title: 'MCP task',
         }),
       )
+    } finally {
+      await client.close()
+      await runtime.close()
+    }
+  })
+
+  test('advertises the package version rather than a hard-coded one', async () => {
+    const runtime = startTrackerServer()
+    const transport = new StreamableHTTPClientTransport(runtime.url, {
+      requestInit: { headers: { Authorization: 'Bearer good-token' } },
+    })
+    const client = new Client({ name: 'test-client', version: '1.0.0' })
+
+    try {
+      await client.connect(transport)
+      expect(client.getServerVersion()?.version).toBe(VERSION)
     } finally {
       await client.close()
       await runtime.close()
