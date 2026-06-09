@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.6.3 - 2026-06-09
+
+- Linear `updateTask`/`moveTask` now hydrate only the mutated issue via a new
+  `client.getIssue()` instead of forcing a whole-team `sync(true)` reconcile.
+  The targeted re-fetch upserts the single row and ingests just that issue's
+  history; it drops the local row and reports `TASK_NOT_FOUND` when the issue
+  vanished upstream or moved out of the configured team. Sync metadata is left
+  untouched so the next delta poll is unaffected.
+- The Postgres local provider's `listTasks()` now pushes column/priority/
+  assignee/project filters, a whitelisted `ORDER BY`, and `LIMIT` into SQL
+  rather than loading the whole table and filtering in JS, and derives
+  `comment_count` via a correlated subquery scoped to the returned rows. The
+  `updated` sort now matches SQLite's ascending order for cross-backend parity.
+- Extracted a shared `metrics-spec` (`classifyColumnRoles`/`assembleBoardMetrics`)
+  so SQLite and Postgres feed raw aggregates through one assembler that owns
+  every derived field. This removes hand-maintained drift — Postgres
+  `tasksByPriority` now orders by severity like SQLite, and its in-progress
+  count derives by column id so duplicate column names can no longer inflate it.
+- Linear fixes: count comments beyond the inline first page, paginate the user
+  and project catalogs, and reject unresolved assignee/project names instead of
+  silently dropping them.
+- Postgres fixes: record local activity at parity with SQLite, advertise
+  `columnCrud`/`bulk`/`configEdit` as unsupported (and refuse config edits),
+  migrate pre-existing `tasks` tables for project/revision columns, and bump the
+  board revision on bulk moves.
+- Transport hardening: validate `limit` inputs at the transport boundary and
+  route malformed JSON bodies through the structured error envelope.
+- UI fixes: support labels when creating a task, and normalize non-JSON and
+  failed responses into `ApiError`.
+- MCP: advertise the package version in MCP metadata and gate `getBoard` reads
+  through the policy seam.
+- Config: reject duplicate default column names.
+
 ## 0.6.2 - 2026-06-09
 
 - Webhook authorization now accepts payloads when no signing secret is
