@@ -113,6 +113,20 @@ describe('postgres local provider', () => {
     expect(comments[0]!.body).toBe('Projection comment stored in Postgres')
   })
 
+  pgTest('reports configEdit:false and refuses config edits', async () => {
+    const runtime = await openKanbanRuntime()
+    try {
+      const context = await runtime.provider.getContext()
+      expect(context.capabilities.configEdit).toBe(false)
+
+      await expect(runtime.provider.patchConfig({ projects: ['Anything'] })).rejects.toMatchObject({
+        code: 'UNSUPPORTED_OPERATION',
+      })
+    } finally {
+      await runtime.close()
+    }
+  })
+
   pgTest('migrates a pre-existing tasks table missing project/labels/revision', async () => {
     // Simulate an older Postgres-local database created before project, labels,
     // and revision columns existed. CREATE TABLE IF NOT EXISTS would not add
