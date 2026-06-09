@@ -25,11 +25,21 @@ function parseOptionalInt(value: string | null): number | undefined {
   return value ? parseInt(value, 10) : undefined
 }
 
-function missingArgument(field: string): Response {
-  return json(
-    { ok: false, error: { code: 'MISSING_ARGUMENT', message: `${field} is required` } },
-    400,
-  )
+function requireArgument(value: unknown, field: string): void {
+  if (!value) {
+    throw new KanbanError(ErrorCode.MISSING_ARGUMENT, `${field} is required`)
+  }
+}
+
+// Parse a JSON request body inside a wrapHandler scope so malformed/empty/
+// wrong-content-type bodies surface through the same { ok:false, error }
+// envelope as every other validation failure instead of escaping as a raw 500.
+async function parseJsonBody<T>(req: Request): Promise<T> {
+  try {
+    return (await req.json()) as T
+  } catch {
+    throw new KanbanError(ErrorCode.INVALID_REQUEST_BODY, 'Request body must be valid JSON')
+  }
 }
 
 function statusForCode(code: string): number {
@@ -149,10 +159,10 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
   }
 
   if (path === '/api/tasks' && method === 'POST') {
-    const body = (await req.json()) as Partial<CreateTaskInput>
-    if (!body.title) return { response: missingArgument('title'), mutated: false }
     let created: Task | null = null
     const response = await wrapHandler(async () => {
+      const body = await parseJsonBody<Partial<CreateTaskInput>>(req)
+      requireArgument(body.title, 'title')
       created = await useCases.createTask(provider, {
         title: body.title!,
         description: body.description,
@@ -184,9 +194,9 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     }
 
     if (method === 'PATCH') {
-      const body = (await req.json()) as UpdateTaskInput
       let updated: Task | null = null
       const response = await wrapHandler(async () => {
+        const body = await parseJsonBody<UpdateTaskInput>(req)
         updated = await useCases.updateTask(provider, id, body)
         return { ok: true, data: updated }
       })
@@ -207,10 +217,10 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
   const moveMatch = path.match(/^\/api\/tasks\/([^/]+)\/move$/)
   if (moveMatch && method === 'PATCH') {
     const id = decodeURIComponent(moveMatch[1]!)
-    const body = (await req.json()) as MoveTaskBody
-    if (!body.column) return { response: missingArgument('column'), mutated: false }
     let moved: Task | null = null
     const response = await wrapHandler(async () => {
+      const body = await parseJsonBody<MoveTaskBody>(req)
+      requireArgument(body.column, 'column')
       moved = await useCases.moveTask(provider, id, body.column!)
       return { ok: true, data: moved }
     })
@@ -232,12 +242,11 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     }
 
     if (method === 'POST') {
-      const body = (await req.json()) as CommentBody
-      if (!body.body) return { response: missingArgument('body'), mutated: false }
-      const response = await wrapHandler(async () => ({
-        ok: true,
-        data: await useCases.addComment(provider, id, body.body!),
-      }))
+      const response = await wrapHandler(async () => {
+        const body = await parseJsonBody<CommentBody>(req)
+        requireArgument(body.body, 'body')
+        return { ok: true, data: await useCases.addComment(provider, id, body.body!) }
+      })
       return { response, mutated: response.ok }
     }
   }
@@ -248,12 +257,11 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     const commentId = decodeURIComponent(commentMatch[2]!)
 
     if (method === 'PATCH') {
-      const body = (await req.json()) as CommentBody
-      if (!body.body) return { response: missingArgument('body'), mutated: false }
-      const response = await wrapHandler(async () => ({
-        ok: true,
-        data: await useCases.updateComment(provider, id, commentId, body.body!),
-      }))
+      const response = await wrapHandler(async () => {
+        const body = await parseJsonBody<CommentBody>(req)
+        requireArgument(body.body, 'body')
+        return { ok: true, data: await useCases.updateComment(provider, id, commentId, body.body!) }
+      })
       return { response, mutated: response.ok }
     }
   }
@@ -290,11 +298,10 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
   }
 
   if (path === '/api/config' && method === 'PATCH') {
-    const body = (await req.json()) as Partial<BoardConfig>
-    const response = await wrapHandler(async () => ({
-      ok: true,
-      data: await useCases.patchConfig(provider, body),
-    }))
+    const response = await wrapHandler(async () => {
+      const body = await parseJsonBody<Partial<BoardConfig>>(req)
+      return { ok: true, data: await useCases.patchConfig(provider, body) }
+    })
     return { response, mutated: response.ok }
   }
 
