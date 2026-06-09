@@ -4,6 +4,7 @@
 
 # Local scratch / experiments
 .scratch/
+.workflow/
 
 # General
 .DS_Store
