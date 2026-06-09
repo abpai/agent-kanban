@@ -170,6 +170,9 @@ export class JiraProviderCore implements KanbanProvider {
   // When a server-side background warmer owns cache refresh, request-path syncs
   // are suppressed once the cache is warm so reads/writes never block on Jira I/O.
   private backgroundManaged = false
+  // (project:statusId) pairs already warned about as unmapped, so a recurring
+  // unmapped status logs once per provider lifetime rather than every sync.
+  private readonly warnedUnmappedStatuses = new Set<string>()
 
   constructor(
     protected readonly cache: JiraCachePort,
@@ -215,10 +218,16 @@ export class JiraProviderCore implements KanbanProvider {
     await this.cache.saveTeamInfo({ id: project.id, key: project.key, name: project.name })
 
     // 2. Columns: board path OR status fallback path.
+    // The projection buckets issues by status-id membership in a column's
+    // status_ids; a status id present on an issue but in no column is cached but
+    // invisible to every listTasks({column}). Track the mapped set so we can
+    // surface such unmapped statuses below instead of dropping them silently.
+    const mappedStatusIds = new Set<string>()
     if (this.config.boardId !== undefined) {
       const boardCfg = await this.client.getBoardColumns(this.config.boardId)
       const boardId = this.config.boardId
       const rows = jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns)
+      for (const row of rows) for (const id of row.statusIds) mappedStatusIds.add(id)
       await this.cache.replaceColumns(rows, fullReconcile)
     } else {
       const statusCats = await this.client.getProjectStatuses(project.key)
@@ -238,8 +247,11 @@ export class JiraProviderCore implements KanbanProvider {
         statusIds: [s.id],
         source: 'status' as const,
       }))
+      for (const row of rows) for (const id of row.statusIds) mappedStatusIds.add(id)
       await this.cache.replaceColumns(rows, fullReconcile)
     }
+    // Issue statuses seen this sync that map to no column (statusId → name).
+    const unmappedStatuses = new Map<string, string>()
 
     // 3. Catalogs: users + priorities + issue types in parallel.
     // NOTE: listAssignableUsers is capped at 100 in T04; tenants with more
@@ -342,6 +354,9 @@ export class JiraProviderCore implements KanbanProvider {
         if (newestUpdatedAt === null || issue.fields.updated > newestUpdatedAt) {
           newestUpdatedAt = issue.fields.updated
         }
+        if (!mappedStatusIds.has(issue.fields.status.id)) {
+          unmappedStatuses.set(issue.fields.status.id, issue.fields.status.name)
+        }
       }
 
       // Fetch changelog per changed issue so the poll-based
@@ -372,6 +387,15 @@ export class JiraProviderCore implements KanbanProvider {
         )
       }
       break
+    }
+
+    // Surface issues whose status maps to no column. They are cached but invisible
+    // to every listTasks({column}) and getCachedBoard — a silent drop that strands
+    // tickets (e.g. a poller's trigger column never sees them). Warn once per
+    // (project, status) so a misconfigured board or a status missing from the
+    // project's status catalog is observable rather than silent.
+    for (const [statusId, statusName] of unmappedStatuses) {
+      this.warnUnmappedStatus(project.key, statusId, statusName)
     }
 
     if (!paginationComplete) {
@@ -406,6 +430,20 @@ export class JiraProviderCore implements KanbanProvider {
 
   private async resolveColumnId(input: string): Promise<string> {
     return resolveJiraColumnId(await this.cache.getColumns(), input)
+  }
+
+  private warnUnmappedStatus(projectKey: string, statusId: string, statusName: string): void {
+    const key = `${projectKey}:${statusId}`
+    if (this.warnedUnmappedStatuses.has(key)) return
+    this.warnedUnmappedStatuses.add(key)
+    const hint =
+      this.config.boardId !== undefined
+        ? `it is not on board ${this.config.boardId}`
+        : `it is absent from the project status catalog`
+    console.warn(
+      `[jira] ${projectKey} status '${statusName}' (${statusId}) maps to no column (${hint}); ` +
+        `issues in this status are cached but invisible to listTasks/getBoard`,
+    )
   }
 
   private async buildBoardConfig(): Promise<BoardConfig> {
