@@ -1,6 +1,7 @@
 import { KanbanError, ErrorCode } from './errors'
 import type { BoardConfig, CliOutput, Task } from './types'
 import type { CreateTaskInput, UpdateTaskInput, KanbanProvider } from './providers/types'
+import { parsePositiveInt } from './transport-input'
 import * as useCases from './use-cases'
 
 export type WsEvent =
@@ -19,10 +20,6 @@ interface CommentBody {
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status })
-}
-
-function parseOptionalInt(value: string | null): number | undefined {
-  return value ? parseInt(value, 10) : undefined
 }
 
 function requireArgument(value: unknown, field: string): void {
@@ -141,7 +138,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
         const assignee = url.searchParams.get('assignee') ?? undefined
         const project = url.searchParams.get('project') ?? undefined
         const sort = url.searchParams.get('sort') ?? undefined
-        const limit = parseOptionalInt(url.searchParams.get('limit'))
+        const limit = parsePositiveInt(url.searchParams.get('limit'))
         return {
           ok: true,
           data: await useCases.listTasks(provider, {
@@ -270,7 +267,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     return {
       response: await wrapHandler(async () => {
         const taskId = url.searchParams.get('taskId') ?? undefined
-        const limit = parseOptionalInt(url.searchParams.get('limit'))
+        const limit = parsePositiveInt(url.searchParams.get('limit'))
         return { ok: true, data: await useCases.getActivity(provider, limit, taskId) }
       }),
       mutated: false,
