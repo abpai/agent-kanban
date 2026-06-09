@@ -113,6 +113,34 @@ describe('postgres local provider', () => {
     expect(comments[0]!.body).toBe('Projection comment stored in Postgres')
   })
 
+  pgTest('logs activity for project/description/metadata updates and comment writes', async () => {
+    const runtime = await openKanbanRuntime()
+    try {
+      const provider = runtime.provider
+      const created = await provider.createTask({ title: 'Activity task' })
+      await provider.updateTask(created.id, {
+        project: 'Dispatch',
+        description: 'updated description',
+        metadata: '{"k":"v"}',
+      })
+      const comment = await provider.comment(created.id, 'first comment')
+      await provider.updateComment(created.id, comment.id, 'edited comment')
+
+      const activity = await provider.getActivity(50, created.id)
+      const fields = activity.map((entry) => entry.field_changed)
+      expect(fields).toContain('project')
+      expect(fields).toContain('description')
+      expect(fields).toContain('metadata')
+
+      const commentEntries = activity.filter((entry) => entry.field_changed === 'comment')
+      expect(commentEntries).toHaveLength(2)
+      expect(commentEntries.some((entry) => entry.new_value === 'first comment')).toBe(true)
+      expect(commentEntries.some((entry) => entry.new_value === 'edited comment')).toBe(true)
+    } finally {
+      await runtime.close()
+    }
+  })
+
   pgTest('reports configEdit:false and refuses config edits', async () => {
     const runtime = await openKanbanRuntime()
     try {
