@@ -35,6 +35,7 @@ import type {
   UpdateTaskInput,
 } from './types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
+import { warnOnce } from './warn-once'
 
 const FULL_RECONCILIATION_INTERVAL_MS = 5 * 60_000
 
@@ -610,7 +611,8 @@ export class LinearProviderCore implements KanbanProvider {
   // SQLite calls it directly via the default handleWebhook above.
   protected async handleWebhookCore(payload: WebhookRequest): Promise<WebhookResult> {
     if (!process.env['LINEAR_WEBHOOK_SECRET']) {
-      console.warn(
+      warnOnce(
+        'linear-webhook-open-dev-mode',
         '[linear] LINEAR_WEBHOOK_SECRET is not set — accepting webhook without signature verification (open dev mode)',
       )
     }
