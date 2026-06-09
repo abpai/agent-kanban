@@ -170,7 +170,10 @@ export class PostgresLocalProvider implements KanbanProvider {
         exited_at TEXT
       )
     `
-    await this.sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS labels TEXT NOT NULL DEFAULT '[]'`
+    // Run column migrations before creating indexes — pre-existing databases
+    // miss columns added after the original tasks table, and CREATE TABLE IF NOT
+    // EXISTS won't add them (parity with SQLite migrateSchema).
+    await this.migrateTasksTable()
     await this.sql`CREATE INDEX IF NOT EXISTS idx_tasks_column_id ON tasks(column_id)`
     await this.sql`CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)`
     await this.sql`CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)`
@@ -180,6 +183,14 @@ export class PostgresLocalProvider implements KanbanProvider {
     await this.sql`CREATE INDEX IF NOT EXISTS idx_comments_task_id ON comments(task_id)`
     await this
       .sql`CREATE INDEX IF NOT EXISTS idx_column_time_task_id ON column_time_tracking(task_id)`
+  }
+
+  // Backfill columns added after the original tasks table shipped. Keep this in
+  // lockstep with src/db.ts:migrateSchema (project, labels, revision).
+  private async migrateTasksTable(): Promise<void> {
+    await this.sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project TEXT NOT NULL DEFAULT ''`
+    await this.sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS labels TEXT NOT NULL DEFAULT '[]'`
+    await this.sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0`
   }
 
   private async seedDefaultColumns(): Promise<void> {
