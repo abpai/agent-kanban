@@ -88,17 +88,27 @@ describe('LinearProvider sync', () => {
       }
 
       if (body.query.includes('query Users')) {
-        return new Response(JSON.stringify({ data: { users: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Projects')) {
-        return new Response(JSON.stringify({ data: { projects: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Issues')) {
@@ -207,6 +217,107 @@ describe('LinearProvider sync', () => {
     expect(createIssueInput.current?.labelIds).toEqual(['label-smoke', 'label-owner'])
     expect(created.externalRef).toBe('R2P-1')
     expect(created.labels).toEqual(['garage-smoke', 'garage-owner-local'])
+  })
+
+  test('paginates users and projects across multiple pages', async () => {
+    let userPages = 0
+    let projectPages = 0
+    const seenUserAfter: Array<string | null> = []
+    const seenProjectAfter: Array<string | null> = []
+
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string
+        variables: Record<string, unknown>
+      }
+
+      if (body.query.includes('query TeamSnapshot')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              team: {
+                id: 'team-1',
+                key: 'R2P',
+                name: 'R2pi',
+                states: { nodes: [{ id: 'state-1', name: 'Todo', position: 0 }] },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+
+      if (body.query.includes('query Users')) {
+        userPages += 1
+        const after = (body.variables.after as string | null) ?? null
+        seenUserAfter.push(after)
+        const page = after
+          ? {
+              nodes: [{ id: 'u2', displayName: 'User Two', active: true }],
+              hasNextPage: false,
+              endCursor: null,
+            }
+          : {
+              nodes: [{ id: 'u1', displayName: 'User One', active: true }],
+              hasNextPage: true,
+              endCursor: 'cursor-u1',
+            }
+        return new Response(
+          JSON.stringify({
+            data: {
+              users: {
+                nodes: page.nodes,
+                pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+
+      if (body.query.includes('query Projects')) {
+        projectPages += 1
+        const after = (body.variables.after as string | null) ?? null
+        seenProjectAfter.push(after)
+        const page = after
+          ? { nodes: [{ id: 'p2', name: 'Project Two' }], hasNextPage: false, endCursor: null }
+          : {
+              nodes: [{ id: 'p1', name: 'Project One' }],
+              hasNextPage: true,
+              endCursor: 'cursor-p1',
+            }
+        return new Response(
+          JSON.stringify({
+            data: {
+              projects: {
+                nodes: page.nodes,
+                pageInfo: { hasNextPage: page.hasNextPage, endCursor: page.endCursor },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+
+      if (body.query.includes('query Issues')) {
+        return new Response(
+          JSON.stringify({
+            data: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
+    await provider.getBoard()
+
+    expect(userPages).toBe(2)
+    expect(seenUserAfter).toEqual([null, 'cursor-u1'])
+    expect(projectPages).toBe(2)
+    expect(seenProjectAfter).toEqual([null, 'cursor-p1'])
   })
 
   test('createTask rejects an unknown assignee instead of silently dropping it', async () => {
@@ -319,16 +430,26 @@ describe('LinearProvider sync', () => {
         )
       }
       if (body.query.includes('query Users')) {
-        return new Response(JSON.stringify({ data: { users: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
       if (body.query.includes('query Projects')) {
-        return new Response(JSON.stringify({ data: { projects: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
       if (body.query.includes('query Issues')) {
         return new Response(
@@ -419,17 +540,27 @@ describe('LinearProvider sync', () => {
       }
 
       if (body.query.includes('query Users')) {
-        return new Response(JSON.stringify({ data: { users: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Projects')) {
-        return new Response(JSON.stringify({ data: { projects: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Issues')) {
@@ -524,17 +655,27 @@ describe('LinearProvider sync', () => {
       }
 
       if (body.query.includes('query Users')) {
-        return new Response(JSON.stringify({ data: { users: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Projects')) {
-        return new Response(JSON.stringify({ data: { projects: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Issues')) {
@@ -622,17 +763,27 @@ describe('LinearProvider sync', () => {
       }
 
       if (body.query.includes('query Users')) {
-        return new Response(JSON.stringify({ data: { users: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Projects')) {
-        return new Response(JSON.stringify({ data: { projects: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Issues')) {
@@ -700,17 +851,27 @@ describe('LinearProvider sync', () => {
       }
 
       if (body.query.includes('query Users')) {
-        return new Response(JSON.stringify({ data: { users: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Projects')) {
-        return new Response(JSON.stringify({ data: { projects: { nodes: [] } } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
       }
 
       if (body.query.includes('query Issues')) {

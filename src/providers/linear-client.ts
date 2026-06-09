@@ -183,58 +183,80 @@ export class LinearClient {
   }
 
   async listUsers(): Promise<Array<{ id: string; name: string; active?: boolean }>> {
-    const data = await this.query<{
-      users: {
-        nodes: Array<{
-          id: string
-          name?: string | null
-          displayName?: string | null
-          active?: boolean | null
-        }>
-      }
-    }>(
-      `
-        query Users {
-          users {
-            nodes {
-              id
-              name
-              displayName
-              active
+    type UserNode = {
+      id: string
+      name?: string | null
+      displayName?: string | null
+      active?: boolean | null
+    }
+    let after: string | null = null
+    const users: Array<{ id: string; name: string; active?: boolean }> = []
+
+    do {
+      const data: { users: { nodes: UserNode[]; pageInfo: PageInfo } } = await this.query(
+        `
+          query Users($after: String) {
+            users(first: 100, after: $after) {
+              nodes {
+                id
+                name
+                displayName
+                active
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
             }
           }
-        }
-      `,
-    )
-    return data.users.nodes.map((user) => ({
-      id: user.id,
-      name: user.displayName || user.name || user.id,
-      active: user.active ?? true,
-    }))
+        `,
+        { after },
+      )
+      for (const user of data.users.nodes) {
+        users.push({
+          id: user.id,
+          name: user.displayName || user.name || user.id,
+          active: user.active ?? true,
+        })
+      }
+      after = data.users.pageInfo.hasNextPage ? data.users.pageInfo.endCursor : null
+    } while (after)
+
+    return users
   }
 
   async listProjects(): Promise<
     Array<{ id: string; name: string; url?: string | null; state?: string | null }>
   > {
-    const data = await this.query<{
-      projects: {
-        nodes: Array<{ id: string; name: string; url?: string | null; state?: string | null }>
-      }
-    }>(
-      `
-        query Projects {
-          projects {
-            nodes {
-              id
-              name
-              url
-              state
+    type ProjectNode = { id: string; name: string; url?: string | null; state?: string | null }
+    let after: string | null = null
+    const projects: ProjectNode[] = []
+
+    do {
+      const data: { projects: { nodes: ProjectNode[]; pageInfo: PageInfo } } = await this.query(
+        `
+          query Projects($after: String) {
+            projects(first: 100, after: $after) {
+              nodes {
+                id
+                name
+                url
+                state
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
             }
           }
-        }
-      `,
-    )
-    return data.projects.nodes
+        `,
+        { after },
+      )
+      projects.push(...data.projects.nodes)
+      after = data.projects.pageInfo.hasNextPage ? data.projects.pageInfo.endCursor : null
+    } while (after)
+
+    return projects
   }
 
   async listIssueLabels(): Promise<LinearIssueLabel[]> {

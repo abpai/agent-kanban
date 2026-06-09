@@ -106,10 +106,14 @@ function linearFetchStub(calls: LinearStubCall[] = []): typeof fetch {
       return Response.json({ data: { team } })
     }
     if (query.includes('query Users')) {
-      return Response.json({ data: { users } })
+      return Response.json({
+        data: { users: { ...users, pageInfo: { hasNextPage: false, endCursor: null } } },
+      })
     }
     if (query.includes('query Projects')) {
-      return Response.json({ data: { projects } })
+      return Response.json({
+        data: { projects: { ...projects, pageInfo: { hasNextPage: false, endCursor: null } } },
+      })
     }
     if (query.includes('query IssueLabels')) {
       return Response.json({
