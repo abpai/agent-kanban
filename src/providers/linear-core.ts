@@ -18,7 +18,12 @@ import {
   type WebhookResult,
 } from '../webhooks'
 import { LINEAR_CAPABILITIES } from './capabilities'
-import { LinearClient, resolveLabelIdsForCreate, type LinearComment } from './linear-client'
+import {
+  LinearClient,
+  resolveLabelIdsForCreate,
+  type LinearComment,
+  type LinearIssue,
+} from './linear-client'
 import type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
 import { providerUpstreamError, unsupportedOperation } from './errors'
 import type {
@@ -58,6 +63,33 @@ function toLinearPriority(priority: Task['priority'] | undefined): number | unde
       return 4
     default:
       return undefined
+  }
+}
+
+type CacheIssue = Parameters<LinearCachePort['upsertIssues']>[0][number]
+
+// Map a Linear API issue to the cache upsert row. Shared by the bulk sync and
+// the single-issue hydrate path so a read-after-write refresh caches exactly the
+// same shape as a full sync.
+function toCacheIssue(issue: LinearIssue): CacheIssue {
+  return {
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    description: issue.description ?? '',
+    priority: issue.priority ?? 0,
+    assigneeId: issue.assignee?.id ?? null,
+    assigneeName: issue.assignee?.name ?? null,
+    projectId: issue.project?.id ?? null,
+    projectName: issue.project?.name ?? null,
+    stateId: issue.state.id,
+    stateName: issue.state.name,
+    statePosition: issue.state.position,
+    labels: issue.labels ?? [],
+    commentCount: issue.commentCount,
+    url: issue.url ?? null,
+    createdAt: issue.createdAt,
+    updatedAt: issue.updatedAt,
   }
 }
 
@@ -179,8 +211,10 @@ export class LinearProviderCore implements KanbanProvider {
     const now = Date.now()
     if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
 
+    // `force` bypasses the poll throttle (above) for read-after-write freshness,
+    // but does NOT imply a full workspace reconcile — that stays on its own
+    // cadence so a single write isn't coupled to team-wide prune/refetch.
     const shouldFullSync =
-      force ||
       !lastFullSyncAtMs ||
       !meta.lastIssueUpdatedAt ||
       now - lastFullSyncAtMs >= FULL_RECONCILIATION_INTERVAL_MS
@@ -198,27 +232,7 @@ export class LinearProviderCore implements KanbanProvider {
     await this.cache.replaceStates(team.states)
     await this.cache.upsertUsers(users)
     await this.cache.upsertProjects(projects)
-    await this.cache.upsertIssues(
-      issues.map((issue) => ({
-        id: issue.id,
-        identifier: issue.identifier,
-        title: issue.title,
-        description: issue.description ?? '',
-        priority: issue.priority ?? 0,
-        assigneeId: issue.assignee?.id ?? null,
-        assigneeName: issue.assignee?.name ?? null,
-        projectId: issue.project?.id ?? null,
-        projectName: issue.project?.name ?? null,
-        stateId: issue.state.id,
-        stateName: issue.state.name,
-        statePosition: issue.state.position,
-        labels: issue.labels ?? [],
-        commentCount: issue.commentCount,
-        url: issue.url ?? null,
-        createdAt: issue.createdAt,
-        updatedAt: issue.updatedAt,
-      })),
-    )
+    await this.cache.upsertIssues(issues.map(toCacheIssue))
     if (shouldFullSync) {
       await this.cache.pruneIssues(issues.map((issue) => issue.id))
     }
@@ -302,6 +316,31 @@ export class LinearProviderCore implements KanbanProvider {
       throw new KanbanError(ErrorCode.TASK_NOT_FOUND, `No task with id '${idOrRef}'`)
     }
     return task
+  }
+
+  // Read-after-write refresh of a single issue. Re-fetching just the mutated
+  // issue (and its history) keeps the post-write read fresh without paying for a
+  // full team sync(true)/prune on every update or move.
+  private async hydrateIssue(issueId: string): Promise<Task> {
+    const issue = await this.client.getIssue(issueId)
+    // Mirror the bulk sync's team scoping: it only caches issues from the
+    // configured team. If the issue vanished upstream or moved out of the team,
+    // drop the now out-of-scope local row instead of re-caching it, matching what
+    // a full reconcile would eventually prune.
+    if (!issue || (issue.teamId && issue.teamId !== (await this.resolvedTeamId()))) {
+      await this.cache.deleteIssue(issueId)
+      throw new KanbanError(ErrorCode.TASK_NOT_FOUND, `No task with id '${issueId}'`)
+    }
+    await this.cache.upsertIssues([toCacheIssue(issue)])
+    // Best-effort changelog ingest for the moved/updated issue so activity stays
+    // current; failures don't fail the write's read-after-write.
+    await this.ingestTeamHistory(
+      [issue.id],
+      (await this.cache.loadSyncMeta()).lastIssueUpdatedAt,
+    ).catch((err) => {
+      console.warn('[linear] issueHistory ingest failed:', err)
+    })
+    return this.resolveTask(issue.id)
   }
 
   private async resolveState(column: string): Promise<Column> {
@@ -442,27 +481,7 @@ export class LinearProviderCore implements KanbanProvider {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear issue creation failed')
     }
     const issue = result.issue
-    await this.cache.upsertIssues([
-      {
-        id: issue.id,
-        identifier: issue.identifier,
-        title: issue.title,
-        description: issue.description ?? '',
-        priority: issue.priority ?? 0,
-        assigneeId: issue.assignee?.id ?? null,
-        assigneeName: issue.assignee?.name ?? issue.assignee?.displayName ?? '',
-        projectId: issue.project?.id ?? null,
-        projectName: issue.project?.name ?? '',
-        stateId: issue.state.id,
-        stateName: issue.state.name,
-        statePosition: issue.state.position,
-        labels: issue.labels ?? [],
-        commentCount: issue.commentCount,
-        url: issue.url ?? null,
-        createdAt: issue.createdAt,
-        updatedAt: issue.updatedAt,
-      },
-    ])
+    await this.cache.upsertIssues([toCacheIssue(issue)])
     return this.resolveTask(issue.id)
   }
 
@@ -492,8 +511,7 @@ export class LinearProviderCore implements KanbanProvider {
     if (!result.success) {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear issue update failed')
     }
-    await this.sync(true)
-    return this.resolveTask(task.providerId || task.id)
+    return this.hydrateIssue(task.providerId || task.id)
   }
 
   async moveTask(idOrRef: string, column: string): Promise<Task> {
@@ -504,8 +522,7 @@ export class LinearProviderCore implements KanbanProvider {
     if (!result.success) {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear issue move failed')
     }
-    await this.sync(true)
-    return this.resolveTask(task.providerId || task.id)
+    return this.hydrateIssue(task.providerId || task.id)
   }
 
   async deleteTask(_idOrRef: string): Promise<Task> {

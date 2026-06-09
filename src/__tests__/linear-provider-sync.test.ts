@@ -41,6 +41,7 @@ function linearIssue(
       nodes: Array<{ id: string }>
       pageInfo?: { hasNextPage: boolean; endCursor: string | null }
     }
+    team: { id: string } | null
   }> = {},
 ) {
   return {
@@ -464,6 +465,12 @@ describe('LinearProvider sync', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         )
       }
+      if (body.query.includes('query IssueById')) {
+        return new Response(JSON.stringify({ data: { issue: linearIssue({ assignee: null }) } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
       if (body.query.includes('query IssueHistory')) {
         return new Response(
           JSON.stringify({
@@ -482,6 +489,53 @@ describe('LinearProvider sync', () => {
 
     expect(updateInputs).toHaveLength(1)
     expect(updateInputs[0]).toHaveProperty('assigneeId', null)
+  })
+
+  test('updateTask drops the cached row when the hydrated issue left the team', async () => {
+    replaceStates(db, [{ id: 'state-1', name: 'Todo', position: 0 }])
+    upsertIssues(db, [
+      {
+        id: 'issue-1',
+        identifier: 'R2P-1',
+        title: 'Linear task',
+        stateId: 'state-1',
+        stateName: 'Todo',
+        statePosition: 0,
+        commentCount: 0,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ])
+    saveSyncMeta(db, {
+      team: { id: 'team-1', key: 'R2P', name: 'R2pi' },
+      lastSyncAt: new Date().toISOString(),
+      lastFullSyncAt: new Date().toISOString(),
+      lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
+    })
+
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { query: string }
+      if (body.query.includes('mutation UpdateIssue')) {
+        return new Response(JSON.stringify({ data: { issueUpdate: { success: true } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (body.query.includes('query IssueById')) {
+        // Upstream reports the issue now belongs to a different team.
+        return new Response(
+          JSON.stringify({ data: { issue: linearIssue({ team: { id: 'team-2' } }) } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
+    await expect(provider.updateTask('R2P-1', { title: 'Renamed' })).rejects.toMatchObject({
+      code: 'TASK_NOT_FOUND',
+    })
+    expect(getCachedTasks(db)).toHaveLength(0)
   })
 
   test('periodic full sync prunes cached issues missing from upstream', async () => {

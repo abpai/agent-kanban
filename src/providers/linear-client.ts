@@ -33,6 +33,7 @@ export interface LinearIssue {
   state: { id: string; name: string; position: number }
   labels?: string[]
   commentCount?: number
+  teamId?: string | null
 }
 
 export interface LinearComment {
@@ -65,6 +66,7 @@ interface LinearIssueNode {
     nodes: Array<{ id: string }>
     pageInfo?: { hasNextPage: boolean; endCursor: string | null }
   } | null
+  team?: { id: string } | null
 }
 
 interface LinearCommentNode {
@@ -86,6 +88,7 @@ function toLinearIssue(node: LinearIssueNode): LinearIssue {
       : null,
     labels: node.labels?.nodes.map((label) => label.name) ?? [],
     commentCount: node.comments?.nodes?.length ?? undefined,
+    teamId: node.team?.id ?? null,
   }
 }
 
@@ -95,6 +98,30 @@ const COMMENT_FIELDS = `
   createdAt
   updatedAt
   user { id name displayName }
+`
+
+// Shared selection set for an issue node, used by listIssues, createIssue, and
+// getIssue so a single-issue hydrate returns exactly the same shape the bulk
+// sync caches. The inline comments page is id-only and capped; callers that
+// need an accurate count follow up via countIssueComments when hasNextPage.
+const ISSUE_NODE_FIELDS = `
+  id
+  identifier
+  title
+  description
+  priority
+  url
+  createdAt
+  updatedAt
+  assignee { id name displayName }
+  project { id name url state }
+  state { id name position }
+  labels { nodes { id name } }
+  comments(first: 250) {
+    nodes { id }
+    pageInfo { hasNextPage endCursor }
+  }
+  team { id }
 `
 
 export class LinearClient {
@@ -315,39 +342,7 @@ export class LinearClient {
                 updatedAt: { gte: $updatedAfter }
               }
             ) {
-              nodes {
-                id
-                identifier
-                title
-                description
-                priority
-                url
-                createdAt
-                updatedAt
-                assignee {
-                  id
-                  name
-                  displayName
-                }
-                project {
-                  id
-                  name
-                  url
-                  state
-                }
-                state {
-                  id
-                  name
-                  position
-                }
-                labels {
-                  nodes { id name }
-                }
-                comments(first: 250) {
-                  nodes { id }
-                  pageInfo { hasNextPage endCursor }
-                }
-              }
+              nodes { ${ISSUE_NODE_FIELDS} }
               pageInfo {
                 hasNextPage
                 endCursor
@@ -416,6 +411,31 @@ export class LinearClient {
     return count
   }
 
+  // Fetch a single issue with the same selection set as the bulk sync so a
+  // read-after-write hydrate can refresh one cache row without a full team
+  // reconcile. Returns null when the issue no longer exists.
+  async getIssue(issueId: string): Promise<LinearIssue | null> {
+    const data = await this.query<{ issue: LinearIssueNode | null }>(
+      `
+        query IssueById($id: String!) {
+          issue(id: $id) { ${ISSUE_NODE_FIELDS} }
+        }
+      `,
+      { id: issueId },
+    )
+    if (!data.issue) return null
+    const issue = toLinearIssue(data.issue)
+    const info = data.issue.comments?.pageInfo
+    if (info?.hasNextPage && info.endCursor) {
+      issue.commentCount = await this.countIssueComments(
+        data.issue.id,
+        info.endCursor,
+        data.issue.comments?.nodes?.length ?? 0,
+      )
+    }
+    return issue
+  }
+
   async createIssue(input: {
     teamId: string
     stateId?: string
@@ -433,24 +453,7 @@ export class LinearClient {
         mutation CreateIssue($input: IssueCreateInput!) {
           issueCreate(input: $input) {
             success
-            issue {
-              id
-              identifier
-              title
-              description
-              priority
-              url
-              createdAt
-              updatedAt
-              assignee { id name displayName }
-              project { id name url state }
-              state { id name position }
-              labels { nodes { id name } }
-              comments(first: 250) {
-                nodes { id }
-                pageInfo { hasNextPage endCursor }
-              }
-            }
+            issue { ${ISSUE_NODE_FIELDS} }
           }
         }
       `,

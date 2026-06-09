@@ -125,6 +125,10 @@ function linearFetchStub(calls: LinearStubCall[] = []): typeof fetch {
         },
       })
     }
+    if (query.includes('query IssueById')) {
+      const issue = issues.find((candidate) => candidate.id === variables.id) ?? null
+      return Response.json({ data: { issue } })
+    }
     if (query.includes('query Issues')) {
       return Response.json({
         data: {
