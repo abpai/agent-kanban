@@ -1,3 +1,4 @@
+import { ErrorCode, KanbanError } from './errors'
 import { providerNotConfigured } from './providers/errors'
 import { resolvePollingSyncIntervalMs } from './sync-config'
 
@@ -100,5 +101,20 @@ function defaultColumnsFromEnv(env: Record<string, string | undefined>): string[
     .split(',')
     .map((name) => name.trim())
     .filter(Boolean)
-  return columns.length > 0 ? columns : undefined
+  if (columns.length === 0) return undefined
+  // Column resolution is case-insensitive (LOWER(name)), and interactive column
+  // creation rejects case-insensitive duplicates. Reject them here too so the
+  // config path can't seed an ambiguous board state the interactive path forbids.
+  const seen = new Set<string>()
+  for (const name of columns) {
+    const key = name.toLowerCase()
+    if (seen.has(key)) {
+      throw new KanbanError(
+        ErrorCode.INVALID_CONFIG,
+        `KANBAN_DEFAULT_COLUMNS contains a duplicate column name (case-insensitive): '${name}'`,
+      )
+    }
+    seen.add(key)
+  }
+  return columns
 }
