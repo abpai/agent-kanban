@@ -1,0 +1,65 @@
+name: Release
+
+# Automated npm releases via Changesets, authenticated with OIDC trusted
+# publishing — no npm token to store, leak, or rotate. The flow:
+#   1. Every change PR includes a changeset (`bun run changeset`) describing the
+#      bump (patch/minor/major) and changelog entry.
+#   2. On merge to main, this workflow opens/updates a "Version Packages" PR
+#      that consumes the changesets, bumps the version, and writes the CHANGELOG.
+#   3. Merging that PR runs `changeset publish` here — publishing to npm and
+#      pushing the git tag. No manual `npm publish`, no OTP prompt.
+#
+# Auth: configure a Trusted Publisher for THIS workflow file (release.yml) on
+# npmjs.com for @andypai/agent-kanban — no NPM_TOKEN secret is needed. npm mints
+# a short-lived OIDC token per run and auto-generates provenance attestations
+# (the repo is public, so provenance is published).
+
+on:
+  push:
+    branches: [main]
+
+# One release run at a time so the Version Packages PR and a publish never race.
+concurrency: release-${{ github.ref }}
+
+permissions:
+  contents: write # push the "Version Packages" PR branch and git tag
+  pull-requests: write # open / update the "Version Packages" PR
+  id-token: write # mint the OIDC token for trusted publishing + provenance
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # changesets needs full history for tags/changelog
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.11'
+
+      # `changeset publish` shells out to `npm publish`; OIDC trusted publishing
+      # requires npm >= 11.5.1 and a Node runtime. setup-node provides both and
+      # writes the registry .npmrc; then pin the latest npm.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm install -g npm@latest
+
+      - run: bun install --frozen-lockfile
+
+      # Pending changesets on main → opens/updates the "Version Packages" PR
+      # (runs `bun run version` = `changeset version`). No changesets left (that
+      # PR was merged) → runs `bun run release` (= `changeset publish`) to
+      # publish unpublished versions and tag them. `prepack` builds ui/dist.
+      - uses: changesets/action@v1
+        with:
+          version: bun run version
+          publish: bun run release
+          commit: 'chore: version packages'
+          title: 'chore: version packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
