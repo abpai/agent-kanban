@@ -4,6 +4,7 @@ import postgres from 'postgres'
 import { run } from '../index'
 import type { Task, TaskComment } from '../types'
 import { PostgresLinearProvider } from '../providers/postgres-linear'
+import { PostgresLinearCache } from '../providers/postgres-linear-cache'
 
 const databaseUrl = process.env['KANBAN_PG_TEST_URL'] ?? process.env['DATABASE_URL']
 const pgTest = databaseUrl ? test : test.skip
@@ -358,5 +359,94 @@ describe('postgres linear provider', () => {
       'label-smoke',
       'label-owner',
     ])
+  })
+
+  pgTest('rolls back description activity when Linear issue upsert fails', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    const cache = new PostgresLinearCache(sql)
+    await cache.ready
+
+    const issue = {
+      id: 'lin-cache-1',
+      identifier: 'GB-101',
+      title: 'Atomic Linear issue',
+      description: 'old description',
+      priority: 2,
+      assigneeId: null,
+      assigneeName: null,
+      projectId: null,
+      projectName: null,
+      stateId: 'state-todo',
+      stateName: 'Todo',
+      statePosition: 0,
+      labels: ['atomic'],
+      commentCount: 0,
+      url: 'https://linear.app/issue/GB-101',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }
+    await cache.upsertIssues([issue])
+
+    await expect(
+      cache.upsertIssues([
+        {
+          ...issue,
+          title: 'Should roll back',
+          description: 'new description',
+          stateId: null as unknown as string,
+          updatedAt: '2026-01-03T00:00:00.000Z',
+        },
+      ]),
+    ).rejects.toThrow()
+
+    const [row] = await sql<{ title: string; description: string }[]>`
+      SELECT title, description FROM linear_issues WHERE id = 'lin-cache-1'
+    `
+    expect(row).toEqual({ title: 'Atomic Linear issue', description: 'old description' })
+    const activity = await sql<{ history_id: string }[]>`
+      SELECT history_id FROM linear_activity WHERE issue_id = 'lin-cache-1'
+    `
+    expect(activity).toHaveLength(0)
+  })
+
+  // Linear's updatedAt-ordered pagination can return the same issue on two
+  // pages of one sync; the batched upsert must last-wins instead of erroring
+  // ("ON CONFLICT DO UPDATE command cannot affect row a second time").
+  pgTest('upsertIssues tolerates duplicate issue ids within one batch', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    const cache = new PostgresLinearCache(sql)
+    await cache.ready
+
+    const issue = {
+      id: 'lin-dup-1',
+      identifier: 'GB-201',
+      title: 'First occurrence',
+      description: 'v1',
+      priority: 2,
+      assigneeId: null,
+      assigneeName: null,
+      projectId: null,
+      projectName: null,
+      stateId: 'state-todo',
+      stateName: 'Todo',
+      statePosition: 0,
+      labels: [],
+      commentCount: 0,
+      url: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }
+    await cache.upsertIssues([
+      issue,
+      { ...issue, title: 'Last occurrence wins', updatedAt: '2026-01-03T00:00:00.000Z' },
+    ])
+
+    const [row] = await sql<{ title: string; updated_at: string }[]>`
+      SELECT title, updated_at FROM linear_issues WHERE id = 'lin-dup-1'
+    `
+    expect(row).toEqual({
+      title: 'Last occurrence wins',
+      updated_at: '2026-01-03T00:00:00.000Z',
+    })
   })
 })

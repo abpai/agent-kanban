@@ -33,7 +33,8 @@ prior branch lands or is used as the base.
    are 566 and 500 lines. `taskFromRow`, `parseLabels`, priority mapping, and
    metadata loops are duplicated.
    Action: partial now. The shared task-row mappers are extracted in the second
-   stacked PR. SQL duplication, catalog metadata loops, and any dialect adapter
+   stacked PR. The fifth stacked PR batches and transaction-wraps the Postgres
+   catalog and issue write loops. SQL duplication and any broader dialect adapter
    still need later design.
 
 3. Jira re-derives issue-to-cache-row mapping three times.
@@ -58,8 +59,11 @@ prior branch lands or is used as the base.
    Status: confirmed. Catalog writes loop per row; Jira `upsertIssues` has
    transaction treatment but Linear issue upserts remain row-at-a-time with
    prior-description reads.
-   Action: later. This needs concurrency-aware tests and should be its own
-   performance/atomicity PR.
+   Action: addressed in the fifth stacked PR. Postgres Jira/Linear cache writes
+   now batch catalog/activity/issue rows, wrap multi-statement cache mutations in
+   transactions, and use advisory locks for destructive catalog and issue refresh
+   windows. CI-backed Postgres tests cover Jira catalog rollback and Linear
+   description-activity rollback.
 
 7. Jira sync fetches changelogs serially.
    Status: confirmed. Jira awaits `ingestIssueActivity` in a per-issue loop
@@ -119,10 +123,8 @@ prior branch lands or is used as the base.
     `board-slice.ts` defaults capabilities on.
     Action: later. Treat as a UI PR with bootstrap-state testing.
 
-## Suggested stack after the runtime/API surface PR
+## Suggested stack after the Postgres cache atomicity PR
 
-1. Postgres cache atomicity: transaction and batch catalog refreshes, then Linear
-   issue upserts.
-2. Local provider core refactor: introduce a storage port and migrate SQLite and
+1. Local provider core refactor: introduce a storage port and migrate SQLite and
    Postgres local providers behind it.
-3. UI capability defaults and `TaskDetail` editable field extraction.
+2. UI capability defaults and `TaskDetail` editable field extraction.
