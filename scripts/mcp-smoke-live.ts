@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createTrackerCore, createTrackerMcpServer } from '../src/mcp/index'
 import { createProvider } from '../src/providers/index'
+import { trackerConfigFromEnv } from '../src/tracker-config'
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
@@ -41,7 +42,7 @@ process.env['KANBAN_PROVIDER'] = providerName
 
 const db = new Database(':memory:')
 db.run('PRAGMA foreign_keys = ON')
-const provider = createProvider(db, ':memory:')
+const provider = createProvider(db, trackerConfigFromEnv(process.env), ':memory:')
 
 type Scope = { actor: string; write: boolean }
 
