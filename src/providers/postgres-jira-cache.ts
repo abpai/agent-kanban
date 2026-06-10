@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres'
+import type { Sql, TransactionSql } from 'postgres'
 
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
 import {
@@ -14,6 +14,12 @@ import { jiraTaskFromRow, type JiraTaskRow } from './cache-task-mappers'
 import { parseProviderTeamInfo } from './team-info'
 
 export type JiraIssueRow = JiraTaskRow
+
+type Exec = Sql | TransactionSql
+
+function recordsetJson(sql: Exec, rows: unknown[]): ReturnType<Sql['json']> {
+  return sql.json(rows as never)
+}
 
 /**
  * Postgres-backed cache/repository for the Jira provider. Mirrors the role of the
@@ -131,20 +137,33 @@ export class PostgresJiraCache implements JiraCachePort {
       'lastFullSyncAt',
       'lastWebhookAt',
     ] as const
-    for (const key of keys) {
-      if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
-      const value = meta[key]
-      if (value === null) {
-        await this.deleteMeta(key)
-        continue
+    await this.sql.begin(async (tx) => {
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
+        const value = meta[key]
+        if (value === null) {
+          await tx`DELETE FROM jira_sync_meta WHERE key = ${key}`
+          continue
+        }
+        if (key === 'boardId') {
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            await tx`
+              INSERT INTO jira_sync_meta (key, value)
+              VALUES (${key}, ${String(value)})
+              ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+            `
+          }
+          continue
+        }
+        if (typeof value === 'string') {
+          await tx`
+            INSERT INTO jira_sync_meta (key, value)
+            VALUES (${key}, ${value})
+            ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+          `
+        }
       }
-      if (key === 'boardId') {
-        if (typeof value === 'number' && Number.isFinite(value))
-          await this.setMeta(key, String(value))
-        continue
-      }
-      if (typeof value === 'string') await this.setMeta(key, value)
-    }
+    })
   }
 
   async loadSyncMeta(): Promise<JiraSyncMeta> {
@@ -173,15 +192,11 @@ export class PostgresJiraCache implements JiraCachePort {
   }
 
   // Catalog refreshes (columns, priorities, issue types) UPSERT the current rows
-  // on every sync — UPSERT serializes per row and never collides on the primary
-  // key when multiple Dispatch replicas refresh concurrently, so a newly-created
-  // status/column/priority is reflected on the next sync. The obsolete-row DELETE
-  // (`prune`) runs ONLY on a full reconcile, mirroring how upstream-missing issues
-  // are pruned (see pruneIssuesMissingUpstream): a delta sync's snapshot can be
-  // stale, and a stale snapshot's DELETE would drop a row another replica just
-  // added with a fresher snapshot. Confining the delete to the periodic full
-  // reconcile (and self-healing via the every-sync UPSERT) keeps catalog pruning
-  // consistent with issue pruning and out of the common delta path.
+  // on every sync. The obsolete-row DELETE (`prune`) runs ONLY on a full
+  // reconcile, mirroring issue pruning: a delta snapshot can be stale, and a
+  // stale snapshot must not delete rows another replica just added. Each catalog
+  // write runs in one advisory-locked transaction so the full-reconcile upsert
+  // and prune step are visible as one cache update.
   async replaceColumns(
     columns: Array<{
       id: string
@@ -192,74 +207,125 @@ export class PostgresJiraCache implements JiraCachePort {
     }>,
     prune: boolean,
   ): Promise<void> {
-    for (const column of columns) {
-      await this.sql`
-        INSERT INTO jira_columns (id, name, position, status_ids, source)
-        VALUES (
-          ${column.id},
-          ${column.name},
-          ${column.position},
-          ${JSON.stringify(column.statusIds)},
-          ${column.source}
-        )
-        ON CONFLICT(id) DO UPDATE SET
-          name = EXCLUDED.name,
-          position = EXCLUDED.position,
-          status_ids = EXCLUDED.status_ids,
-          source = EXCLUDED.source
-      `
-    }
-    if (prune) {
-      await this.sql`DELETE FROM jira_columns WHERE NOT (id = ANY(${columns.map((c) => c.id)}))`
-    }
+    const rows = columns.map((column) => ({
+      id: column.id,
+      name: column.name,
+      position: column.position,
+      status_ids: JSON.stringify(column.statusIds),
+      source: column.source,
+    }))
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:catalog'))`
+      if (rows.length > 0) {
+        await tx`
+          INSERT INTO jira_columns (id, name, position, status_ids, source)
+          SELECT id, name, position, status_ids, source
+          FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
+            id text,
+            name text,
+            position integer,
+            status_ids text,
+            source text
+          )
+          WHERE true
+          ON CONFLICT(id) DO UPDATE SET
+            name = EXCLUDED.name,
+            position = EXCLUDED.position,
+            status_ids = EXCLUDED.status_ids,
+            source = EXCLUDED.source
+        `
+      }
+      if (!prune) return
+      if (columns.length === 0) {
+        await tx`DELETE FROM jira_columns`
+      } else {
+        await tx`DELETE FROM jira_columns WHERE NOT (id = ANY(${columns.map((c) => c.id)}))`
+      }
+    })
   }
 
   async upsertUsers(
     users: Array<{ accountId: string; displayName: string; active?: boolean }>,
   ): Promise<void> {
-    for (const user of users) {
-      await this.sql`
+    if (users.length === 0) return
+    const now = new Date().toISOString()
+    const rows = users.map((user) => ({
+      account_id: user.accountId,
+      display_name: user.displayName,
+      active: user.active === false ? 0 : 1,
+      updated_at: now,
+    }))
+    await this.sql.begin(async (tx) => {
+      await tx`
         INSERT INTO jira_users (account_id, display_name, active, updated_at)
-        VALUES (${user.accountId}, ${user.displayName}, ${user.active === false ? 0 : 1}, ${new Date().toISOString()})
+        SELECT account_id, display_name, active, updated_at
+        FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
+          account_id text,
+          display_name text,
+          active integer,
+          updated_at text
+        )
+        WHERE true
         ON CONFLICT(account_id) DO UPDATE SET
           display_name = EXCLUDED.display_name,
           active = EXCLUDED.active,
           updated_at = EXCLUDED.updated_at
       `
-    }
+    })
   }
 
   async replacePriorities(
     priorities: Array<{ id: string; name: string }>,
     prune: boolean,
   ): Promise<void> {
-    for (const priority of priorities) {
-      await this.sql`
-        INSERT INTO jira_priorities (id, name)
-        VALUES (${priority.id}, ${priority.name})
-        ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
-      `
-    }
-    if (prune) {
-      await this
-        .sql`DELETE FROM jira_priorities WHERE NOT (id = ANY(${priorities.map((p) => p.id)}))`
-    }
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:catalog'))`
+      if (priorities.length > 0) {
+        await tx`
+          INSERT INTO jira_priorities (id, name)
+          SELECT id, name
+          FROM jsonb_to_recordset(${recordsetJson(tx, priorities)}) AS data(
+            id text,
+            name text
+          )
+          WHERE true
+          ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
+        `
+      }
+      if (!prune) return
+      if (priorities.length === 0) {
+        await tx`DELETE FROM jira_priorities`
+      } else {
+        await tx`DELETE FROM jira_priorities WHERE NOT (id = ANY(${priorities.map((p) => p.id)}))`
+      }
+    })
   }
 
   async replaceIssueTypes(
     types: Array<{ id: string; name: string }>,
     prune: boolean,
   ): Promise<void> {
-    for (const type of types) {
-      await this.sql`
-        INSERT INTO jira_issue_types (id, name)
-        VALUES (${type.id}, ${type.name})
-        ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
-      `
-    }
-    if (prune) {
-      await this.sql`DELETE FROM jira_issue_types WHERE NOT (id = ANY(${types.map((t) => t.id)}))`
-    }
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:catalog'))`
+      if (types.length > 0) {
+        await tx`
+          INSERT INTO jira_issue_types (id, name)
+          SELECT id, name
+          FROM jsonb_to_recordset(${recordsetJson(tx, types)}) AS data(
+            id text,
+            name text
+          )
+          WHERE true
+          ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
+        `
+      }
+      if (!prune) return
+      if (types.length === 0) {
+        await tx`DELETE FROM jira_issue_types`
+      } else {
+        await tx`DELETE FROM jira_issue_types WHERE NOT (id = ANY(${types.map((t) => t.id)}))`
+      }
+    })
   }
 
   async upsertIssues(
@@ -282,71 +348,108 @@ export class PostgresJiraCache implements JiraCachePort {
     }>,
   ): Promise<void> {
     if (issues.length === 0) return
+    const rows = issues.map((issue) => ({
+      id: issue.id,
+      key: issue.key,
+      summary: issue.summary,
+      description_text: issue.descriptionText,
+      status_id: issue.statusId,
+      priority_name: issue.priorityName ?? '',
+      issue_type_name: issue.issueTypeName ?? '',
+      assignee_account_id: issue.assigneeAccountId ?? null,
+      assignee_name: issue.assigneeName ?? '',
+      labels: JSON.stringify(issue.labels ?? []),
+      comment_count: issue.commentCount ?? 0,
+      project_key: issue.projectKey,
+      url: issue.url ?? null,
+      created_at: issue.createdAt,
+      updated_at: issue.updatedAt,
+    }))
     await this.sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
-      for (const issue of issues) {
-        await tx`
-          INSERT INTO jira_issues (
-            id, key, summary, description_text, status_id, priority_name, issue_type_name,
-            assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
-          ) VALUES (
-            ${issue.id}, ${issue.key}, ${issue.summary}, ${issue.descriptionText}, ${issue.statusId},
-            ${issue.priorityName ?? ''}, ${issue.issueTypeName ?? ''}, ${issue.assigneeAccountId ?? null},
-            ${issue.assigneeName ?? ''}, ${JSON.stringify(issue.labels ?? [])}, ${issue.commentCount ?? 0},
-            ${issue.projectKey}, ${issue.url ?? null}, ${issue.createdAt}, ${issue.updatedAt}
-          )
-          ON CONFLICT(id) DO UPDATE SET
-            key = EXCLUDED.key,
-            summary = EXCLUDED.summary,
-            description_text = EXCLUDED.description_text,
-            status_id = EXCLUDED.status_id,
-            priority_name = EXCLUDED.priority_name,
-            issue_type_name = EXCLUDED.issue_type_name,
-            assignee_account_id = EXCLUDED.assignee_account_id,
-            assignee_name = EXCLUDED.assignee_name,
-            labels = EXCLUDED.labels,
-            comment_count = EXCLUDED.comment_count,
-            project_key = EXCLUDED.project_key,
-            url = EXCLUDED.url,
-            created_at = EXCLUDED.created_at,
-            updated_at = EXCLUDED.updated_at
-        `
-      }
+      await tx`
+        INSERT INTO jira_issues (
+          id, key, summary, description_text, status_id, priority_name, issue_type_name,
+          assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
+        )
+        SELECT
+          id, key, summary, description_text, status_id, priority_name, issue_type_name,
+          assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
+        FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
+          id text,
+          key text,
+          summary text,
+          description_text text,
+          status_id text,
+          priority_name text,
+          issue_type_name text,
+          assignee_account_id text,
+          assignee_name text,
+          labels text,
+          comment_count integer,
+          project_key text,
+          url text,
+          created_at text,
+          updated_at text
+        )
+        WHERE true
+        ON CONFLICT(id) DO UPDATE SET
+          key = EXCLUDED.key,
+          summary = EXCLUDED.summary,
+          description_text = EXCLUDED.description_text,
+          status_id = EXCLUDED.status_id,
+          priority_name = EXCLUDED.priority_name,
+          issue_type_name = EXCLUDED.issue_type_name,
+          assignee_account_id = EXCLUDED.assignee_account_id,
+          assignee_name = EXCLUDED.assignee_name,
+          labels = EXCLUDED.labels,
+          comment_count = EXCLUDED.comment_count,
+          project_key = EXCLUDED.project_key,
+          url = EXCLUDED.url,
+          created_at = EXCLUDED.created_at,
+          updated_at = EXCLUDED.updated_at
+      `
     })
   }
 
   async deleteIssue(idOrKey: string): Promise<void> {
-    await this.sql`
-      DELETE FROM jira_activity
-      WHERE issue_id = ${idOrKey}
-         OR issue_id IN (SELECT id FROM jira_issues WHERE key = ${idOrKey})
-    `
-    await this.sql`DELETE FROM jira_issues WHERE id = ${idOrKey} OR key = ${idOrKey}`
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
+      await tx`
+        DELETE FROM jira_activity
+        WHERE issue_id = ${idOrKey}
+           OR issue_id IN (SELECT id FROM jira_issues WHERE key = ${idOrKey})
+      `
+      await tx`DELETE FROM jira_issues WHERE id = ${idOrKey} OR key = ${idOrKey}`
+    })
   }
 
   async pruneIssuesMissingUpstream(projectKey: string, upstreamIssueIds: string[]): Promise<void> {
-    if (upstreamIssueIds.length === 0) {
-      await this.sql`
-        DELETE FROM jira_activity
-        WHERE issue_id IN (SELECT id FROM jira_issues WHERE project_key = ${projectKey})
-      `
-      await this.sql`DELETE FROM jira_issues WHERE project_key = ${projectKey}`
-      return
-    }
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
+      if (upstreamIssueIds.length === 0) {
+        await tx`
+          DELETE FROM jira_activity
+          WHERE issue_id IN (SELECT id FROM jira_issues WHERE project_key = ${projectKey})
+        `
+        await tx`DELETE FROM jira_issues WHERE project_key = ${projectKey}`
+        return
+      }
 
-    await this.sql`
-      DELETE FROM jira_activity
-      WHERE issue_id IN (
-        SELECT id FROM jira_issues
+      await tx`
+        DELETE FROM jira_activity
+        WHERE issue_id IN (
+          SELECT id FROM jira_issues
+          WHERE project_key = ${projectKey}
+            AND NOT (id = ANY(${upstreamIssueIds}))
+        )
+      `
+      await tx`
+        DELETE FROM jira_issues
         WHERE project_key = ${projectKey}
           AND NOT (id = ANY(${upstreamIssueIds}))
-      )
-    `
-    await this.sql`
-      DELETE FROM jira_issues
-      WHERE project_key = ${projectKey}
-        AND NOT (id = ANY(${upstreamIssueIds}))
-    `
+      `
+    })
   }
 
   async getColumns(): Promise<JiraColumnRow[]> {
@@ -442,13 +545,25 @@ export class PostgresJiraCache implements JiraCachePort {
   }
 
   async saveActivity(rows: JiraActivityRow[]): Promise<void> {
-    for (const row of rows) {
-      await this.sql`
-        INSERT INTO jira_activity (issue_id, history_id, item_field, from_value, to_value, created_at)
-        VALUES (${row.issue_id}, ${row.history_id}, ${row.item_field}, ${row.from_value}, ${row.to_value}, ${row.created_at})
-        ON CONFLICT(issue_id, history_id, item_field) DO NOTHING
-      `
-    }
+    await this.insertActivityRows(this.sql, rows)
+  }
+
+  private async insertActivityRows(sql: Exec, rows: JiraActivityRow[]): Promise<void> {
+    if (rows.length === 0) return
+    await sql`
+      INSERT INTO jira_activity (issue_id, history_id, item_field, from_value, to_value, created_at)
+      SELECT issue_id, history_id, item_field, from_value, to_value, created_at
+      FROM jsonb_to_recordset(${recordsetJson(sql, rows)}) AS data(
+        issue_id text,
+        history_id text,
+        item_field text,
+        from_value text,
+        to_value text,
+        created_at text
+      )
+      WHERE true
+      ON CONFLICT(issue_id, history_id, item_field) DO NOTHING
+    `
   }
 
   async getCachedActivity(

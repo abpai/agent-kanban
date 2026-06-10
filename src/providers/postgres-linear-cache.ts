@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres'
+import type { Sql, TransactionSql } from 'postgres'
 
 import type { BoardConfig, BoardView, Task } from '../types'
 import { ensureWebhookEventsSchema } from '../webhook-events'
@@ -15,6 +15,12 @@ import { parseProviderTeamInfo } from './team-info'
 export type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
 
 export type LinearIssueRow = LinearTaskRow
+
+type Exec = Sql | TransactionSql
+
+function recordsetJson(sql: Exec, rows: unknown[]): ReturnType<Sql['json']> {
+  return sql.json(rows as never)
+}
 
 /**
  * Postgres-backed cache/repository for the Linear provider. Mirrors the role of
@@ -137,19 +143,31 @@ export class PostgresLinearCache implements LinearCachePort {
       'lastIssueUpdatedAt',
       'lastWebhookAt',
     ] as const
-    for (const key of keys) {
-      if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
-      const value = meta[key]
-      if (value === null) {
-        await this.deleteMeta(key)
-        continue
+    await this.sql.begin(async (tx) => {
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
+        const value = meta[key]
+        if (value === null) {
+          await tx`DELETE FROM linear_sync_meta WHERE key = ${key}`
+          continue
+        }
+        if (key === 'team') {
+          await tx`
+            INSERT INTO linear_sync_meta (key, value)
+            VALUES (${key}, ${JSON.stringify(value)})
+            ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+          `
+          continue
+        }
+        if (typeof value === 'string') {
+          await tx`
+            INSERT INTO linear_sync_meta (key, value)
+            VALUES (${key}, ${value})
+            ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+          `
+        }
       }
-      if (key === 'team') {
-        await this.setMeta(key, JSON.stringify(value))
-        continue
-      }
-      if (typeof value === 'string') await this.setMeta(key, value)
-    }
+    })
   }
 
   async loadSyncMeta(): Promise<LinearSyncMeta> {
@@ -172,56 +190,118 @@ export class PostgresLinearCache implements LinearCachePort {
     }>,
   ): Promise<void> {
     const now = new Date().toISOString()
+    const rows = states.map((state) => ({
+      id: state.id,
+      name: state.name,
+      position: state.position,
+      color: state.color ?? null,
+      type: state.type ?? null,
+      created_at: now,
+      updated_at: now,
+    }))
     await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-linear:states'))`
       await tx`DELETE FROM linear_states`
-      for (const state of states) {
+      if (rows.length > 0) {
         await tx`
           INSERT INTO linear_states (id, name, position, color, type, created_at, updated_at)
-          VALUES (${state.id}, ${state.name}, ${state.position}, ${state.color ?? null}, ${state.type ?? null}, ${now}, ${now})
+          SELECT id, name, position, color, type, created_at, updated_at
+          FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
+            id text,
+            name text,
+            position integer,
+            color text,
+            type text,
+            created_at text,
+            updated_at text
+          )
+          WHERE true
         `
       }
     })
   }
 
   async upsertUsers(users: Array<{ id: string; name: string; active?: boolean }>): Promise<void> {
+    if (users.length === 0) return
     const now = new Date().toISOString()
-    for (const user of users) {
-      await this.sql`
+    const rows = users.map((user) => ({
+      id: user.id,
+      name: user.name,
+      active: user.active === false ? 0 : 1,
+      updated_at: now,
+    }))
+    await this.sql.begin(async (tx) => {
+      await tx`
         INSERT INTO linear_users (id, name, active, updated_at)
-        VALUES (${user.id}, ${user.name}, ${user.active === false ? 0 : 1}, ${now})
+        SELECT id, name, active, updated_at
+        FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
+          id text,
+          name text,
+          active integer,
+          updated_at text
+        )
+        WHERE true
         ON CONFLICT(id) DO UPDATE SET
           name = EXCLUDED.name,
           active = EXCLUDED.active,
           updated_at = EXCLUDED.updated_at
       `
-    }
+    })
   }
 
   async upsertProjects(
     projects: Array<{ id: string; name: string; url?: string | null; state?: string | null }>,
   ): Promise<void> {
+    if (projects.length === 0) return
     const now = new Date().toISOString()
-    for (const project of projects) {
-      await this.sql`
+    const rows = projects.map((project) => ({
+      id: project.id,
+      name: project.name,
+      url: project.url ?? null,
+      state: project.state ?? null,
+      updated_at: now,
+    }))
+    await this.sql.begin(async (tx) => {
+      await tx`
         INSERT INTO linear_projects (id, name, url, state, updated_at)
-        VALUES (${project.id}, ${project.name}, ${project.url ?? null}, ${project.state ?? null}, ${now})
+        SELECT id, name, url, state, updated_at
+        FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
+          id text,
+          name text,
+          url text,
+          state text,
+          updated_at text
+        )
+        WHERE true
         ON CONFLICT(id) DO UPDATE SET
           name = EXCLUDED.name,
           url = EXCLUDED.url,
           state = EXCLUDED.state,
           updated_at = EXCLUDED.updated_at
       `
-    }
+    })
   }
 
   async saveActivity(rows: LinearActivityRow[]): Promise<void> {
-    for (const row of rows) {
-      await this.sql`
-        INSERT INTO linear_activity (issue_id, history_id, item_field, from_value, to_value, created_at)
-        VALUES (${row.issue_id}, ${row.history_id}, ${row.item_field}, ${row.from_value}, ${row.to_value}, ${row.created_at})
-        ON CONFLICT(issue_id, history_id, item_field) DO NOTHING
-      `
-    }
+    await this.insertActivityRows(this.sql, rows)
+  }
+
+  private async insertActivityRows(sql: Exec, rows: LinearActivityRow[]): Promise<void> {
+    if (rows.length === 0) return
+    await sql`
+      INSERT INTO linear_activity (issue_id, history_id, item_field, from_value, to_value, created_at)
+      SELECT issue_id, history_id, item_field, from_value, to_value, created_at
+      FROM jsonb_to_recordset(${recordsetJson(sql, rows)}) AS data(
+        issue_id text,
+        history_id text,
+        item_field text,
+        from_value text,
+        to_value text,
+        created_at text
+      )
+      WHERE true
+      ON CONFLICT(issue_id, history_id, item_field) DO NOTHING
+    `
   }
 
   async upsertIssues(
@@ -245,84 +325,173 @@ export class PostgresLinearCache implements LinearCachePort {
       updatedAt: string
     }>,
   ): Promise<void> {
-    for (const issue of issues) {
-      const nextDescription = issue.description ?? ''
-      const [prior] = await this.sql<{ description: string }[]>`
-        SELECT description FROM linear_issues WHERE id = ${issue.id} LIMIT 1
-      `
-      if (prior && prior.description !== nextDescription) {
-        await this.saveActivity([
-          {
-            issue_id: issue.id,
-            history_id: `desc:${issue.updatedAt}`,
-            item_field: 'description',
-            from_value: clampActivityValue(prior.description),
-            to_value: clampActivityValue(nextDescription),
-            created_at: issue.updatedAt,
-          },
-        ])
-      }
-
+    if (issues.length === 0) return
+    const rows = issues.map((issue) => {
       const hasCommentCount = issue.commentCount !== undefined && issue.commentCount !== null
-      await this.sql`
-        INSERT INTO linear_issues (
-          id, identifier, title, description, priority, assignee_id, assignee_name,
-          project_id, project_name, state_id, state_name, state_position, labels, comment_count,
-          url, created_at, updated_at
-        ) VALUES (
-          ${issue.id}, ${issue.identifier}, ${issue.title}, ${nextDescription}, ${issue.priority ?? 0},
-          ${issue.assigneeId ?? null}, ${issue.assigneeName ?? ''}, ${issue.projectId ?? null},
-          ${issue.projectName ?? ''}, ${issue.stateId}, ${issue.stateName}, ${issue.statePosition},
-          ${JSON.stringify(issue.labels ?? [])}, ${hasCommentCount ? (issue.commentCount ?? 0) : 0},
-          ${issue.url ?? null}, ${issue.createdAt}, ${issue.updatedAt}
-        )
-        ON CONFLICT(id) DO UPDATE SET
-          identifier = EXCLUDED.identifier,
-          title = EXCLUDED.title,
-          description = EXCLUDED.description,
-          priority = EXCLUDED.priority,
-          assignee_id = EXCLUDED.assignee_id,
-          assignee_name = EXCLUDED.assignee_name,
-          project_id = EXCLUDED.project_id,
-          project_name = EXCLUDED.project_name,
-          state_id = EXCLUDED.state_id,
-          state_name = EXCLUDED.state_name,
-          state_position = EXCLUDED.state_position,
-          labels = EXCLUDED.labels,
-          comment_count = CASE
-            WHEN ${hasCommentCount} THEN EXCLUDED.comment_count
-            ELSE linear_issues.comment_count
-          END,
-          url = EXCLUDED.url,
-          created_at = EXCLUDED.created_at,
-          updated_at = EXCLUDED.updated_at
+      return {
+        id: issue.id,
+        identifier: issue.identifier,
+        title: issue.title,
+        description: issue.description ?? '',
+        priority: issue.priority ?? 0,
+        assignee_id: issue.assigneeId ?? null,
+        assignee_name: issue.assigneeName ?? '',
+        project_id: issue.projectId ?? null,
+        project_name: issue.projectName ?? '',
+        state_id: issue.stateId,
+        state_name: issue.stateName,
+        state_position: issue.statePosition,
+        labels: JSON.stringify(issue.labels ?? []),
+        comment_count: issue.commentCount ?? 0,
+        comment_count_provided: hasCommentCount,
+        url: issue.url ?? null,
+        created_at: issue.createdAt,
+        updated_at: issue.updatedAt,
+      }
+    })
+
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-linear:issues'))`
+      const ids = rows.map((issue) => issue.id)
+      const priorRows = await tx<{ id: string; description: string }[]>`
+        SELECT id, description FROM linear_issues WHERE id = ANY(${ids})
       `
-    }
+      const priorDescriptions = new Map(priorRows.map((row) => [row.id, row.description]))
+      await this.insertActivityRows(
+        tx,
+        rows.flatMap((issue) => {
+          const prior = priorDescriptions.get(issue.id)
+          if (prior === undefined || prior === issue.description) return []
+          return [
+            {
+              issue_id: issue.id,
+              history_id: `desc:${issue.updated_at}`,
+              item_field: 'description',
+              from_value: clampActivityValue(prior),
+              to_value: clampActivityValue(issue.description),
+              created_at: issue.updated_at,
+            },
+          ]
+        }),
+      )
+
+      await this.upsertIssueRows(
+        tx,
+        rows.filter((issue) => issue.comment_count_provided),
+        true,
+      )
+      await this.upsertIssueRows(
+        tx,
+        rows.filter((issue) => !issue.comment_count_provided),
+        false,
+      )
+    })
+  }
+
+  private async upsertIssueRows(
+    sql: Exec,
+    rows: Array<{
+      id: string
+      identifier: string
+      title: string
+      description: string
+      priority: number
+      assignee_id: string | null
+      assignee_name: string
+      project_id: string | null
+      project_name: string
+      state_id: string
+      state_name: string
+      state_position: number
+      labels: string
+      comment_count: number
+      url: string | null
+      created_at: string
+      updated_at: string
+    }>,
+    updateCommentCount: boolean,
+  ): Promise<void> {
+    if (rows.length === 0) return
+    const commentCountAssignment = updateCommentCount
+      ? sql`, comment_count = EXCLUDED.comment_count`
+      : sql``
+    await sql`
+      INSERT INTO linear_issues (
+        id, identifier, title, description, priority, assignee_id, assignee_name,
+        project_id, project_name, state_id, state_name, state_position, labels, comment_count,
+        url, created_at, updated_at
+      )
+      SELECT
+        id, identifier, title, description, priority, assignee_id, assignee_name,
+        project_id, project_name, state_id, state_name, state_position, labels, comment_count,
+        url, created_at, updated_at
+      FROM jsonb_to_recordset(${recordsetJson(sql, rows)}) AS data(
+        id text,
+        identifier text,
+        title text,
+        description text,
+        priority integer,
+        assignee_id text,
+        assignee_name text,
+        project_id text,
+        project_name text,
+        state_id text,
+        state_name text,
+        state_position integer,
+        labels text,
+        comment_count integer,
+        url text,
+        created_at text,
+        updated_at text
+      )
+      WHERE true
+      ON CONFLICT(id) DO UPDATE SET
+        identifier = EXCLUDED.identifier,
+        title = EXCLUDED.title,
+        description = EXCLUDED.description,
+        priority = EXCLUDED.priority,
+        assignee_id = EXCLUDED.assignee_id,
+        assignee_name = EXCLUDED.assignee_name,
+        project_id = EXCLUDED.project_id,
+        project_name = EXCLUDED.project_name,
+        state_id = EXCLUDED.state_id,
+        state_name = EXCLUDED.state_name,
+        state_position = EXCLUDED.state_position,
+        labels = EXCLUDED.labels${commentCountAssignment},
+        url = EXCLUDED.url,
+        created_at = EXCLUDED.created_at,
+        updated_at = EXCLUDED.updated_at
+    `
   }
 
   async deleteIssue(idOrIdentifier: string): Promise<void> {
-    await this.sql`
-      DELETE FROM linear_activity
-      WHERE issue_id = ${idOrIdentifier}
-         OR issue_id IN (SELECT id FROM linear_issues WHERE identifier = ${idOrIdentifier})
-    `
-    await this
-      .sql`DELETE FROM linear_issues WHERE id = ${idOrIdentifier} OR identifier = ${idOrIdentifier}`
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-linear:issues'))`
+      await tx`
+        DELETE FROM linear_activity
+        WHERE issue_id = ${idOrIdentifier}
+           OR issue_id IN (SELECT id FROM linear_issues WHERE identifier = ${idOrIdentifier})
+      `
+      await tx`DELETE FROM linear_issues WHERE id = ${idOrIdentifier} OR identifier = ${idOrIdentifier}`
+    })
   }
 
   async pruneIssues(liveIssueIds: string[]): Promise<void> {
-    if (liveIssueIds.length === 0) {
-      await this.sql`DELETE FROM linear_activity`
-      await this.sql`DELETE FROM linear_issues`
-      return
-    }
-    await this.sql`
-      DELETE FROM linear_activity
-      WHERE issue_id IN (
-        SELECT id FROM linear_issues WHERE NOT (id = ANY(${liveIssueIds}))
-      )
-    `
-    await this.sql`DELETE FROM linear_issues WHERE NOT (id = ANY(${liveIssueIds}))`
+    await this.sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-linear:issues'))`
+      if (liveIssueIds.length === 0) {
+        await tx`DELETE FROM linear_activity`
+        await tx`DELETE FROM linear_issues`
+        return
+      }
+      await tx`
+        DELETE FROM linear_activity
+        WHERE issue_id IN (
+          SELECT id FROM linear_issues WHERE NOT (id = ANY(${liveIssueIds}))
+        )
+      `
+      await tx`DELETE FROM linear_issues WHERE NOT (id = ANY(${liveIssueIds}))`
+    })
   }
 
   async adjustIssueCommentCount(idOrIdentifier: string, delta: number): Promise<void> {
