@@ -40,9 +40,13 @@ if (!ticketId) {
 
 process.env['KANBAN_PROVIDER'] = providerName
 
-const db = new Database(':memory:')
+// Honor KANBAN_DB_PATH so repeat runs reuse a warm provider cache; a fresh
+// :memory: DB forces a full cold sync (~30s on a large Jira project) on the
+// first tool call.
+const dbPath = process.env['KANBAN_DB_PATH'] ?? ':memory:'
+const db = new Database(dbPath)
 db.run('PRAGMA foreign_keys = ON')
-const provider = createProvider(db, trackerConfigFromEnv(process.env), ':memory:')
+const provider = createProvider(db, trackerConfigFromEnv(process.env), dbPath)
 
 type Scope = { actor: string; write: boolean }
 
@@ -77,6 +81,9 @@ const tracker = createTrackerMcpServer({
 
 const httpServer = Bun.serve({
   port: 0,
+  // The first tool call on a cold cache runs a full provider sync, which can
+  // exceed Bun's default 10s idle timeout and surface as ECONNRESET.
+  idleTimeout: 120,
   fetch: (req) => tracker.fetch(req),
 })
 const url = new URL(`http://127.0.0.1:${httpServer.port}/mcp`)
@@ -158,6 +165,8 @@ try {
 } finally {
   await client.close()
   await tracker.close()
-  void httpServer.stop(true)
+  // Stop the HTTP server (closing active connections) before closing the DB so
+  // an in-flight tool handler can't hit a closed database.
+  await httpServer.stop(true)
   db.close()
 }

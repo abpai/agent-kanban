@@ -1,4 +1,6 @@
 import type { Database } from 'bun:sqlite'
+import { normalizeColumnName } from '../column-roles'
+import { ErrorCode, KanbanError } from '../errors'
 import type { BoardConfig, BoardView, ProviderTeamInfo, Task } from '../types'
 import { linearTaskFromRow, type LinearTaskRow } from './cache-task-mappers'
 import { parseProviderTeamInfo } from './team-info'
@@ -19,6 +21,39 @@ export interface LinearSyncMeta {
   lastFullSyncAt: string | null
   lastIssueUpdatedAt: string | null
   lastWebhookAt: string | null
+}
+
+function ambiguousStateError(input: string, matches: LinearStateRow[]): KanbanError {
+  return new KanbanError(
+    ErrorCode.COLUMN_NOT_FOUND,
+    `Linear state name '${input}' is ambiguous; use one of these state ids: ${matches
+      .map((state) => state.id)
+      .join(', ')}`,
+  )
+}
+
+// Resolves a user-supplied column reference to a cached workflow state, trying
+// (1) exact id, (2) case-insensitive name, (3) separator-insensitive name
+// ('in-progress' → 'In Progress') — mirroring resolveJiraColumnId so collapsed
+// trigger strings resolve on both providers instead of throwing
+// COLUMN_NOT_FOUND. Exact passes run first so a precise reference is never
+// overridden by a normalized-name collision; name lookups matching multiple
+// states are rejected as ambiguous so the caller picks an id. A token that
+// collapses to empty is skipped so punctuation-only input never matches.
+export function resolveLinearState(states: LinearStateRow[], input: string): LinearStateRow {
+  const byId = states.find((state) => state.id === input)
+  if (byId) return byId
+  const lower = input.toLowerCase()
+  const byName = states.filter((state) => state.name.toLowerCase() === lower)
+  if (byName.length === 1) return byName[0]!
+  if (byName.length > 1) throw ambiguousStateError(input, byName)
+  const normalized = normalizeColumnName(input)
+  if (normalized !== '') {
+    const byNormalized = states.filter((state) => normalizeColumnName(state.name) === normalized)
+    if (byNormalized.length === 1) return byNormalized[0]!
+    if (byNormalized.length > 1) throw ambiguousStateError(input, byNormalized)
+  }
+  throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No Linear workflow state matching '${input}'`)
 }
 
 export function initLinearCacheSchema(db: Database): void {

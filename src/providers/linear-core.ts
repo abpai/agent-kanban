@@ -24,7 +24,12 @@ import {
   type LinearComment,
   type LinearIssue,
 } from './linear-client'
-import type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
+import {
+  resolveLinearState,
+  type LinearActivityRow,
+  type LinearStateRow,
+  type LinearSyncMeta,
+} from './linear-cache'
 import { providerUpstreamError, unsupportedOperation } from './errors'
 import type {
   CreateTaskInput,
@@ -344,17 +349,7 @@ export class LinearProviderCore implements KanbanProvider {
   }
 
   private async resolveState(column: string): Promise<Column> {
-    const states = await this.cache.getCachedColumns()
-    const match = states.find(
-      (state) => state.id === column || state.name.toLowerCase() === column.toLowerCase(),
-    )
-    if (!match) {
-      throw new KanbanError(
-        ErrorCode.COLUMN_NOT_FOUND,
-        `No Linear workflow state matching '${column}'`,
-      )
-    }
-    return match
+    return resolveLinearState(await this.cache.getCachedColumns(), column)
   }
 
   // Only invoked for non-empty names. A name that the cache cannot resolve is a
