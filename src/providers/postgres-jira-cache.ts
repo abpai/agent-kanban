@@ -1,4 +1,4 @@
-import type { Sql, TransactionSql } from 'postgres'
+import type { Sql } from 'postgres'
 
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
 import {
@@ -11,15 +11,10 @@ import {
 import type { JiraCachePort } from './jira-core'
 import { ensureWebhookEventsSchema } from '../webhook-events'
 import { jiraTaskFromRow, type JiraTaskRow } from './cache-task-mappers'
+import { type Exec, recordsetJson } from './postgres-batch'
 import { parseProviderTeamInfo } from './team-info'
 
 export type JiraIssueRow = JiraTaskRow
-
-type Exec = Sql | TransactionSql
-
-function recordsetJson(sql: Exec, rows: unknown[]): ReturnType<Sql['json']> {
-  return sql.json(rows as never)
-}
 
 /**
  * Postgres-backed cache/repository for the Jira provider. Mirrors the role of the
@@ -227,7 +222,6 @@ export class PostgresJiraCache implements JiraCachePort {
             status_ids text,
             source text
           )
-          WHERE true
           ON CONFLICT(id) DO UPDATE SET
             name = EXCLUDED.name,
             position = EXCLUDED.position,
@@ -255,23 +249,20 @@ export class PostgresJiraCache implements JiraCachePort {
       active: user.active === false ? 0 : 1,
       updated_at: now,
     }))
-    await this.sql.begin(async (tx) => {
-      await tx`
-        INSERT INTO jira_users (account_id, display_name, active, updated_at)
-        SELECT account_id, display_name, active, updated_at
-        FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
-          account_id text,
-          display_name text,
-          active integer,
-          updated_at text
-        )
-        WHERE true
-        ON CONFLICT(account_id) DO UPDATE SET
-          display_name = EXCLUDED.display_name,
-          active = EXCLUDED.active,
-          updated_at = EXCLUDED.updated_at
-      `
-    })
+    await this.sql`
+      INSERT INTO jira_users (account_id, display_name, active, updated_at)
+      SELECT account_id, display_name, active, updated_at
+      FROM jsonb_to_recordset(${recordsetJson(this.sql, rows)}) AS data(
+        account_id text,
+        display_name text,
+        active integer,
+        updated_at text
+      )
+      ON CONFLICT(account_id) DO UPDATE SET
+        display_name = EXCLUDED.display_name,
+        active = EXCLUDED.active,
+        updated_at = EXCLUDED.updated_at
+    `
   }
 
   async replacePriorities(
@@ -288,7 +279,6 @@ export class PostgresJiraCache implements JiraCachePort {
             id text,
             name text
           )
-          WHERE true
           ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
         `
       }
@@ -315,7 +305,6 @@ export class PostgresJiraCache implements JiraCachePort {
             id text,
             name text
           )
-          WHERE true
           ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
         `
       }
@@ -348,23 +337,34 @@ export class PostgresJiraCache implements JiraCachePort {
     }>,
   ): Promise<void> {
     if (issues.length === 0) return
-    const rows = issues.map((issue) => ({
-      id: issue.id,
-      key: issue.key,
-      summary: issue.summary,
-      description_text: issue.descriptionText,
-      status_id: issue.statusId,
-      priority_name: issue.priorityName ?? '',
-      issue_type_name: issue.issueTypeName ?? '',
-      assignee_account_id: issue.assigneeAccountId ?? null,
-      assignee_name: issue.assigneeName ?? '',
-      labels: JSON.stringify(issue.labels ?? []),
-      comment_count: issue.commentCount ?? 0,
-      project_key: issue.projectKey,
-      url: issue.url ?? null,
-      created_at: issue.createdAt,
-      updated_at: issue.updatedAt,
-    }))
+    // A sync batch can repeat an issue id (an issue updated while pagination is
+    // in flight shows up on two pages); the batched ON CONFLICT DO UPDATE
+    // statement errors on intra-statement duplicates, so keep the last
+    // occurrence — matching the old row-by-row and SQLite last-wins behavior.
+    const rows = [
+      ...new Map(
+        issues.map((issue) => [
+          issue.id,
+          {
+            id: issue.id,
+            key: issue.key,
+            summary: issue.summary,
+            description_text: issue.descriptionText,
+            status_id: issue.statusId,
+            priority_name: issue.priorityName ?? '',
+            issue_type_name: issue.issueTypeName ?? '',
+            assignee_account_id: issue.assigneeAccountId ?? null,
+            assignee_name: issue.assigneeName ?? '',
+            labels: JSON.stringify(issue.labels ?? []),
+            comment_count: issue.commentCount ?? 0,
+            project_key: issue.projectKey,
+            url: issue.url ?? null,
+            created_at: issue.createdAt,
+            updated_at: issue.updatedAt,
+          },
+        ]),
+      ).values(),
+    ]
     await this.sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
       await tx`
@@ -392,7 +392,6 @@ export class PostgresJiraCache implements JiraCachePort {
           created_at text,
           updated_at text
         )
-        WHERE true
         ON CONFLICT(id) DO UPDATE SET
           key = EXCLUDED.key,
           summary = EXCLUDED.summary,
@@ -561,7 +560,6 @@ export class PostgresJiraCache implements JiraCachePort {
         to_value text,
         created_at text
       )
-      WHERE true
       ON CONFLICT(issue_id, history_id, item_field) DO NOTHING
     `
   }
