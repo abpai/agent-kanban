@@ -1,7 +1,7 @@
 import type { Sql } from 'postgres'
 
 import type { WebhookRequest, WebhookResult } from '../webhooks'
-import { recordedWebhook } from '../webhook-events'
+import { withWebhookRecording } from '../webhook-events'
 import type { JiraClient } from './jira-client'
 import { JiraProviderCore, type JiraProviderConfig } from './jira-core'
 import { PostgresJiraCache } from './postgres-jira-cache'
@@ -18,6 +18,6 @@ export class PostgresJiraProvider extends JiraProviderCore {
   // The shared dispatch lives in JiraProviderCore.handleWebhookCore; this wrapper
   // only adds the audit persistence around it.
   override async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
-    return recordedWebhook(this.sql, 'jira', payload, () => this.handleWebhookCore(payload))
+    return withWebhookRecording(this.sql, 'jira', payload, () => this.handleWebhookCore(payload))
   }
 }
