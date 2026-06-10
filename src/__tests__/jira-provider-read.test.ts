@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite'
 import { ErrorCode, KanbanError } from '../errors'
 import { JiraClient } from '../providers/jira-client'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
+import { resetWarnOnce } from '../providers/warn-once'
 import {
   getCachedColumns,
   getCachedTasks,
@@ -176,6 +177,7 @@ beforeEach(() => {
   db = new Database(':memory:')
   originalFetch = globalThis.fetch
   originalDateNow = Date.now
+  resetWarnOnce()
 })
 
 afterEach(() => {
@@ -960,7 +962,7 @@ describe('JiraProvider read path', () => {
     }
   })
 
-  test('unmapped-status warning fires once per provider across repeated syncs', async () => {
+  test('unmapped-status warning fires once across repeated syncs', async () => {
     const searchHandler: StubHandler = () =>
       jsonResponse({
         startAt: 0,
@@ -970,11 +972,14 @@ describe('JiraProvider read path', () => {
       })
     const warn = captureUnmappedWarnings()
     try {
-      const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+      const { provider, calls } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
       await provider.getBoard()
       const origNow = originalDateNow
       Date.now = () => origNow() + 31_000
       await provider.getBoard()
+      // Both reads must actually sync (the +31s skip clears the poll throttle);
+      // otherwise a single warning here would prove nothing about dedup.
+      expect(calls.filter((c) => c.url.includes('/rest/api/3/search/jql'))).toHaveLength(2)
       expect(warn.messages).toHaveLength(1)
     } finally {
       warn.restore()

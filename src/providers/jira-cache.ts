@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite'
+import { normalizeColumnName } from '../column-roles'
 import { ErrorCode, KanbanError } from '../errors'
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
 
@@ -68,12 +69,6 @@ export function jiraBoardColumnRows(
       source: 'board',
     }
   })
-}
-
-// Collapse case and separators so 'To Do', 'ToDo', and 'Todo' compare equal.
-// Mirrors the board-metrics name normalization in column-roles.ts.
-function normalizeColumnName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
 function ambiguousColumnError(input: string, matches: JiraColumnRow[]): KanbanError {

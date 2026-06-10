@@ -171,9 +171,6 @@ export class JiraProviderCore implements KanbanProvider {
   // When a server-side background warmer owns cache refresh, request-path syncs
   // are suppressed once the cache is warm so reads/writes never block on Jira I/O.
   private backgroundManaged = false
-  // (project:statusId) pairs already warned about as unmapped, so a recurring
-  // unmapped status logs once per provider lifetime rather than every sync.
-  private readonly warnedUnmappedStatuses = new Set<string>()
 
   constructor(
     protected readonly cache: JiraCachePort,
@@ -434,14 +431,12 @@ export class JiraProviderCore implements KanbanProvider {
   }
 
   private warnUnmappedStatus(projectKey: string, statusId: string, statusName: string): void {
-    const key = `${projectKey}:${statusId}`
-    if (this.warnedUnmappedStatuses.has(key)) return
-    this.warnedUnmappedStatuses.add(key)
     const hint =
       this.config.boardId !== undefined
         ? `it is not on board ${this.config.boardId}`
         : `it is absent from the project status catalog`
-    console.warn(
+    warnOnce(
+      `jira-unmapped-status:${projectKey}:${statusId}`,
       `[jira] ${projectKey} status '${statusName}' (${statusId}) maps to no column (${hint}); ` +
         `issues in this status are cached but invisible to listTasks/getBoard`,
     )
