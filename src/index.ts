@@ -534,11 +534,25 @@ export function parseMcpArgs(argv: string[]): McpOptions {
   return { db: values.db as string | undefined }
 }
 
+// Bad serve/mcp flags should print the same structured error envelope as the
+// plain CLI branch, not an uncaught stack trace.
+function parseEntryArgs<T>(parse: () => T): T {
+  try {
+    return parse()
+  } catch (err) {
+    if (err instanceof KanbanError) {
+      console.error(formatOutput(error(err.code, err.message), false))
+      process.exit(1)
+    }
+    throw err
+  }
+}
+
 if (import.meta.main) {
   const argv = process.argv.slice(2)
 
   if (argv[0] === 'mcp') {
-    const opts = parseMcpArgs(argv)
+    const opts = parseEntryArgs(() => parseMcpArgs(argv))
     const runtime = await openKanbanRuntime({ dbPath: opts.db ?? getDbPath() })
     const { startStdioMcpServer } = await import('./commands/mcp')
     try {
@@ -547,7 +561,7 @@ if (import.meta.main) {
       await runtime.close()
     }
   } else if (argv[0] === 'serve') {
-    const opts = parseServeArgs(argv)
+    const opts = parseEntryArgs(() => parseServeArgs(argv))
 
     // A tunnel exposes the dashboard publicly, so refuse to start one without a
     // token. Plain localhost serve stays open for backward compatibility.
