@@ -19,10 +19,8 @@ const PRIORITY_OPTIONS: SelectOption[] = [
 
 function EditableSelectField({
   label,
-  field,
-  value,
   options,
-  editingField,
+  isEditing,
   editValue,
   editButtons,
   canEdit,
@@ -32,22 +30,20 @@ function EditableSelectField({
   children,
 }: {
   label: string
-  field: EditableField
-  value: string
   options: SelectOption[]
-  editingField: EditableField | null
+  isEditing: boolean
   editValue: string
   editButtons: ReactNode
   canEdit: boolean
   valueStyle?: CSSProperties
-  onStartEdit: (field: EditableField, value: string) => void
+  onStartEdit: () => void
   onEditValueChange: (value: string) => void
   children: ReactNode
 }) {
   return (
     <div className="detailField">
       <div className="detailLabel">{label}</div>
-      {editingField === field ? (
+      {isEditing ? (
         <div>
           <select
             className="formInput"
@@ -70,7 +66,7 @@ function EditableSelectField({
             cursor: canEdit ? 'pointer' : 'default',
             ...valueStyle,
           }}
-          onClick={() => canEdit && onStartEdit(field, value)}
+          onClick={() => canEdit && onStartEdit()}
           title={canEdit ? 'Click to edit' : undefined}
         >
           {children}
@@ -242,15 +238,13 @@ export function TaskDetail() {
 
         <EditableSelectField
           label="Priority"
-          field="priority"
-          value={task.priority}
           options={PRIORITY_OPTIONS}
-          editingField={editingField}
+          isEditing={editingField === 'priority'}
           editValue={editValue}
           editButtons={editButtons}
           canEdit={capabilities.taskUpdate}
           valueStyle={{ display: 'flex', alignItems: 'center', gap: 8 }}
-          onStartEdit={startEdit}
+          onStartEdit={() => startEdit('priority', task.priority)}
           onEditValueChange={setEditValue}
         >
           <div className={`priorityDot ${task.priority}`} />
@@ -259,18 +253,16 @@ export function TaskDetail() {
 
         <EditableSelectField
           label="Assignee"
-          field="assignee"
-          value={task.assignee}
           options={[
             { value: '', label: 'Unassigned' },
             ...allAssignees.map((name) => ({ value: name, label: name })),
           ]}
-          editingField={editingField}
+          isEditing={editingField === 'assignee'}
           editValue={editValue}
           editButtons={editButtons}
           canEdit={capabilities.taskUpdate}
           valueStyle={{ display: 'flex', alignItems: 'center', gap: 8 }}
-          onStartEdit={startEdit}
+          onStartEdit={() => startEdit('assignee', task.assignee)}
           onEditValueChange={setEditValue}
         >
           {task.assignee ? (
@@ -294,17 +286,15 @@ export function TaskDetail() {
 
         <EditableSelectField
           label="Project"
-          field="project"
-          value={task.project}
           options={[
             { value: '', label: 'No project' },
             ...allProjects.map((project) => ({ value: project, label: project })),
           ]}
-          editingField={editingField}
+          isEditing={editingField === 'project'}
           editValue={editValue}
           editButtons={editButtons}
           canEdit={capabilities.taskUpdate}
-          onStartEdit={startEdit}
+          onStartEdit={() => startEdit('project', task.project)}
           onEditValueChange={setEditValue}
         >
           {task.project ? (
