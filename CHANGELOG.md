@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.5
+
+### Patch Changes
+
+- [#70](https://github.com/abpai/agent-kanban/pull/70) [`d41e1b2`](https://github.com/abpai/agent-kanban/commit/d41e1b225cc5d4985f932a0e1de75cf8a8396ab1) Thanks [@abpai](https://github.com/abpai)! - Harden provider state resolution and cache robustness:
+  - **Linear & Jira state/column names** — resolve separator-collapsed names
+    consistently (e.g. `In Progress` vs `in-progress`), and surface Jira issue
+    statuses that map to no column instead of dropping them silently.
+  - **Postgres cache** — batched cache upserts now tolerate duplicate issue ids
+    in a single batch.
+  - Internal refactors hardening the shared provider sync, cache-task-mapper, and
+    local-provider cores (no behavior change).
+
 ## 0.6.4 - 2026-06-09
 
 - Provider webhook open-dev-mode warnings now emit at most once per process via
