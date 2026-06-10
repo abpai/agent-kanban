@@ -42,6 +42,7 @@ import type {
   CreateTaskInput,
   KanbanProvider,
   ProviderContext,
+  ProviderSyncStatus,
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
@@ -479,7 +480,7 @@ export class JiraProviderCore implements KanbanProvider {
     this.syncGate.setBackgroundManaged(managed)
   }
 
-  async getSyncStatus() {
+  async getSyncStatus(): Promise<ProviderSyncStatus> {
     const meta = await this.cache.loadSyncMeta()
     return syncStatusFromMeta(meta)
   }
