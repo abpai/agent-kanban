@@ -32,8 +32,9 @@ prior branch lands or is used as the base.
    Status: confirmed. Jira cache files are 686 and 587 lines; Linear cache files
    are 566 and 500 lines. `taskFromRow`, `parseLabels`, priority mapping, and
    metadata loops are duplicated.
-   Action: later. Start with pure mapper extraction, then consider a dialect
-   adapter only after mappers are shared.
+   Action: partial now. The shared task-row mappers are extracted in the second
+   stacked PR. SQL duplication, catalog metadata loops, and any dialect adapter
+   still need later design.
 
 3. Jira re-derives issue-to-cache-row mapping three times.
    Status: confirmed. The mapping appears in Jira sync, hydrate, and webhook
@@ -113,16 +114,14 @@ prior branch lands or is used as the base.
     `board-slice.ts` defaults capabilities on.
     Action: later. Treat as a UI PR with bootstrap-state testing.
 
-## Suggested stack after the first PR
+## Suggested stack after the mapper PR
 
-1. Shared cache mappers: extract `parseLabels`, priority mapping, and
-   `taskFromRow` for Jira and Linear cache pairs without changing SQL.
-2. Jira sync changelog concurrency: bounded best-effort batch matching Linear's
+1. Jira sync changelog concurrency: bounded best-effort batch matching Linear's
    existing history ingestion pattern.
-3. Postgres cache atomicity: transaction and batch catalog refreshes, then Linear
+2. Postgres cache atomicity: transaction and batch catalog refreshes, then Linear
    issue upserts.
-4. Provider runtime and CLI capability matrix: table-driven construction plus
+3. Provider runtime and CLI capability matrix: table-driven construction plus
    capability-based CLI gating.
-5. Local provider core refactor: introduce a storage port and migrate SQLite and
+4. Local provider core refactor: introduce a storage port and migrate SQLite and
    Postgres local providers behind it.
-6. UI capability defaults and `TaskDetail` editable field extraction.
+5. UI capability defaults and `TaskDetail` editable field extraction.

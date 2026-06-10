@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite'
 import type { BoardConfig, BoardView, ProviderTeamInfo, Task } from '../types'
+import { linearTaskFromRow, type LinearTaskRow } from './cache-task-mappers'
 import { parseProviderTeamInfo } from './team-info'
 
 export interface LinearStateRow {
@@ -442,70 +443,7 @@ export function getCachedColumns(db: Database): LinearStateRow[] {
   return db.query('SELECT * FROM linear_states ORDER BY position, name').all() as LinearStateRow[]
 }
 
-function mapPriority(priority: number): Task['priority'] {
-  switch (priority) {
-    case 1:
-      return 'urgent'
-    case 2:
-      return 'high'
-    case 3:
-      return 'medium'
-    case 0:
-    case 4:
-    default:
-      return 'low'
-  }
-}
-
-interface LinearIssueRow {
-  id: string
-  identifier: string
-  title: string
-  description: string
-  state_id: string
-  state_position: number
-  priority: number
-  assignee_name: string
-  project_name: string
-  labels: string
-  comment_count: number
-  url: string | null
-  created_at: string
-  updated_at: string
-}
-
-function parseLabels(raw: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []
-  } catch {
-    return []
-  }
-}
-
-function taskFromRow(row: LinearIssueRow): Task {
-  return {
-    id: `linear:${row.id}`,
-    providerId: row.id,
-    externalRef: row.identifier,
-    url: row.url,
-    title: row.title,
-    description: row.description,
-    column_id: row.state_id,
-    position: row.state_position,
-    priority: mapPriority(row.priority),
-    assignee: row.assignee_name,
-    assignees: row.assignee_name ? [row.assignee_name] : [],
-    labels: parseLabels(row.labels),
-    comment_count: row.comment_count,
-    project: row.project_name,
-    metadata: '{}',
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    version: row.updated_at,
-    source_updated_at: row.updated_at,
-  }
-}
+type LinearIssueRow = LinearTaskRow
 
 export function getCachedBoard(db: Database): BoardView {
   const columns = getCachedColumns(db)
@@ -520,7 +458,7 @@ export function getCachedBoard(db: Database): BoardView {
              ORDER BY updated_at DESC, title ASC`,
           )
           .all({ $state_id: column.id }) as LinearIssueRow[]
-      ).map(taskFromRow),
+      ).map(linearTaskFromRow),
     })),
   }
 }
@@ -534,7 +472,7 @@ export function getCachedTask(db: Database, lookup: string): Task | null {
        LIMIT 1`,
     )
     .get({ $lookup: normalized }) as LinearIssueRow | null
-  return row ? taskFromRow(row) : null
+  return row ? linearTaskFromRow(row) : null
 }
 
 export function getCachedTasks(db: Database): Task[] {
@@ -542,7 +480,7 @@ export function getCachedTasks(db: Database): Task[] {
     db
       .query('SELECT * FROM linear_issues ORDER BY updated_at DESC, title ASC')
       .all() as LinearIssueRow[]
-  ).map(taskFromRow)
+  ).map(linearTaskFromRow)
 }
 
 export function getCachedConfig(db: Database): BoardConfig {

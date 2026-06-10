@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { normalizeColumnName } from '../column-roles'
 import { ErrorCode, KanbanError } from '../errors'
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
+import { jiraTaskFromRow, type JiraTaskRow } from './cache-task-mappers'
 import { parseProviderTeamInfo } from './team-info'
 
 // Column ids are prefixed to avoid collisions across sources:
@@ -116,23 +117,7 @@ export function resolveJiraColumnId(columns: JiraColumnRow[], input: string): st
   throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No Jira column matching '${input}'`)
 }
 
-interface JiraIssueRow {
-  id: string
-  key: string
-  summary: string
-  description_text: string
-  status_id: string
-  priority_name: string
-  issue_type_name: string
-  assignee_account_id: string | null
-  assignee_name: string
-  labels: string
-  comment_count: number
-  project_key: string
-  url: string | null
-  created_at: string
-  updated_at: string
-}
+type JiraIssueRow = JiraTaskRow
 
 export function initJiraCacheSchema(db: Database): void {
   db.run(`
@@ -525,52 +510,6 @@ export function getCachedColumns(db: Database): JiraColumnRow[] {
   return db.query('SELECT * FROM jira_columns ORDER BY position, name').all() as JiraColumnRow[]
 }
 
-function mapPriorityNameToCanonical(name: string): Task['priority'] {
-  switch (name.trim().toLowerCase()) {
-    case 'highest':
-      return 'urgent'
-    case 'high':
-      return 'high'
-    case 'medium':
-      return 'medium'
-    default:
-      return 'low'
-  }
-}
-
-function parseLabels(raw: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []
-  } catch {
-    return []
-  }
-}
-
-function taskFromRow(row: JiraIssueRow): Task {
-  return {
-    id: `jira:${row.id}`,
-    providerId: row.id,
-    externalRef: row.key,
-    url: row.url,
-    title: row.summary,
-    description: row.description_text,
-    column_id: row.status_id,
-    position: 0,
-    priority: mapPriorityNameToCanonical(row.priority_name),
-    assignee: row.assignee_name,
-    assignees: row.assignee_name ? [row.assignee_name] : [],
-    labels: parseLabels(row.labels),
-    comment_count: row.comment_count,
-    project: row.project_key,
-    metadata: '{}',
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    version: row.updated_at,
-    source_updated_at: row.updated_at,
-  }
-}
-
 function selectIssuesByStatusIds(db: Database, statusIds: string[]): JiraIssueRow[] {
   if (statusIds.length === 0) return []
   const placeholders = statusIds.map((_, i) => `$s${i}`).join(', ')
@@ -592,7 +531,7 @@ export function getCachedBoard(db: Database): BoardView {
   return {
     columns: columns.map((column) => {
       const statusIds = decodeColumnStatusIds(column)
-      const tasks = selectIssuesByStatusIds(db, statusIds).map(taskFromRow)
+      const tasks = selectIssuesByStatusIds(db, statusIds).map(jiraTaskFromRow)
       return {
         id: column.id,
         name: column.name,
@@ -615,7 +554,7 @@ export function getCachedTask(db: Database, lookup: string): Task | null {
        LIMIT 1`,
     )
     .get({ $lookup: normalized }) as JiraIssueRow | null
-  return row ? taskFromRow(row) : null
+  return row ? jiraTaskFromRow(row) : null
 }
 
 export function getCachedTasks(db: Database, params?: { columnId?: string }): Task[] {
@@ -625,13 +564,13 @@ export function getCachedTasks(db: Database, params?: { columnId?: string }): Ta
       .get({ $id: params.columnId }) as Pick<JiraColumnRow, 'status_ids'> | null
     if (!columnRow) return []
     const statusIds = decodeColumnStatusIds(columnRow)
-    return selectIssuesByStatusIds(db, statusIds).map(taskFromRow)
+    return selectIssuesByStatusIds(db, statusIds).map(jiraTaskFromRow)
   }
   return (
     db
       .query('SELECT * FROM jira_issues ORDER BY updated_at DESC, summary ASC')
       .all() as JiraIssueRow[]
-  ).map(taskFromRow)
+  ).map(jiraTaskFromRow)
 }
 
 export function getCachedConfig(db: Database): JiraCacheConfig {
