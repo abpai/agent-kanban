@@ -46,8 +46,9 @@ prior branch lands or is used as the base.
    Status: confirmed. Both cores keep `backgroundManaged`, `syncCache`,
    `setBackgroundManaged`, `getSyncStatus`, and similar filter/sort/limit
    chains.
-   Action: later. Extract `SyncScheduler` and `applyTaskFilters` after the
-   smaller provider cleanup PRs.
+   Action: addressed in the third stacked PR. Remote providers now share
+   `SyncGate`, sync-status projection, timestamp helpers, and common
+   priority/assignee/project/sort/limit filtering.
 
 5. Postgres webhook audit wrappers are identical.
    Status: confirmed. Jira and Linear wrappers only differ by provider literal.
@@ -63,8 +64,8 @@ prior branch lands or is used as the base.
 7. Jira sync fetches changelogs serially.
    Status: confirmed. Jira awaits `ingestIssueActivity` in a per-issue loop
    while Linear batches history calls with concurrency 5.
-   Action: later. Add a bounded concurrency helper and test best-effort error
-   handling before changing sync behavior.
+   Action: addressed in the third stacked PR. Jira changelog ingest now uses the
+   shared bounded-concurrency helper with the same best-effort failure behavior.
 
 8. Storage x tracker construction and CLI capability gating are hand-rolled in
    multiple places.
@@ -114,14 +115,12 @@ prior branch lands or is used as the base.
     `board-slice.ts` defaults capabilities on.
     Action: later. Treat as a UI PR with bootstrap-state testing.
 
-## Suggested stack after the mapper PR
+## Suggested stack after the sync-core PR
 
-1. Jira sync changelog concurrency: bounded best-effort batch matching Linear's
-   existing history ingestion pattern.
-2. Postgres cache atomicity: transaction and batch catalog refreshes, then Linear
+1. Postgres cache atomicity: transaction and batch catalog refreshes, then Linear
    issue upserts.
-3. Provider runtime and CLI capability matrix: table-driven construction plus
+2. Provider runtime and CLI capability matrix: table-driven construction plus
    capability-based CLI gating.
-4. Local provider core refactor: introduce a storage port and migrate SQLite and
+3. Local provider core refactor: introduce a storage port and migrate SQLite and
    Postgres local providers behind it.
-5. UI capability defaults and `TaskDetail` editable field extraction.
+4. UI capability defaults and `TaskDetail` editable field extraction.
