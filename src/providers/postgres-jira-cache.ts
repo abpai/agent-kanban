@@ -10,6 +10,7 @@ import {
 } from './jira-cache'
 import type { JiraCachePort } from './jira-core'
 import { ensureWebhookEventsSchema } from '../webhook-events'
+import { parseProviderTeamInfo } from './team-info'
 
 export interface JiraIssueRow {
   id: string
@@ -231,18 +232,7 @@ export class PostgresJiraCache implements JiraCachePort {
   }
 
   async loadTeamInfo(): Promise<ProviderTeamInfo | null> {
-    const raw = await this.getMeta('team')
-    if (raw === null) return null
-    try {
-      const parsed = JSON.parse(raw) as ProviderTeamInfo
-      return typeof parsed.id === 'string' &&
-        typeof parsed.key === 'string' &&
-        typeof parsed.name === 'string'
-        ? parsed
-        : null
-    } catch {
-      return null
-    }
+    return parseProviderTeamInfo(await this.getMeta('team'))
   }
 
   // Catalog refreshes (columns, priorities, issue types) UPSERT the current rows

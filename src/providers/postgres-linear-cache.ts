@@ -1,6 +1,6 @@
 import type { Sql } from 'postgres'
 
-import type { BoardConfig, BoardView, ProviderTeamInfo, Task } from '../types'
+import type { BoardConfig, BoardView, Task } from '../types'
 import { ensureWebhookEventsSchema } from '../webhook-events'
 import type { LinearCachePort } from './linear-core'
 import {
@@ -9,6 +9,7 @@ import {
   type LinearStateRow,
   type LinearSyncMeta,
 } from './linear-cache'
+import { parseProviderTeamInfo } from './team-info'
 
 export type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
 
@@ -216,9 +217,8 @@ export class PostgresLinearCache implements LinearCachePort {
   }
 
   async loadSyncMeta(): Promise<LinearSyncMeta> {
-    const teamRaw = await this.getMeta('team')
     return {
-      team: teamRaw ? (JSON.parse(teamRaw) as ProviderTeamInfo) : null,
+      team: parseProviderTeamInfo(await this.getMeta('team')),
       lastSyncAt: await this.getMeta('lastSyncAt'),
       lastFullSyncAt: await this.getMeta('lastFullSyncAt'),
       lastIssueUpdatedAt: await this.getMeta('lastIssueUpdatedAt'),

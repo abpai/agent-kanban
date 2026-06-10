@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite'
 import type { BoardConfig, BoardView, ProviderTeamInfo, Task } from '../types'
+import { parseProviderTeamInfo } from './team-info'
 
 export interface LinearStateRow {
   id: string
@@ -200,9 +201,8 @@ export function saveSyncMeta(db: Database, meta: Partial<LinearSyncMeta>): void 
 }
 
 export function loadSyncMeta(db: Database): LinearSyncMeta {
-  const teamRaw = getMeta(db, 'team')
   return {
-    team: teamRaw ? (JSON.parse(teamRaw) as ProviderTeamInfo) : null,
+    team: parseProviderTeamInfo(getMeta(db, 'team')),
     lastSyncAt: getMeta(db, 'lastSyncAt'),
     lastFullSyncAt: getMeta(db, 'lastFullSyncAt'),
     lastIssueUpdatedAt: getMeta(db, 'lastIssueUpdatedAt'),

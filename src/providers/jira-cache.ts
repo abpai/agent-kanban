@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite'
 import { normalizeColumnName } from '../column-roles'
 import { ErrorCode, KanbanError } from '../errors'
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
+import { parseProviderTeamInfo } from './team-info'
 
 // Column ids are prefixed to avoid collisions across sources:
 // - board-sourced columns: 'board:<boardId>:<columnName>' with an index suffix
@@ -274,27 +275,7 @@ export function saveTeamInfo(db: Database, team: ProviderTeamInfo | null): void 
 }
 
 export function loadTeamInfo(db: Database): ProviderTeamInfo | null {
-  const raw = getMeta(db, 'team')
-  if (raw === null) return null
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      'id' in parsed &&
-      'key' in parsed &&
-      'name' in parsed &&
-      typeof (parsed as { id: unknown }).id === 'string' &&
-      typeof (parsed as { key: unknown }).key === 'string' &&
-      typeof (parsed as { name: unknown }).name === 'string'
-    ) {
-      const t = parsed as { id: string; key: string; name: string }
-      return { id: t.id, key: t.key, name: t.name }
-    }
-    return null
-  } catch {
-    return null
-  }
+  return parseProviderTeamInfo(getMeta(db, 'team'))
 }
 
 export function loadJiraSyncMeta(db: Database): JiraSyncMeta {

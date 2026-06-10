@@ -158,6 +158,36 @@ export interface JiraCachePort {
   resolveIssueId(lookup: string): Promise<string | null>
 }
 
+type JiraCacheIssue = Parameters<JiraCachePort['upsertIssues']>[0][number]
+
+// Map a Jira API issue to the cache upsert row. Shared by bulk sync, direct
+// hydrate, and webhook ingest so every path caches the same issue shape.
+function toCacheIssue(
+  issue: JiraIssue,
+  baseUrl: string,
+  fallbackProjectKey: string,
+): JiraCacheIssue {
+  return {
+    id: issue.id,
+    key: issue.key,
+    summary: issue.fields.summary,
+    descriptionText: issue.fields.description
+      ? adfToPlainText(issue.fields.description as AdfDocument)
+      : '',
+    statusId: issue.fields.status.id,
+    priorityName: issue.fields.priority?.name ?? null,
+    issueTypeName: issue.fields.issuetype?.name ?? '',
+    assigneeAccountId: issue.fields.assignee?.accountId ?? null,
+    assigneeName: issue.fields.assignee?.displayName ?? null,
+    labels: issue.fields.labels ?? [],
+    commentCount: issue.fields.comment?.total ?? 0,
+    projectKey: issue.fields.project?.key ?? fallbackProjectKey,
+    url: `${baseUrl}/browse/${issue.key}`,
+    createdAt: issue.fields.created,
+    updatedAt: issue.fields.updated,
+  }
+}
+
 /**
  * Shared Jira provider business logic (sync orchestration, hydration, writes,
  * transitions, comments, webhook dispatch, activity mapping). Concrete providers
@@ -326,25 +356,7 @@ export class JiraProviderCore implements KanbanProvider {
       })
 
       await this.cache.upsertIssues(
-        page.issues.map((issue) => ({
-          id: issue.id,
-          key: issue.key,
-          summary: issue.fields.summary,
-          descriptionText: issue.fields.description
-            ? adfToPlainText(issue.fields.description as AdfDocument)
-            : '',
-          statusId: issue.fields.status.id,
-          priorityName: issue.fields.priority?.name ?? null,
-          issueTypeName: issue.fields.issuetype?.name ?? '',
-          assigneeAccountId: issue.fields.assignee?.accountId ?? null,
-          assigneeName: issue.fields.assignee?.displayName ?? null,
-          labels: issue.fields.labels ?? [],
-          commentCount: issue.fields.comment?.total ?? 0,
-          projectKey: issue.fields.project?.key ?? project.key,
-          url: `${this.config.baseUrl}/browse/${issue.key}`,
-          createdAt: issue.fields.created,
-          updatedAt: issue.fields.updated,
-        })),
+        page.issues.map((issue) => toCacheIssue(issue, this.config.baseUrl, project.key)),
       )
 
       for (const issue of page.issues) {
@@ -621,25 +633,7 @@ export class JiraProviderCore implements KanbanProvider {
     // it rather than threading an unreachable null through every caller.
     const issue = await this.client.getIssue(key)
     await this.cache.upsertIssues([
-      {
-        id: issue.id,
-        key: issue.key,
-        summary: issue.fields.summary,
-        descriptionText: issue.fields.description
-          ? adfToPlainText(issue.fields.description as AdfDocument)
-          : '',
-        statusId: issue.fields.status.id,
-        priorityName: issue.fields.priority?.name ?? null,
-        issueTypeName: issue.fields.issuetype?.name ?? '',
-        assigneeAccountId: issue.fields.assignee?.accountId ?? null,
-        assigneeName: issue.fields.assignee?.displayName ?? null,
-        labels: issue.fields.labels ?? [],
-        commentCount: issue.fields.comment?.total ?? 0,
-        projectKey: issue.fields.project?.key ?? this.config.projectKey,
-        url: `${this.config.baseUrl}/browse/${issue.key}`,
-        createdAt: issue.fields.created,
-        updatedAt: issue.fields.updated,
-      },
+      toCacheIssue(issue, this.config.baseUrl, this.config.projectKey),
     ])
     // Ingest the changelog like the sync loop does, so a just-applied transition
     // is recorded in jira_activity immediately (backs getActivity and the
@@ -927,25 +921,7 @@ export class JiraProviderCore implements KanbanProvider {
         }
       }
       await this.cache.upsertIssues([
-        {
-          id: issue.id,
-          key: issue.key,
-          summary: issue.fields.summary,
-          descriptionText: issue.fields.description
-            ? adfToPlainText(issue.fields.description as AdfDocument)
-            : '',
-          statusId: issue.fields.status.id,
-          priorityName: issue.fields.priority?.name ?? null,
-          issueTypeName: issue.fields.issuetype?.name ?? '',
-          assigneeAccountId: issue.fields.assignee?.accountId ?? null,
-          assigneeName: issue.fields.assignee?.displayName ?? null,
-          labels: issue.fields.labels ?? [],
-          commentCount: issue.fields.comment?.total ?? 0,
-          projectKey,
-          url: `${this.config.baseUrl}/browse/${issue.key}`,
-          createdAt: issue.fields.created,
-          updatedAt: issue.fields.updated,
-        },
+        toCacheIssue(issue, this.config.baseUrl, this.config.projectKey),
       ])
       if (event === 'jira:issue_updated') {
         await this.ingestIssueActivity(issue.id).catch((err) => {
