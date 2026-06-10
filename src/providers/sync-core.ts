@@ -29,7 +29,7 @@ export class SyncGate {
     now?: number
   }): boolean {
     const lastSyncAtMs = parseSyncTimestamp(params.lastSyncAt)
-    if (this.backgroundManaged && !params.force && !params.viaWarmer && lastSyncAtMs) {
+    if (this.backgroundManaged && !params.force && !params.viaWarmer && lastSyncAtMs > 0) {
       return true
     }
     const now = params.now ?? Date.now()

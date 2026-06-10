@@ -35,7 +35,7 @@ export interface LinearTaskRow {
   updated_at: string
 }
 
-export function parseTaskLabels(raw: string): string[] {
+function parseTaskLabels(raw: string): string[] {
   try {
     const parsed: unknown = JSON.parse(raw)
     return Array.isArray(parsed)
@@ -46,7 +46,7 @@ export function parseTaskLabels(raw: string): string[] {
   }
 }
 
-export function mapJiraPriorityNameToCanonical(name: string): Task['priority'] {
+function mapJiraPriorityNameToCanonical(name: string): Task['priority'] {
   switch (name.trim().toLowerCase()) {
     case 'highest':
       return 'urgent'
@@ -59,7 +59,7 @@ export function mapJiraPriorityNameToCanonical(name: string): Task['priority'] {
   }
 }
 
-export function mapLinearPriority(priority: number): Task['priority'] {
+function mapLinearPriority(priority: number): Task['priority'] {
   switch (priority) {
     case 1:
       return 'urgent'

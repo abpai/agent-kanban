@@ -30,6 +30,7 @@ import type {
   CreateTaskInput,
   KanbanProvider,
   ProviderContext,
+  ProviderSyncStatus,
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
@@ -37,7 +38,6 @@ import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 import { warnOnce } from './warn-once'
 import {
   applyTaskFilters,
-  mapWithConcurrency,
   maxSyncTimestamp,
   parseSyncTimestamp,
   SyncGate,
@@ -260,10 +260,13 @@ export class LinearProviderCore implements KanbanProvider {
   private async ingestTeamHistory(issueIds: string[], sinceIso: string | null): Promise<void> {
     if (issueIds.length === 0) return
     const concurrency = 5
+    // Manual windows rather than one mapWithConcurrency pass: each window's rows
+    // are persisted before the next window starts, so a mid-ingest failure keeps
+    // everything fetched so far.
     for (let i = 0; i < issueIds.length; i += concurrency) {
       const batch = issueIds.slice(i, i + concurrency)
-      const results = await mapWithConcurrency(batch, concurrency, (issueId) =>
-        this.fetchIssueHistory(issueId, sinceIso),
+      const results = await Promise.all(
+        batch.map((issueId) => this.fetchIssueHistory(issueId, sinceIso)),
       )
       const rows = results.flat()
       if (rows.length > 0) await this.cache.saveActivity(rows)
@@ -396,7 +399,7 @@ export class LinearProviderCore implements KanbanProvider {
     this.syncGate.setBackgroundManaged(managed)
   }
 
-  async getSyncStatus() {
+  async getSyncStatus(): Promise<ProviderSyncStatus> {
     const meta = await this.cache.loadSyncMeta()
     return syncStatusFromMeta(meta)
   }
