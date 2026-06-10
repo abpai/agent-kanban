@@ -20,6 +20,7 @@ import type {
   Task,
 } from '../types'
 import type { AppState } from '../store'
+import { defaultCapabilities } from './capabilities'
 
 function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
@@ -35,19 +36,6 @@ export interface PendingConflict {
     project?: string
   }
   message: string
-}
-
-const defaultCapabilities: ProviderCapabilities = {
-  taskCreate: true,
-  taskUpdate: true,
-  taskMove: true,
-  taskDelete: true,
-  comment: true,
-  activity: true,
-  metrics: true,
-  columnCrud: true,
-  bulk: true,
-  configEdit: true,
 }
 
 /**
