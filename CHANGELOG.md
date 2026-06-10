@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.4 - 2026-06-09
+
+- Provider webhook open-dev-mode warnings now emit at most once per process via
+  a shared `warnOnce` helper, preventing repeated unsigned webhook requests from
+  flooding Jira/Linear dev logs while preserving the existing warning.
+
 ## 0.6.3 - 2026-06-09
 
 - Linear `updateTask`/`moveTask` now hydrate only the mutated issue via a new
