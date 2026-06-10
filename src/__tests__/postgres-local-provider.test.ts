@@ -206,6 +206,32 @@ describe('postgres local provider', () => {
     }
   })
 
+  // Exercises the real Postgres getTaskVersion path behind the shared core's
+  // optimistic-version check (the core conflict tests run against a fake store).
+  pgTest('update with stale expectedVersion throws CONFLICT through Postgres storage', async () => {
+    const runtime = await openKanbanRuntime()
+    try {
+      const created = await runtime.provider.createTask({ title: 'Versioned task' })
+      await runtime.provider.updateTask(created.id, { title: 'bumped' })
+
+      await expect(
+        runtime.provider.updateTask(created.id, {
+          title: 'stale write',
+          expectedVersion: created.version ?? undefined,
+        }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' })
+
+      const matched = await runtime.provider.updateTask(created.id, {
+        title: 'fresh write',
+        expectedVersion: '1',
+      })
+      expect(matched.title).toBe('fresh write')
+      expect(matched.version).toBe('2')
+    } finally {
+      await runtime.close()
+    }
+  })
+
   pgTest('migrates a pre-existing tasks table missing project/labels/revision', async () => {
     // Simulate an older Postgres-local database created before project, labels,
     // and revision columns existed. CREATE TABLE IF NOT EXISTS would not add

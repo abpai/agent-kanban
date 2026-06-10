@@ -1,4 +1,4 @@
-import type { Sql, TransactionSql } from 'postgres'
+import type { Sql } from 'postgres'
 
 import { ErrorCode, KanbanError } from '../errors'
 import { generateId } from '../id'
@@ -20,10 +20,7 @@ import { LocalProviderCore, type LocalStorePort } from './local-core'
 import type { CreateTaskInput, TaskListFilters, UpdateTaskInput } from './types'
 import type { LocalTrackerConfig } from '../tracker-config'
 import { normalizeLabels, parseStoredLabels } from '../labels'
-
-// Accepts either the root connection or a scoped transaction handle so the
-// mutation helpers can run inside or outside a `sql.begin(...)` block.
-type Exec = Sql | TransactionSql
+import type { Exec } from './postgres-batch'
 
 const DEFAULT_COLUMNS = [
   { name: 'recurring', position: 0 },

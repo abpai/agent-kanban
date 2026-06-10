@@ -32,7 +32,7 @@ export interface LocalStorePort {
   listColumns(): Awaitable<Column[]>
   listTasks(filters?: TaskListFilters): Awaitable<LocalTaskRecord[]>
   getTask(idOrRef: string): Awaitable<LocalTaskRecord>
-  getTaskVersion?(idOrRef: string): Awaitable<string>
+  getTaskVersion(idOrRef: string): Awaitable<string>
   createTask(input: CreateTaskInput): Awaitable<LocalTaskRecord>
   updateTask(
     idOrRef: string,
@@ -63,10 +63,6 @@ export class LocalProviderCore implements KanbanProvider {
 
   async initialize(): Promise<void> {
     await this.store.initialize?.()
-  }
-
-  private async ready(): Promise<void> {
-    await this.initialize()
   }
 
   private enrichTask(task: LocalTaskRecord, commentCount?: number): LocalTaskRecord {
@@ -101,7 +97,7 @@ export class LocalProviderCore implements KanbanProvider {
   }
 
   async getContext(): Promise<ProviderContext> {
-    await this.ready()
+    await this.initialize()
     return {
       provider: this.type,
       capabilities: this.store.capabilities,
@@ -110,7 +106,7 @@ export class LocalProviderCore implements KanbanProvider {
   }
 
   async getBootstrap(): Promise<BoardBootstrap> {
-    await this.ready()
+    await this.initialize()
     const metrics = await this.getMetrics()
     return {
       provider: this.type,
@@ -124,7 +120,7 @@ export class LocalProviderCore implements KanbanProvider {
   }
 
   async getBoard(): Promise<BoardView> {
-    await this.ready()
+    await this.initialize()
     const board = await this.store.getBoard()
     const tasks = board.columns.flatMap((column) => column.tasks)
     const counts = await this.commentCountsFor(tasks)
@@ -137,33 +133,31 @@ export class LocalProviderCore implements KanbanProvider {
   }
 
   async listColumns(): Promise<Column[]> {
-    await this.ready()
+    await this.initialize()
     return this.store.listColumns()
   }
 
   async listTasks(filters: TaskListFilters = {}): Promise<Task[]> {
-    await this.ready()
+    await this.initialize()
     const tasks = await this.store.listTasks(filters)
     const counts = await this.commentCountsFor(tasks)
     return tasks.map((task) => this.enrichTask(task, counts?.get(task.id)))
   }
 
   async getTask(idOrRef: string): Promise<Task> {
-    await this.ready()
+    await this.initialize()
     return this.enrichTaskWithCount(await this.store.getTask(idOrRef))
   }
 
   async createTask(input: CreateTaskInput): Promise<Task> {
-    await this.ready()
+    await this.initialize()
     return this.enrichTaskWithCount(await this.store.createTask(input))
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task> {
-    await this.ready()
+    await this.initialize()
     if (input.expectedVersion !== undefined) {
-      const currentVersion =
-        (await this.store.getTaskVersion?.(idOrRef)) ??
-        String((await this.store.getTask(idOrRef)).revision ?? 0)
+      const currentVersion = await this.store.getTaskVersion(idOrRef)
       if (currentVersion !== input.expectedVersion) {
         throw new KanbanError(
           ErrorCode.CONFLICT,
@@ -177,52 +171,52 @@ export class LocalProviderCore implements KanbanProvider {
   }
 
   async moveTask(idOrRef: string, column: string): Promise<Task> {
-    await this.ready()
+    await this.initialize()
     return this.enrichTaskWithCount(await this.store.moveTask(idOrRef, column))
   }
 
   async deleteTask(idOrRef: string): Promise<Task> {
-    await this.ready()
+    await this.initialize()
     return this.enrichTaskWithCount(await this.store.deleteTask(idOrRef))
   }
 
   async listComments(idOrRef: string): Promise<TaskComment[]> {
-    await this.ready()
+    await this.initialize()
     return this.store.listComments(idOrRef)
   }
 
   async getComment(idOrRef: string, commentId: string): Promise<TaskComment> {
-    await this.ready()
+    await this.initialize()
     return this.store.getComment(idOrRef, commentId)
   }
 
   async comment(idOrRef: string, body: string): Promise<TaskComment> {
-    await this.ready()
+    await this.initialize()
     return this.store.comment(idOrRef, body)
   }
 
   async updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment> {
-    await this.ready()
+    await this.initialize()
     return this.store.updateComment(idOrRef, commentId, body)
   }
 
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {
-    await this.ready()
+    await this.initialize()
     return this.store.getActivity(limit, taskId)
   }
 
   async getMetrics(): Promise<BoardMetrics> {
-    await this.ready()
+    await this.initialize()
     return this.store.getMetrics()
   }
 
   async getConfig(): Promise<BoardConfig> {
-    await this.ready()
+    await this.initialize()
     return this.store.getConfig()
   }
 
   async patchConfig(input: Partial<BoardConfig>): Promise<BoardConfig> {
-    await this.ready()
+    await this.initialize()
     return this.store.patchConfig(input)
   }
 

@@ -46,18 +46,6 @@ function jiraProviderConfig(
   }
 }
 
-export const PROVIDER_CAPABILITIES = {
-  local: LOCAL_CAPABILITIES,
-  linear: LINEAR_CAPABILITIES,
-  jira: JIRA_CAPABILITIES,
-} satisfies Record<TrackerConfig['provider'], ProviderCapabilities>
-
-export const POSTGRES_PROVIDER_CAPABILITIES = {
-  local: POSTGRES_LOCAL_CAPABILITIES,
-  linear: LINEAR_CAPABILITIES,
-  jira: JIRA_CAPABILITIES,
-} satisfies Record<TrackerConfig['provider'], ProviderCapabilities>
-
 export function createSqliteProvider(
   db: Database,
   config: TrackerConfig,
@@ -67,12 +55,12 @@ export function createSqliteProvider(
     case 'linear':
       return {
         provider: new LinearProvider(db, config.teamId, config.apiKey, config.syncIntervalMs),
-        capabilities: PROVIDER_CAPABILITIES.linear,
+        capabilities: LINEAR_CAPABILITIES,
       }
     case 'jira':
       return {
         provider: new JiraProvider(db, jiraProviderConfig(config)),
-        capabilities: PROVIDER_CAPABILITIES.jira,
+        capabilities: JIRA_CAPABILITIES,
       }
     case 'local':
       initSchema(db)
@@ -81,7 +69,7 @@ export function createSqliteProvider(
       }
       return {
         provider: new LocalProvider(db, options.dbPath),
-        capabilities: PROVIDER_CAPABILITIES.local,
+        capabilities: LOCAL_CAPABILITIES,
       }
   }
 }
@@ -99,17 +87,17 @@ export function createPostgresProvider(
           config.apiKey,
           config.syncIntervalMs,
         ),
-        capabilities: POSTGRES_PROVIDER_CAPABILITIES.linear,
+        capabilities: LINEAR_CAPABILITIES,
       }
     case 'jira':
       return {
         provider: new PostgresJiraProvider(sql, jiraProviderConfig(config)),
-        capabilities: POSTGRES_PROVIDER_CAPABILITIES.jira,
+        capabilities: JIRA_CAPABILITIES,
       }
     case 'local':
       return {
         provider: new PostgresLocalProvider(sql, config),
-        capabilities: POSTGRES_PROVIDER_CAPABILITIES.local,
+        capabilities: POSTGRES_LOCAL_CAPABILITIES,
       }
   }
 }

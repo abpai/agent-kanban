@@ -12,10 +12,12 @@ import {
   replaceJiraColumns,
   replaceJiraIssueTypes,
   replaceJiraPriorities,
+  resolveJiraColumnId,
   saveJiraSyncMeta,
   upsertJiraIssues,
   upsertJiraUsers,
 } from '../providers/jira-cache'
+import type { JiraColumnRow } from '../providers/jira-cache'
 
 let db: Database
 
@@ -356,5 +358,71 @@ describe('jira-cache', () => {
     const board = getCachedBoard(db)
     expect(board.columns[0]!.tasks).toEqual([])
     expect(getCachedTasks(db, { columnId })).toEqual([])
+  })
+})
+
+describe('resolveJiraColumnId', () => {
+  const col = (id: string, name: string, statusIds: string[] = []): JiraColumnRow => ({
+    id,
+    name,
+    position: 0,
+    status_ids: JSON.stringify(statusIds),
+    source: 'status',
+  })
+
+  test('matches by exact id first', () => {
+    const columns = [col('status:12136', 'To Do'), col('status:12137', 'In Progress')]
+    expect(resolveJiraColumnId(columns, 'status:12137')).toBe('status:12137')
+  })
+
+  test('matches by case-insensitive name', () => {
+    const columns = [col('status:12136', 'To Do')]
+    expect(resolveJiraColumnId(columns, 'to do')).toBe('status:12136')
+  })
+
+  test("resolves a separator-collapsed trigger string ('Todo') to the 'To Do' status column", () => {
+    const columns = [col('status:12136', 'To Do'), col('status:12137', 'In Progress')]
+    expect(resolveJiraColumnId(columns, 'Todo')).toBe('status:12136')
+    expect(resolveJiraColumnId(columns, 'ToDo')).toBe('status:12136')
+    expect(resolveJiraColumnId(columns, 'In-Progress')).toBe('status:12137')
+  })
+
+  test('exact case-insensitive name wins over a separator-insensitive collision', () => {
+    // 'To Do' and 'Todo' both normalize to 'todo'; an exact lowercase hit must
+    // not be derailed into the ambiguity branch.
+    const columns = [col('status:1', 'To Do'), col('status:2', 'Todo')]
+    expect(resolveJiraColumnId(columns, 'todo')).toBe('status:2')
+  })
+
+  test('rejects a separator-insensitive match that collapses two distinct columns', () => {
+    const columns = [col('status:1', 'To Do'), col('status:2', 'To-Do')]
+    expect(() => resolveJiraColumnId(columns, 'Todo')).toThrow(/ambiguous/)
+  })
+
+  test('falls back to raw status id containment', () => {
+    const columns = [col('board:1:Backlog', 'Backlog', ['10001', '10002'])]
+    expect(resolveJiraColumnId(columns, '10002')).toBe('board:1:Backlog')
+  })
+
+  test('raw status id wins over a column whose name normalizes to that id', () => {
+    // A numeric status-id reference must resolve by containment, not be hijacked
+    // by a column whose name only matches after the fuzzy normalized pass
+    // ('1-0-0-0-3' → '10003').
+    const columns = [
+      col('status:1', '1-0-0-0-3', ['99999']),
+      col('board:1:Backlog', 'Backlog', ['10003']),
+    ]
+    expect(resolveJiraColumnId(columns, '10003')).toBe('board:1:Backlog')
+  })
+
+  test('empty / separator-only input does not match a separator-only column name', () => {
+    const columns = [col('status:1', '---'), col('status:2', 'To Do')]
+    expect(() => resolveJiraColumnId(columns, '   ')).toThrow(/No Jira column matching/)
+    expect(() => resolveJiraColumnId(columns, '!!!')).toThrow(/No Jira column matching/)
+  })
+
+  test('throws COLUMN_NOT_FOUND when nothing matches', () => {
+    const columns = [col('status:12136', 'To Do')]
+    expect(() => resolveJiraColumnId(columns, 'Done')).toThrow(/No Jira column matching/)
   })
 })

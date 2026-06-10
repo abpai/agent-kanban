@@ -1,4 +1,4 @@
-import type { Sql, TransactionSql } from 'postgres'
+import type { Sql } from 'postgres'
 
 import type { BoardConfig, BoardView, Task } from '../types'
 import { ensureWebhookEventsSchema } from '../webhook-events'
@@ -10,17 +10,12 @@ import {
   type LinearSyncMeta,
 } from './linear-cache'
 import { linearTaskFromRow, type LinearTaskRow } from './cache-task-mappers'
+import { type Exec, recordsetJson } from './postgres-batch'
 import { parseProviderTeamInfo } from './team-info'
 
 export type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
 
 export type LinearIssueRow = LinearTaskRow
-
-type Exec = Sql | TransactionSql
-
-function recordsetJson(sql: Exec, rows: unknown[]): ReturnType<Sql['json']> {
-  return sql.json(rows as never)
-}
 
 /**
  * Postgres-backed cache/repository for the Linear provider. Mirrors the role of
@@ -215,7 +210,6 @@ export class PostgresLinearCache implements LinearCachePort {
             created_at text,
             updated_at text
           )
-          WHERE true
         `
       }
     })
@@ -230,23 +224,20 @@ export class PostgresLinearCache implements LinearCachePort {
       active: user.active === false ? 0 : 1,
       updated_at: now,
     }))
-    await this.sql.begin(async (tx) => {
-      await tx`
-        INSERT INTO linear_users (id, name, active, updated_at)
-        SELECT id, name, active, updated_at
-        FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
-          id text,
-          name text,
-          active integer,
-          updated_at text
-        )
-        WHERE true
-        ON CONFLICT(id) DO UPDATE SET
-          name = EXCLUDED.name,
-          active = EXCLUDED.active,
-          updated_at = EXCLUDED.updated_at
-      `
-    })
+    await this.sql`
+      INSERT INTO linear_users (id, name, active, updated_at)
+      SELECT id, name, active, updated_at
+      FROM jsonb_to_recordset(${recordsetJson(this.sql, rows)}) AS data(
+        id text,
+        name text,
+        active integer,
+        updated_at text
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        name = EXCLUDED.name,
+        active = EXCLUDED.active,
+        updated_at = EXCLUDED.updated_at
+    `
   }
 
   async upsertProjects(
@@ -261,25 +252,22 @@ export class PostgresLinearCache implements LinearCachePort {
       state: project.state ?? null,
       updated_at: now,
     }))
-    await this.sql.begin(async (tx) => {
-      await tx`
-        INSERT INTO linear_projects (id, name, url, state, updated_at)
-        SELECT id, name, url, state, updated_at
-        FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
-          id text,
-          name text,
-          url text,
-          state text,
-          updated_at text
-        )
-        WHERE true
-        ON CONFLICT(id) DO UPDATE SET
-          name = EXCLUDED.name,
-          url = EXCLUDED.url,
-          state = EXCLUDED.state,
-          updated_at = EXCLUDED.updated_at
-      `
-    })
+    await this.sql`
+      INSERT INTO linear_projects (id, name, url, state, updated_at)
+      SELECT id, name, url, state, updated_at
+      FROM jsonb_to_recordset(${recordsetJson(this.sql, rows)}) AS data(
+        id text,
+        name text,
+        url text,
+        state text,
+        updated_at text
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        name = EXCLUDED.name,
+        url = EXCLUDED.url,
+        state = EXCLUDED.state,
+        updated_at = EXCLUDED.updated_at
+    `
   }
 
   async saveActivity(rows: LinearActivityRow[]): Promise<void> {
@@ -299,7 +287,6 @@ export class PostgresLinearCache implements LinearCachePort {
         to_value text,
         created_at text
       )
-      WHERE true
       ON CONFLICT(issue_id, history_id, item_field) DO NOTHING
     `
   }
@@ -326,7 +313,11 @@ export class PostgresLinearCache implements LinearCachePort {
     }>,
   ): Promise<void> {
     if (issues.length === 0) return
-    const rows = issues.map((issue) => {
+    // A sync batch can repeat an issue id (Linear's updatedAt-ordered pagination
+    // can return an issue on two pages); the batched ON CONFLICT DO UPDATE
+    // statement errors on intra-statement duplicates, so keep the last
+    // occurrence — matching the old row-by-row and SQLite last-wins behavior.
+    const mapped = issues.map((issue) => {
       const hasCommentCount = issue.commentCount !== undefined && issue.commentCount !== null
       return {
         id: issue.id,
@@ -349,6 +340,7 @@ export class PostgresLinearCache implements LinearCachePort {
         updated_at: issue.updatedAt,
       }
     })
+    const rows = [...new Map(mapped.map((row) => [row.id, row])).values()]
 
     await this.sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-linear:issues'))`
@@ -444,7 +436,6 @@ export class PostgresLinearCache implements LinearCachePort {
         created_at text,
         updated_at text
       )
-      WHERE true
       ON CONFLICT(id) DO UPDATE SET
         identifier = EXCLUDED.identifier,
         title = EXCLUDED.title,

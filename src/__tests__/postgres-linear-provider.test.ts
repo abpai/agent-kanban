@@ -408,4 +408,45 @@ describe('postgres linear provider', () => {
     `
     expect(activity).toHaveLength(0)
   })
+
+  // Linear's updatedAt-ordered pagination can return the same issue on two
+  // pages of one sync; the batched upsert must last-wins instead of erroring
+  // ("ON CONFLICT DO UPDATE command cannot affect row a second time").
+  pgTest('upsertIssues tolerates duplicate issue ids within one batch', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    const cache = new PostgresLinearCache(sql)
+    await cache.ready
+
+    const issue = {
+      id: 'lin-dup-1',
+      identifier: 'GB-201',
+      title: 'First occurrence',
+      description: 'v1',
+      priority: 2,
+      assigneeId: null,
+      assigneeName: null,
+      projectId: null,
+      projectName: null,
+      stateId: 'state-todo',
+      stateName: 'Todo',
+      statePosition: 0,
+      labels: [],
+      commentCount: 0,
+      url: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }
+    await cache.upsertIssues([
+      issue,
+      { ...issue, title: 'Last occurrence wins', updatedAt: '2026-01-03T00:00:00.000Z' },
+    ])
+
+    const [row] = await sql<{ title: string; updated_at: string }[]>`
+      SELECT title, updated_at FROM linear_issues WHERE id = 'lin-dup-1'
+    `
+    expect(row).toEqual({
+      title: 'Last occurrence wins',
+      updated_at: '2026-01-03T00:00:00.000Z',
+    })
+  })
 })

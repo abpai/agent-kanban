@@ -30,8 +30,9 @@ const IN_PROGRESS_NAMES = new Set([
 ])
 
 // Lowercase and drop separators so 'In Progress', 'in-progress', and
-// 'in_progress' all normalize to the same token.
-function normalizeColumnName(name: string): string {
+// 'in_progress' all normalize to the same token. Also used by the Jira cache's
+// column resolution so trigger strings like 'Todo' match the status 'To Do'.
+export function normalizeColumnName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 

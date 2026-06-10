@@ -492,6 +492,38 @@ describe('postgres jira provider', () => {
     expect(rows.map((row) => ({ id: row.id, name: row.name }))).toEqual([{ id: '2', name: 'High' }])
   })
 
+  // A sync batch can repeat an issue id (an issue updated mid-pagination shows
+  // up on two pages); the batched upsert must last-wins instead of erroring
+  // ("ON CONFLICT DO UPDATE command cannot affect row a second time").
+  pgTest('upsertIssues tolerates duplicate issue ids within one batch', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    const cache = new PostgresJiraCache(sql)
+    await cache.ready
+
+    const issue = {
+      id: '9001',
+      key: 'ENG-201',
+      summary: 'First occurrence',
+      descriptionText: 'v1',
+      statusId: '10001',
+      projectKey: 'ENG',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }
+    await cache.upsertIssues([
+      issue,
+      { ...issue, summary: 'Last occurrence wins', updatedAt: '2026-01-03T00:00:00.000Z' },
+    ])
+
+    const [row] = await sql<{ summary: string; updated_at: string }[]>`
+      SELECT summary, updated_at FROM jira_issues WHERE id = '9001'
+    `
+    expect(row).toEqual({
+      summary: 'Last occurrence wins',
+      updated_at: '2026-01-03T00:00:00.000Z',
+    })
+  })
+
   pgTest('concurrent catalog refreshes do not collide on a primary key', async () => {
     if (!sql) throw new Error('expected postgres test connection')
     globalThis.fetch = jiraFetchStub(standardRoutes()).fn
