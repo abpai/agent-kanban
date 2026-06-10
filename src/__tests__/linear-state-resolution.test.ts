@@ -42,6 +42,11 @@ describe('resolveLinearState', () => {
     expect(() => resolveLinearState(states, 'Todo')).toThrow(/ambiguous/)
   })
 
+  test('rejects duplicate case-insensitive state names as ambiguous', () => {
+    const states = [state('state-1', 'Done'), state('state-2', 'done')]
+    expect(() => resolveLinearState(states, 'DONE')).toThrow(/ambiguous/)
+  })
+
   test('empty / separator-only input does not match a separator-only state name', () => {
     const states = [state('state-1', '---'), state('state-2', 'To Do')]
     expect(() => resolveLinearState(states, '   ')).toThrow(/No Linear workflow state matching/)
