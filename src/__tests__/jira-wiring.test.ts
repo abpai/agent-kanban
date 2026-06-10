@@ -182,6 +182,47 @@ describe('jira-wiring', () => {
     expect(err.message).toContain('Bulk commands')
   })
 
+  test('kanban board init under KANBAN_PROVIDER=jira keeps the SQLite remote local-only error', async () => {
+    const { dbPath } = makeDb()
+    setJiraRequiredEnv()
+    const result = await run(['--db', dbPath, 'board', 'init']).catch((err: unknown) => ({
+      error: err as KanbanError,
+    }))
+    expect('error' in result).toBe(true)
+    const err = (result as { error: KanbanError }).error
+    expect(err).toBeInstanceOf(KanbanError)
+    expect(err.code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
+    expect(err.message).toContain('Board initialization is only available in local mode')
+    expect(err.message).not.toContain('KANBAN_STORAGE=postgres')
+  })
+
+  test('kanban board reset under KANBAN_PROVIDER=jira keeps the SQLite remote local-only error', async () => {
+    const { dbPath } = makeDb()
+    setJiraRequiredEnv()
+    const result = await run(['--db', dbPath, 'board', 'reset']).catch((err: unknown) => ({
+      error: err as KanbanError,
+    }))
+    expect('error' in result).toBe(true)
+    const err = (result as { error: KanbanError }).error
+    expect(err).toBeInstanceOf(KanbanError)
+    expect(err.code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
+    expect(err.message).toContain('Board reset is only available in local mode')
+    expect(err.message).not.toContain('KANBAN_STORAGE=postgres')
+  })
+
+  test('kanban unknown board action under KANBAN_PROVIDER=jira remains an unknown command', async () => {
+    const { dbPath } = makeDb()
+    setJiraRequiredEnv()
+    const result = await run(['--db', dbPath, 'board', 'nope']).catch((err: unknown) => ({
+      error: err as KanbanError,
+    }))
+    expect('error' in result).toBe(true)
+    const err = (result as { error: KanbanError }).error
+    expect(err).toBeInstanceOf(KanbanError)
+    expect(err.code).toBe(ErrorCode.UNKNOWN_COMMAND)
+    expect(err.message).toContain("Unknown board command 'nope'")
+  })
+
   test('kanban config set-member under KANBAN_PROVIDER=jira exits with UNSUPPORTED_OPERATION', async () => {
     const { dbPath } = makeDb()
     setJiraRequiredEnv()

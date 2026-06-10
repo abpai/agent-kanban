@@ -1,10 +1,8 @@
 import type { Database } from 'bun:sqlite'
-import { getDbPath, initSchema, seedDefaultColumns } from '../db'
-import { JiraProvider } from './jira'
-import { LinearProvider } from './linear'
-import { LocalProvider } from './local'
+import { getDbPath } from '../db'
 import type { TrackerConfig } from '../tracker-config'
 import type { KanbanProvider } from './types'
+import { createSqliteProvider } from './factory'
 
 export function createProvider(
   db: Database,
@@ -12,25 +10,6 @@ export function createProvider(
   dbPath = getDbPath(),
   options: { seedLocalColumns?: boolean } = {},
 ): KanbanProvider {
-  if (config.provider === 'linear') {
-    return new LinearProvider(db, config.teamId, config.apiKey, config.syncIntervalMs)
-  }
-
-  if (config.provider === 'jira') {
-    return new JiraProvider(db, {
-      baseUrl: config.baseUrl,
-      email: config.email,
-      apiToken: config.apiToken,
-      projectKey: config.projectKey,
-      ...(config.boardId !== undefined ? { boardId: config.boardId } : {}),
-      defaultIssueType: config.defaultIssueType ?? 'Task',
-      pollingSyncIntervalMs: config.syncIntervalMs,
-    })
-  }
-
-  initSchema(db)
-  if (options.seedLocalColumns !== false) {
-    seedDefaultColumns(db, config.defaultColumns)
-  }
-  return new LocalProvider(db, dbPath)
+  return createSqliteProvider(db, config, { dbPath, seedLocalColumns: options.seedLocalColumns })
+    .provider
 }
