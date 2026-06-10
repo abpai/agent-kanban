@@ -839,6 +839,46 @@ describe('JiraProvider read path', () => {
     expect(getCachedTasks(db)).toHaveLength(150)
   })
 
+  test('sync fetches Jira changelogs with bounded concurrency', async () => {
+    const issues = Array.from({ length: 6 }, (_, i) =>
+      makeIssue({
+        id: String(i + 1),
+        key: `ENG-${i + 1}`,
+        statusId: '10001',
+        updated: '2026-01-02T00:00:00Z',
+      }),
+    )
+    const searchHandler: StubHandler = () => jsonResponse({ isLast: true, issues })
+    let calls = 0
+    let inFlight = 0
+    let maxInFlight = 0
+    const changelogHandler: StubHandler = async () => {
+      calls += 1
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      inFlight -= 1
+      return jsonResponse({
+        startAt: 0,
+        maxResults: 100,
+        total: 0,
+        isLast: true,
+        values: [],
+      })
+    }
+
+    const { provider } = makeProviderWithBoard(
+      standardRoutes({ searchHandler, changelogHandler }),
+      3,
+    )
+
+    await provider.getBoard()
+
+    expect(calls).toBe(6)
+    expect(maxInFlight).toBeGreaterThan(1)
+    expect(maxInFlight).toBeLessThanOrEqual(5)
+  })
+
   test('saveTeamInfo / loadTeamInfo roundtrip', () => {
     initJiraCacheSchema(db)
     saveTeamInfo(db, { id: '10000', key: 'ENG', name: 'Engineering' })

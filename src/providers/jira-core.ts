@@ -48,6 +48,7 @@ import type {
 } from './types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 import { warnOnce } from './warn-once'
+import { applyTaskFilters, forEachWithConcurrency, SyncGate, syncStatusFromMeta } from './sync-core'
 
 export const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
@@ -198,9 +199,7 @@ export class JiraProviderCore implements KanbanProvider {
   readonly type = 'jira' as const
   protected readonly client: JiraClient
   protected readonly pollingSyncIntervalMs: number
-  // When a server-side background warmer owns cache refresh, request-path syncs
-  // are suppressed once the cache is warm so reads/writes never block on Jira I/O.
-  private backgroundManaged = false
+  private readonly syncGate: SyncGate
 
   constructor(
     protected readonly cache: JiraCachePort,
@@ -208,6 +207,7 @@ export class JiraProviderCore implements KanbanProvider {
     client?: JiraClient,
   ) {
     this.pollingSyncIntervalMs = config.pollingSyncIntervalMs ?? DEFAULT_POLLING_SYNC_INTERVAL_MS
+    this.syncGate = new SyncGate(this.pollingSyncIntervalMs)
     this.client =
       client ??
       new JiraClient({
@@ -224,7 +224,6 @@ export class JiraProviderCore implements KanbanProvider {
   protected async sync(force = false, viaWarmer = false): Promise<void> {
     await this.cache.ready
     const meta = await this.cache.loadSyncMeta()
-    const lastSyncAtMs = meta.lastSyncAt ? Date.parse(meta.lastSyncAt) : 0
     // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
     // Once the cache has synced at least once (lastSyncAt persisted), implicit
     // request-path reads serve the warm cache instead of blocking on a Jira
@@ -232,9 +231,8 @@ export class JiraProviderCore implements KanbanProvider {
     // (~minutes) and would otherwise exceed the HTTP idle timeout. Forced syncs
     // (writes' read-after-write) and the warmer still run; CLI mode and cold start
     // (no prior sync) fall through and sync synchronously, preserving freshness.
-    if (this.backgroundManaged && !force && !viaWarmer && lastSyncAtMs) return
+    if (this.syncGate.shouldSkip({ force, viaWarmer, lastSyncAt: meta.lastSyncAt })) return
     const now = Date.now()
-    if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
     // `force` only bypasses the poll throttle; it must NOT imply a full
     // 1970-based reconcile, which re-fetches every issue plus a per-issue
     // changelog call (~minutes). Writes get read-after-write freshness from
@@ -373,13 +371,13 @@ export class JiraProviderCore implements KanbanProvider {
       // `moved` trigger in @garage/dispatch works. Server-side dedupe
       // keyed on (issue_id, history_id, item_field) keeps this cheap
       // even if the same issue is updated repeatedly.
-      for (const issue of page.issues) {
+      await forEachWithConcurrency(page.issues, 5, async (issue) => {
         await this.ingestIssueActivity(issue.id).catch((err) => {
           // Activity is best-effort; the main sync shouldn't fail if
           // one changelog call 404s or rate-limits.
           console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
         })
-      }
+      })
 
       const decision = decideJiraPagination(page, seenPageTokens)
       if (decision.nextToken !== undefined) {
@@ -479,16 +477,12 @@ export class JiraProviderCore implements KanbanProvider {
   }
 
   setBackgroundManaged(managed: boolean): void {
-    this.backgroundManaged = managed
+    this.syncGate.setBackgroundManaged(managed)
   }
 
   async getSyncStatus(): Promise<ProviderSyncStatus> {
     const meta = await this.cache.loadSyncMeta()
-    return {
-      lastSyncAt: meta.lastSyncAt,
-      lastFullSyncAt: meta.lastFullSyncAt,
-      lastWebhookAt: meta.lastWebhookAt,
-    }
+    return syncStatusFromMeta(meta)
   }
 
   async getContext(): Promise<ProviderContext> {
@@ -533,15 +527,10 @@ export class JiraProviderCore implements KanbanProvider {
   async listTasks(filters: TaskListFilters = {}): Promise<Task[]> {
     await this.sync()
     const columnId = filters.column ? await this.resolveColumnId(filters.column) : undefined
-    let tasks = await this.cache.getCachedTasks(columnId ? { columnId } : undefined)
-    if (filters.priority) tasks = tasks.filter((t) => t.priority === filters.priority)
-    if (filters.assignee) tasks = tasks.filter((t) => t.assignee === filters.assignee)
-    if (filters.project) tasks = tasks.filter((t) => t.project === filters.project)
-    if (filters.sort === 'title') tasks = [...tasks].sort((a, b) => a.title.localeCompare(b.title))
-    if (filters.sort === 'updated')
-      tasks = [...tasks].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    if (filters.limit) tasks = tasks.slice(0, filters.limit)
-    return tasks
+    return applyTaskFilters(
+      await this.cache.getCachedTasks(columnId ? { columnId } : undefined),
+      filters,
+    )
   }
 
   async getTask(idOrRef: string): Promise<Task> {

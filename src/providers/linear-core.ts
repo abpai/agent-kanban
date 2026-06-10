@@ -36,21 +36,15 @@ import type {
 } from './types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 import { warnOnce } from './warn-once'
+import {
+  applyTaskFilters,
+  maxSyncTimestamp,
+  parseSyncTimestamp,
+  SyncGate,
+  syncStatusFromMeta,
+} from './sync-core'
 
 const FULL_RECONCILIATION_INTERVAL_MS = 5 * 60_000
-
-function parseTimestamp(value: string | null | undefined): number {
-  if (!value) return 0
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-function maxTimestamp(a: string | null | undefined, b: string | null | undefined): string | null {
-  const aMs = parseTimestamp(a)
-  const bMs = parseTimestamp(b)
-  if (!aMs && !bMs) return null
-  return aMs >= bMs ? (a ?? null) : (b ?? null)
-}
 
 function toLinearPriority(priority: Task['priority'] | undefined): number | undefined {
   switch (priority) {
@@ -169,16 +163,16 @@ export interface LinearCachePort {
  */
 export class LinearProviderCore implements KanbanProvider {
   readonly type = 'linear' as const
-  // When a server-side background warmer owns cache refresh, request-path syncs
-  // are suppressed once the cache is warm so reads/writes never block on Linear I/O.
-  private backgroundManaged = false
+  private readonly syncGate: SyncGate
 
   constructor(
     protected readonly cache: LinearCachePort,
     protected readonly teamId: string,
     protected readonly client: LinearClient,
     protected readonly pollingSyncIntervalMs = DEFAULT_POLLING_SYNC_INTERVAL_MS,
-  ) {}
+  ) {
+    this.syncGate = new SyncGate(this.pollingSyncIntervalMs)
+  }
 
   async initialize(): Promise<void> {
     await this.cache.ready
@@ -201,16 +195,14 @@ export class LinearProviderCore implements KanbanProvider {
   protected async sync(force = false, viaWarmer = false): Promise<void> {
     await this.cache.ready
     const meta = await this.cache.loadSyncMeta()
-    const lastSyncAtMs = parseTimestamp(meta.lastSyncAt)
-    const lastFullSyncAtMs = parseTimestamp(meta.lastFullSyncAt)
+    const lastFullSyncAtMs = parseSyncTimestamp(meta.lastFullSyncAt)
     // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
     // Once the cache has synced at least once, implicit request-path reads serve the
     // warm cache instead of blocking on a Linear round-trip, which could exceed the
     // HTTP idle timeout. Forced syncs (writes' read-after-write) and the warmer
     // still run; CLI mode and cold start sync synchronously.
-    if (this.backgroundManaged && !force && !viaWarmer && lastSyncAtMs) return
+    if (this.syncGate.shouldSkip({ force, viaWarmer, lastSyncAt: meta.lastSyncAt })) return
     const now = Date.now()
-    if (!force && lastSyncAtMs && now - lastSyncAtMs < this.pollingSyncIntervalMs) return
 
     // `force` bypasses the poll throttle (above) for read-after-write freshness,
     // but does NOT imply a full workspace reconcile — that stays on its own
@@ -238,7 +230,7 @@ export class LinearProviderCore implements KanbanProvider {
       await this.cache.pruneIssues(issues.map((issue) => issue.id))
     }
 
-    const newestIssueTimestamp = maxTimestamp(
+    const newestIssueTimestamp = maxSyncTimestamp(
       meta.lastIssueUpdatedAt,
       issues.length > 0
         ? issues.reduce(
@@ -268,6 +260,9 @@ export class LinearProviderCore implements KanbanProvider {
   private async ingestTeamHistory(issueIds: string[], sinceIso: string | null): Promise<void> {
     if (issueIds.length === 0) return
     const concurrency = 5
+    // Manual windows rather than one mapWithConcurrency pass: each window's rows
+    // are persisted before the next window starts, so a mid-ingest failure keeps
+    // everything fetched so far.
     for (let i = 0; i < issueIds.length; i += concurrency) {
       const batch = issueIds.slice(i, i + concurrency)
       const results = await Promise.all(
@@ -401,16 +396,12 @@ export class LinearProviderCore implements KanbanProvider {
   }
 
   setBackgroundManaged(managed: boolean): void {
-    this.backgroundManaged = managed
+    this.syncGate.setBackgroundManaged(managed)
   }
 
   async getSyncStatus(): Promise<ProviderSyncStatus> {
     const meta = await this.cache.loadSyncMeta()
-    return {
-      lastSyncAt: meta.lastSyncAt,
-      lastFullSyncAt: meta.lastFullSyncAt,
-      lastWebhookAt: meta.lastWebhookAt,
-    }
+    return syncStatusFromMeta(meta)
   }
 
   async getContext(): Promise<ProviderContext> {
@@ -453,14 +444,7 @@ export class LinearProviderCore implements KanbanProvider {
       const column = await this.resolveState(filters.column)
       tasks = tasks.filter((task) => task.column_id === column.id)
     }
-    if (filters.priority) tasks = tasks.filter((task) => task.priority === filters.priority)
-    if (filters.assignee) tasks = tasks.filter((task) => task.assignee === filters.assignee)
-    if (filters.project) tasks = tasks.filter((task) => task.project === filters.project)
-    if (filters.sort === 'title') tasks = [...tasks].sort((a, b) => a.title.localeCompare(b.title))
-    if (filters.sort === 'updated')
-      tasks = [...tasks].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    if (filters.limit) tasks = tasks.slice(0, filters.limit)
-    return tasks
+    return applyTaskFilters(tasks, filters)
   }
 
   async getTask(idOrRef: string): Promise<Task> {

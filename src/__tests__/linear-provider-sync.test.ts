@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { LinearProvider } from '../providers/linear'
 import {
+  getCachedLinearActivity,
   getCachedTasks,
   initLinearCacheSchema,
   loadSyncMeta,
@@ -664,6 +665,112 @@ describe('LinearProvider sync', () => {
     expect(tasks.map((task) => task.externalRef)).toEqual(['R2P-1'])
     expect(tasks[0]?.comment_count).toBe(2)
     expect(loadSyncMeta(db).lastFullSyncAt).not.toBeNull()
+  })
+
+  test('history ingest preserves activity from completed batches before a later batch fails', async () => {
+    saveSyncMeta(db, {
+      team: { id: 'team-1', key: 'R2P', name: 'R2pi' },
+      lastSyncAt: '2026-01-01T00:00:00Z',
+      lastFullSyncAt: '2026-01-01T00:00:00Z',
+      lastIssueUpdatedAt: '2026-01-01T00:00:00Z',
+    })
+    const issues = Array.from({ length: 6 }, (_, i) =>
+      linearIssue({
+        id: `issue-${i + 1}`,
+        identifier: `R2P-${i + 1}`,
+        updatedAt: '2026-01-02T00:00:00Z',
+      }),
+    )
+
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string
+        variables: Record<string, unknown>
+      }
+
+      if (body.query.includes('query TeamSnapshot')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              team: {
+                id: 'team-1',
+                key: 'R2P',
+                name: 'R2pi',
+                states: { nodes: [{ id: 'state-1', name: 'Todo', position: 0 }] },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Users')) {
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Projects')) {
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Issues')) {
+        return new Response(
+          JSON.stringify({
+            data: { issues: { nodes: issues, pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query IssueHistory')) {
+        const issueId = String(body.variables.issueId)
+        if (issueId === 'issue-6') {
+          return new Response('history failed', { status: 500 })
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: {
+                history: {
+                  nodes: [
+                    {
+                      id: `hist-${issueId}`,
+                      createdAt: '2026-01-02T00:00:00Z',
+                      fromState: { id: 'state-0' },
+                      toState: { id: 'state-1' },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const originalDateNow = Date.now
+    Date.now = () => Date.parse('2026-01-01T00:01:00Z')
+    try {
+      const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
+      await provider.getBoard()
+    } finally {
+      Date.now = originalDateNow
+    }
+
+    expect(
+      getCachedLinearActivity(db)
+        .map((row) => row.issue_id)
+        .sort(),
+    ).toEqual(['issue-1', 'issue-2', 'issue-3', 'issue-4', 'issue-5'])
   })
 
   test('counts comments beyond the inline first page instead of capping at the page length', async () => {
