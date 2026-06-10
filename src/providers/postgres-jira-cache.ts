@@ -10,73 +10,10 @@ import {
 } from './jira-cache'
 import type { JiraCachePort } from './jira-core'
 import { ensureWebhookEventsSchema } from '../webhook-events'
+import { jiraTaskFromRow, type JiraTaskRow } from './cache-task-mappers'
 import { parseProviderTeamInfo } from './team-info'
 
-export interface JiraIssueRow {
-  id: string
-  key: string
-  summary: string
-  description_text: string
-  status_id: string
-  priority_name: string
-  issue_type_name: string
-  assignee_account_id: string | null
-  assignee_name: string
-  labels: string
-  comment_count: number
-  project_key: string
-  url: string | null
-  created_at: string
-  updated_at: string
-}
-
-function mapPriorityNameToCanonical(name: string): Task['priority'] {
-  switch (name.trim().toLowerCase()) {
-    case 'highest':
-      return 'urgent'
-    case 'high':
-      return 'high'
-    case 'medium':
-      return 'medium'
-    default:
-      return 'low'
-  }
-}
-
-function parseLabels(raw: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === 'string')
-      : []
-  } catch {
-    return []
-  }
-}
-
-function taskFromRow(row: JiraIssueRow): Task {
-  return {
-    id: `jira:${row.id}`,
-    providerId: row.id,
-    externalRef: row.key,
-    url: row.url,
-    title: row.summary,
-    description: row.description_text,
-    column_id: row.status_id,
-    position: 0,
-    priority: mapPriorityNameToCanonical(row.priority_name),
-    assignee: row.assignee_name,
-    assignees: row.assignee_name ? [row.assignee_name] : [],
-    labels: parseLabels(row.labels),
-    comment_count: row.comment_count,
-    project: row.project_key,
-    metadata: '{}',
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    version: row.updated_at,
-    source_updated_at: row.updated_at,
-  }
-}
+export type JiraIssueRow = JiraTaskRow
 
 /**
  * Postgres-backed cache/repository for the Jira provider. Mirrors the role of the
@@ -431,7 +368,7 @@ export class PostgresJiraCache implements JiraCachePort {
     const boardColumns = []
     for (const column of columns) {
       const tasks = (await this.selectIssuesByStatusIds(decodeColumnStatusIds(column))).map(
-        taskFromRow,
+        jiraTaskFromRow,
       )
       boardColumns.push({
         id: column.id,
@@ -453,7 +390,7 @@ export class PostgresJiraCache implements JiraCachePort {
       WHERE id = ${normalized} OR key = ${normalized}
       LIMIT 1
     `
-    return row ? taskFromRow(row) : null
+    return row ? jiraTaskFromRow(row) : null
   }
 
   async adjustIssueCommentCount(idOrKey: string, delta: number): Promise<void> {
@@ -470,13 +407,15 @@ export class PostgresJiraCache implements JiraCachePort {
         SELECT status_ids FROM jira_columns WHERE id = ${params.columnId}
       `
       if (!columnRow) return []
-      return (await this.selectIssuesByStatusIds(decodeColumnStatusIds(columnRow))).map(taskFromRow)
+      return (await this.selectIssuesByStatusIds(decodeColumnStatusIds(columnRow))).map(
+        jiraTaskFromRow,
+      )
     }
     return (
       await this.sql<JiraIssueRow[]>`
         SELECT * FROM jira_issues ORDER BY updated_at DESC, summary ASC
       `
-    ).map(taskFromRow)
+    ).map(jiraTaskFromRow)
   }
 
   async getCachedConfig(): Promise<JiraCacheConfig> {
