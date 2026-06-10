@@ -2,7 +2,7 @@ import type { Sql } from 'postgres'
 
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 import type { WebhookRequest, WebhookResult } from '../webhooks'
-import { extractWebhookMeta, recordWebhookEvent, webhookEventStatus } from '../webhook-events'
+import { recordedWebhook } from '../webhook-events'
 import { LinearClient } from './linear-client'
 import { LinearProviderCore } from './linear-core'
 import { PostgresLinearCache } from './postgres-linear-cache'
@@ -30,24 +30,6 @@ export class PostgresLinearProvider extends LinearProviderCore {
   }
 
   override async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
-    const meta = extractWebhookMeta('linear', payload.rawBody)
-    let result: WebhookResult
-    try {
-      result = await this.handleWebhookCore(payload)
-    } catch (err) {
-      void recordWebhookEvent(this.sql, {
-        provider: 'linear',
-        ...meta,
-        status: 'error',
-        detail: { error: err instanceof Error ? err.message : String(err) },
-      })
-      throw err
-    }
-    void recordWebhookEvent(this.sql, {
-      provider: 'linear',
-      ...meta,
-      status: webhookEventStatus(result),
-    })
-    return result
+    return recordedWebhook(this.sql, 'linear', payload, () => this.handleWebhookCore(payload))
   }
 }

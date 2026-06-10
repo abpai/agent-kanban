@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import type { BoardConfig, BoardView, Task } from '../types'
+import { LinearClient } from '../providers/linear-client'
+import { LinearProviderCore, type LinearCachePort } from '../providers/linear-core'
 import { LinearProvider } from '../providers/linear'
 import {
   initLinearCacheSchema,
@@ -7,6 +10,68 @@ import {
   saveSyncMeta,
   upsertIssues,
 } from '../providers/linear-cache'
+
+function taskWithEmptyProviderId(): Task {
+  return {
+    id: 'linear:issue-1',
+    providerId: '',
+    externalRef: 'ENG-1',
+    url: 'https://linear.app/x/issue/ENG-1',
+    title: 'Issue 1',
+    description: '',
+    column_id: 'state-1',
+    position: 0,
+    priority: 'low',
+    assignee: '',
+    assignees: [],
+    labels: [],
+    comment_count: 0,
+    project: '',
+    metadata: '{}',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-02T00:00:00Z',
+    version: '2026-01-02T00:00:00Z',
+    source_updated_at: '2026-01-02T00:00:00Z',
+  }
+}
+
+function fakeLinearCache(task: Task): LinearCachePort {
+  const meta = {
+    team: { id: 'team-1', key: 'ENG', name: 'Engineering' },
+    lastSyncAt: new Date().toISOString(),
+    lastFullSyncAt: null,
+    lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
+    lastWebhookAt: null,
+  }
+  return {
+    ready: Promise.resolve(),
+    loadSyncMeta: async () => meta,
+    saveSyncMeta: async () => {},
+    replaceStates: async () => {},
+    upsertUsers: async () => {},
+    upsertProjects: async () => {},
+    upsertIssues: async () => {},
+    deleteIssue: async () => {},
+    pruneIssues: async () => {},
+    adjustIssueCommentCount: async () => {},
+    saveActivity: async () => {},
+    getCachedActivity: async () => [],
+    getCachedColumns: async () => [],
+    getCachedBoard: async (): Promise<BoardView> => ({ columns: [] }),
+    getCachedTask: async () => task,
+    getCachedTasks: async () => [task],
+    getCachedConfig: async (): Promise<BoardConfig> => ({
+      members: [],
+      projects: [],
+      provider: 'linear',
+      discoveredAssignees: [],
+      discoveredProjects: [],
+    }),
+    findUserIdByName: async () => null,
+    findProjectIdByName: async () => null,
+    resolveIssueId: async () => 'issue-1',
+  }
+}
 
 let db: Database
 let originalFetch: typeof fetch
@@ -204,6 +269,22 @@ describe('LinearProvider.comment', () => {
         updated_at: '2026-01-04T00:00:00Z',
       },
     ])
+  })
+
+  test('uses the unprefixed task id when providerId is empty', async () => {
+    const provider = new LinearProviderCore(
+      fakeLinearCache(taskWithEmptyProviderId()),
+      'team-1',
+      new LinearClient('lin_api_test'),
+    )
+
+    await provider.listComments('ENG-1')
+
+    expect(requests[0]?.query).toContain('query IssueComments')
+    expect(requests[0]?.variables).toEqual({
+      issueId: 'issue-1',
+      after: null,
+    })
   })
 
   test('queries a single Linear comment by id', async () => {

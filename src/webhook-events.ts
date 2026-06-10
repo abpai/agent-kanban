@@ -25,7 +25,7 @@
 import type { JSONValue, Sql } from 'postgres'
 
 import type { TrackerProvider } from './tracker-config'
-import type { WebhookResult } from './webhooks'
+import type { WebhookRequest, WebhookResult } from './webhooks'
 
 export type WebhookEventStatus = 'accepted' | 'skipped' | 'error'
 
@@ -68,6 +68,33 @@ export async function ensureWebhookEventsSchema(sql: Sql): Promise<void> {
 export function webhookEventStatus(result: WebhookResult): WebhookEventStatus {
   if (result.unauthorized) return 'error'
   return result.handled ? 'accepted' : 'skipped'
+}
+
+export async function recordedWebhook(
+  sql: Sql,
+  provider: TrackerProvider,
+  payload: WebhookRequest,
+  dispatch: () => Promise<WebhookResult>,
+): Promise<WebhookResult> {
+  const meta = extractWebhookMeta(provider, payload.rawBody)
+  let result: WebhookResult
+  try {
+    result = await dispatch()
+  } catch (err) {
+    void recordWebhookEvent(sql, {
+      provider,
+      ...meta,
+      status: 'error',
+      detail: { error: err instanceof Error ? err.message : String(err) },
+    })
+    throw err
+  }
+  void recordWebhookEvent(sql, {
+    provider,
+    ...meta,
+    status: webhookEventStatus(result),
+  })
+  return result
 }
 
 /** Append a receipt. Swallows every error — a logging miss must never fail the webhook. */

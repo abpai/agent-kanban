@@ -319,6 +319,10 @@ export class LinearProviderCore implements KanbanProvider {
     return task
   }
 
+  private issueIdFor(task: Task): string {
+    return task.providerId || task.id.replace(/^linear:/, '')
+  }
+
   // Read-after-write refresh of a single issue. Re-fetching just the mutated
   // issue (and its history) keeps the post-write read fresh without paying for a
   // full team sync(true)/prune on every update or move.
@@ -508,22 +512,24 @@ export class LinearProviderCore implements KanbanProvider {
     if (input.metadata !== undefined) {
       unsupportedOperation('Linear mode does not support metadata updates')
     }
-    const result = await this.client.updateIssue(task.providerId || task.id, updateInput)
+    const issueId = this.issueIdFor(task)
+    const result = await this.client.updateIssue(issueId, updateInput)
     if (!result.success) {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear issue update failed')
     }
-    return this.hydrateIssue(task.providerId || task.id)
+    return this.hydrateIssue(issueId)
   }
 
   async moveTask(idOrRef: string, column: string): Promise<Task> {
     await this.sync()
     const task = await this.resolveTask(idOrRef)
     const state = await this.resolveState(column)
-    const result = await this.client.updateIssue(task.providerId || task.id, { stateId: state.id })
+    const issueId = this.issueIdFor(task)
+    const result = await this.client.updateIssue(issueId, { stateId: state.id })
     if (!result.success) {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear issue move failed')
     }
-    return this.hydrateIssue(task.providerId || task.id)
+    return this.hydrateIssue(issueId)
   }
 
   async deleteTask(_idOrRef: string): Promise<Task> {
@@ -533,7 +539,7 @@ export class LinearProviderCore implements KanbanProvider {
   async listComments(idOrRef: string): Promise<TaskComment[]> {
     await this.sync()
     const task = await this.resolveTask(idOrRef)
-    const comments = await this.client.listComments(task.providerId || task.id)
+    const comments = await this.client.listComments(this.issueIdFor(task))
     return comments.map((comment) => this.toTaskComment(task, comment))
   }
 
@@ -547,11 +553,12 @@ export class LinearProviderCore implements KanbanProvider {
   async comment(idOrRef: string, body: string): Promise<TaskComment> {
     await this.sync()
     const task = await this.resolveTask(idOrRef)
-    const result = await this.client.commentCreate(task.providerId || task.id, body)
+    const issueId = this.issueIdFor(task)
+    const result = await this.client.commentCreate(issueId, body)
     if (!result.success || !result.comment) {
       throw new KanbanError(ErrorCode.PROVIDER_UPSTREAM_ERROR, 'Linear comment creation failed')
     }
-    await this.cache.adjustIssueCommentCount(task.providerId || task.id, 1)
+    await this.cache.adjustIssueCommentCount(issueId, 1)
     return this.toTaskComment(task, result.comment)
   }
 
