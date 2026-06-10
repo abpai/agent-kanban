@@ -25,8 +25,12 @@ prior branch lands or is used as the base.
    Status: confirmed. `src/providers/postgres-local.ts` is 770 lines beside
    `src/db.ts` at 747 lines and `src/providers/local.ts` at 187 lines. The
    lockstep comment and observed comment ordering drift are present.
-   Action: later. This is high-payoff but a large core refactor. Design
-   `LocalStorePort` and `LocalProviderCore` with parity tests before rewriting.
+   Action: addressed in the sixth stacked PR. SQLite and Postgres local
+   providers now sit behind `LocalProviderCore` and a `LocalStorePort`, sharing
+   provider-facing enrichment, bootstrap/context assembly, comment-count
+   projection, and optimistic-version checks. Storage-specific SQL remains in
+   the store implementations rather than introducing a dialect adapter in this
+   PR.
 
 2. SQLite/Postgres Jira and Linear cache pairs duplicate mapper and SQL logic.
    Status: confirmed. Jira cache files are 686 and 587 lines; Linear cache files
@@ -125,6 +129,4 @@ prior branch lands or is used as the base.
 
 ## Suggested stack after the Postgres cache atomicity PR
 
-1. Local provider core refactor: introduce a storage port and migrate SQLite and
-   Postgres local providers behind it.
-2. UI capability defaults and `TaskDetail` editable field extraction.
+1. UI capability defaults and `TaskDetail` editable field extraction.
