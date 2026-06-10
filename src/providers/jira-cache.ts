@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite'
+import { normalizeColumnName } from '../column-roles'
 import { ErrorCode, KanbanError } from '../errors'
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
 
@@ -70,26 +71,47 @@ export function jiraBoardColumnRows(
   })
 }
 
+function ambiguousColumnError(input: string, matches: JiraColumnRow[]): KanbanError {
+  return new KanbanError(
+    ErrorCode.COLUMN_NOT_FOUND,
+    `Jira column name '${input}' is ambiguous; use one of these column ids: ${matches
+      .map((column) => column.id)
+      .join(', ')}`,
+  )
+}
+
 // Resolves a user-supplied column reference to a cached column id, trying
-// (1) exact id, (2) case-insensitive name, (3) raw status id containment.
-// A name that matches multiple columns (possible when Jira returns duplicate
-// board column names) is rejected as ambiguous so the caller picks an id.
+// (1) exact id, (2) case-insensitive name, (3) raw status id containment,
+// (4) separator-insensitive name ('Todo' → 'To Do'). Exact passes (id, name,
+// status id) run before the fuzzy normalized pass so a precise reference is
+// never overridden by a normalized-name collision. Name lookups that match
+// multiple distinct columns (possible when Jira returns duplicate board column
+// names, or when two columns collapse to the same normalized token) are
+// rejected as ambiguous so the caller picks an id.
 export function resolveJiraColumnId(columns: JiraColumnRow[], input: string): string {
   const byId = columns.find((column) => column.id === input)
   if (byId) return byId.id
   const lower = input.toLowerCase()
   const byName = columns.filter((column) => column.name.toLowerCase() === lower)
   if (byName.length === 1) return byName[0]!.id
-  if (byName.length > 1) {
-    throw new KanbanError(
-      ErrorCode.COLUMN_NOT_FOUND,
-      `Jira column name '${input}' is ambiguous; use one of these column ids: ${byName
-        .map((column) => column.id)
-        .join(', ')}`,
-    )
-  }
+  if (byName.length > 1) throw ambiguousColumnError(input, byName)
+  // Exact status-id containment takes precedence over the fuzzy name pass: a raw
+  // status id is an unambiguous reference and must not be shadowed by a column
+  // whose name happens to normalize to the same token.
   const byStatus = columns.find((column) => decodeColumnStatusIds(column).includes(input))
   if (byStatus) return byStatus.id
+  // Status-fallback columns are named after Jira statuses ('To Do', 'In
+  // Progress'), but dispatch triggers pass collapsed strings like 'Todo'. Match
+  // separator-insensitively so the trigger column resolves instead of throwing
+  // COLUMN_NOT_FOUND (which silently strands every ticket in that column). Skip a
+  // token that collapses to empty so punctuation-only input never matches a
+  // separator-only column name.
+  const normalized = normalizeColumnName(input)
+  if (normalized !== '') {
+    const byNormalized = columns.filter((column) => normalizeColumnName(column.name) === normalized)
+    if (byNormalized.length === 1) return byNormalized[0]!.id
+    if (byNormalized.length > 1) throw ambiguousColumnError(input, byNormalized)
+  }
   throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No Jira column matching '${input}'`)
 }
 

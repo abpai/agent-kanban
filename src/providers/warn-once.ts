@@ -7,3 +7,9 @@ export function warnOnce(key: string, message: string): void {
   warnedKeys.add(key)
   console.warn(message)
 }
+
+// Test-only: clear the process-wide dedup set so tests can assert warnings
+// independently of which test ran first.
+export function resetWarnOnce(): void {
+  warnedKeys.clear()
+}
