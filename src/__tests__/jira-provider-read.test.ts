@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite'
 import { ErrorCode, KanbanError } from '../errors'
 import { JiraClient } from '../providers/jira-client'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
+import { resetWarnOnce } from '../providers/warn-once'
 import {
   getCachedColumns,
   getCachedTasks,
@@ -176,6 +177,7 @@ beforeEach(() => {
   db = new Database(':memory:')
   originalFetch = globalThis.fetch
   originalDateNow = Date.now
+  resetWarnOnce()
 })
 
 afterEach(() => {
@@ -934,5 +936,93 @@ describe('JiraProvider read path', () => {
     await provider.syncCache()
 
     expect(calls.some((c) => c.url.includes('/rest/api/3/search/jql'))).toBe(true)
+  })
+
+  function captureUnmappedWarnings(): {
+    messages: string[]
+    restore: () => void
+  } {
+    const all: string[] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      all.push(args.map(String).join(' '))
+    }
+    return {
+      get messages() {
+        return all.filter((m) => m.includes('maps to no column'))
+      },
+      restore: () => {
+        console.warn = origWarn
+      },
+    }
+  }
+
+  test('warns when an issue status maps to no board column and keeps it off the board', async () => {
+    // Board maps statuses 10001/10002 to 'Done'; 10003 is on no column.
+    const searchHandler: StubHandler = () =>
+      jsonResponse({
+        startAt: 0,
+        maxResults: 100,
+        total: 1,
+        issues: [makeIssue({ id: '7', key: 'ENG-7', statusId: '10003' })],
+      })
+    const warn = captureUnmappedWarnings()
+    try {
+      const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+      const board = await provider.getBoard()
+      expect(warn.messages).toHaveLength(1)
+      expect(warn.messages[0]).toContain("status 'Status 10003' (10003)")
+      expect(warn.messages[0]).toContain('not on board 3')
+      // Cached but invisible: present in jira_issues, absent from every column.
+      expect(getCachedTasks(db).some((t) => t.externalRef === 'ENG-7')).toBe(true)
+      expect(board.columns.flatMap((c) => c.tasks)).toHaveLength(0)
+    } finally {
+      warn.restore()
+    }
+  })
+
+  test('warns when an issue status is absent from the status-fallback catalog', async () => {
+    // Status-fallback columns come from statuses 10001/10002/10003; 10099 is absent.
+    const searchHandler: StubHandler = () =>
+      jsonResponse({
+        startAt: 0,
+        maxResults: 100,
+        total: 1,
+        issues: [makeIssue({ id: '8', key: 'ENG-8', statusId: '10099' })],
+      })
+    const warn = captureUnmappedWarnings()
+    try {
+      const { provider } = makeProvider(standardRoutes({ searchHandler }))
+      await provider.getBoard()
+      expect(warn.messages).toHaveLength(1)
+      expect(warn.messages[0]).toContain("status 'Status 10099' (10099)")
+      expect(warn.messages[0]).toContain('absent from the project status catalog')
+    } finally {
+      warn.restore()
+    }
+  })
+
+  test('unmapped-status warning fires once across repeated syncs', async () => {
+    const searchHandler: StubHandler = () =>
+      jsonResponse({
+        startAt: 0,
+        maxResults: 100,
+        total: 1,
+        issues: [makeIssue({ id: '9', key: 'ENG-9', statusId: '10003' })],
+      })
+    const warn = captureUnmappedWarnings()
+    try {
+      const { provider, calls } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+      await provider.getBoard()
+      const origNow = originalDateNow
+      Date.now = () => origNow() + 31_000
+      await provider.getBoard()
+      // Both reads must actually sync (the +31s skip clears the poll throttle);
+      // otherwise a single warning here would prove nothing about dedup.
+      expect(calls.filter((c) => c.url.includes('/rest/api/3/search/jql'))).toHaveLength(2)
+      expect(warn.messages).toHaveLength(1)
+    } finally {
+      warn.restore()
+    }
   })
 })

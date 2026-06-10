@@ -70,7 +70,8 @@ export function webhookEventStatus(result: WebhookResult): WebhookEventStatus {
   return result.handled ? 'accepted' : 'skipped'
 }
 
-export async function recordedWebhook(
+/** Run a webhook dispatch and record its outcome (accepted/skipped/error) fire-and-forget. */
+export async function withWebhookRecording(
   sql: Sql,
   provider: TrackerProvider,
   payload: WebhookRequest,
