@@ -72,26 +72,30 @@ prior branch lands or is used as the base.
    Status: confirmed. `provider-runtime.ts`, `providers/index.ts`, and
    `src/index.ts` all encode pieces of the matrix; CLI gates on `sqliteDb`
    despite capability flags.
-   Action: later. Design a provider factory table and route CLI commands through
-   capabilities rather than storage handles.
+   Action: addressed in the fourth stacked PR. SQLite/Postgres provider
+   construction now goes through one factory module, runtime carries the
+   provider capabilities selected by that factory, and CLI column/bulk/config
+   gates use those capabilities instead of only checking the storage handle.
 
 9. `use-cases.ts` is mostly pass-through wrappers.
    Status: confirmed by file shape; one label normalization path overlaps
    provider normalization.
-   Action: later. Remove or justify the layer only after checking all transports
-   and tests that import it.
+   Action: addressed in the fourth stacked PR. Transports now call providers
+   directly, while `use-cases.ts` is reduced to the remaining shared
+   create-task label normalization seam.
 
 10. CLI parsing uses `strict: false` and unchecked casts.
     Status: confirmed. `src/index.ts` has multiple `strict: false` parser calls
     and many casts.
-    Action: later. This is user-facing CLI behavior; switch to strict parsing in
-    a separate compatibility PR.
+    Action: addressed in the fourth stacked PR. CLI, serve, and MCP parsing now
+    use strict option parsing and convert parser failures to `INVALID_ARGUMENT`.
 
 11. API response envelopes are repeated per route.
     Status: confirmed. `src/api.ts` is 372 lines with repeated `wrapHandler`
     response shapes.
-    Action: later. Route-table refactor should be separate and backed by API
-    tests.
+    Action: addressed in the fourth stacked PR. API routes now share read and
+    mutation result helpers for `{ ok, data }` envelopes, mutation flags, and
+    optional websocket event projection.
 
 12. Linear repeats `task.providerId || task.id`.
     Status: confirmed before this triage; write/comment paths repeated this
@@ -115,12 +119,10 @@ prior branch lands or is used as the base.
     `board-slice.ts` defaults capabilities on.
     Action: later. Treat as a UI PR with bootstrap-state testing.
 
-## Suggested stack after the sync-core PR
+## Suggested stack after the runtime/API surface PR
 
 1. Postgres cache atomicity: transaction and batch catalog refreshes, then Linear
    issue upserts.
-2. Provider runtime and CLI capability matrix: table-driven construction plus
-   capability-based CLI gating.
-3. Local provider core refactor: introduce a storage port and migrate SQLite and
+2. Local provider core refactor: introduce a storage port and migrate SQLite and
    Postgres local providers behind it.
-4. UI capability defaults and `TaskDetail` editable field extraction.
+3. UI capability defaults and `TaskDetail` editable field extraction.

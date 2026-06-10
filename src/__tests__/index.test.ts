@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ErrorCode, KanbanError, type ErrorCodeValue } from '../errors'
 import type { Task, TaskComment } from '../types'
-import { parseServeArgs, run } from '../index'
+import { parseMcpArgs, parseServeArgs, run } from '../index'
 
 async function withTempDb(runTest: (dbPath: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'kanban-run-'))
@@ -118,6 +118,26 @@ describe('parseServeArgs', () => {
       else process.env['KANBAN_API_TOKEN'] = prevToken
       if (prevOrigin === undefined) delete process.env['KANBAN_ALLOWED_ORIGIN']
       else process.env['KANBAN_ALLOWED_ORIGIN'] = prevOrigin
+    }
+  })
+
+  test('rejects unknown serve options', () => {
+    expect(() => parseServeArgs(['serve', '--bogus'])).toThrow(KanbanError)
+    try {
+      parseServeArgs(['serve', '--bogus'])
+    } catch (err) {
+      expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+    }
+  })
+})
+
+describe('parseMcpArgs', () => {
+  test('rejects unknown mcp options', () => {
+    expect(() => parseMcpArgs(['mcp', '--bogus'])).toThrow(KanbanError)
+    try {
+      parseMcpArgs(['mcp', '--bogus'])
+    } catch (err) {
+      expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
     }
   })
 })
@@ -374,5 +394,11 @@ describe('run', () => {
         'kanban comment update <task-id> <comment-id> <body>',
       )
     })
+  })
+
+  test('rejects unknown top-level options before opening a runtime', async () => {
+    const err = await run(['--bogus']).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(KanbanError)
+    expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
   })
 })

@@ -2,7 +2,8 @@ import { KanbanError, ErrorCode } from './errors'
 import type { BoardConfig, CliOutput, Task } from './types'
 import type { CreateTaskInput, UpdateTaskInput, KanbanProvider } from './providers/types'
 import { parsePositiveInt } from './transport-input'
-import * as useCases from './use-cases'
+import { success } from './output'
+import { normalizeCreateTaskInput } from './use-cases'
 
 export type WsEvent =
   | { type: 'task:upsert'; task: Task; columnId: string }
@@ -75,6 +76,10 @@ async function wrapHandler(fn: () => Promise<CliOutput> | CliOutput): Promise<Re
   }
 }
 
+async function okHandler<T>(fn: () => Promise<T> | T): Promise<Response> {
+  return wrapHandler(async () => success(await fn()))
+}
+
 export interface ApiResult {
   response: Response
   mutated: boolean
@@ -85,95 +90,76 @@ function upsertEvent(task: Task): WsEvent {
   return { type: 'task:upsert', task, columnId: task.column_id }
 }
 
+async function readResult<T>(fn: () => Promise<T> | T): Promise<ApiResult> {
+  return { response: await okHandler(fn), mutated: false }
+}
+
+async function mutationResult<T>(
+  fn: () => Promise<T> | T,
+  eventFor?: (data: T) => WsEvent | undefined,
+): Promise<ApiResult> {
+  let data: T | undefined
+  const response = await okHandler(async () => {
+    data = await fn()
+    return data
+  })
+  return {
+    response,
+    mutated: response.ok,
+    event: response.ok && data !== undefined && eventFor ? eventFor(data) : undefined,
+  }
+}
+
 export async function handleRequest(provider: KanbanProvider, req: Request): Promise<ApiResult> {
   const url = new URL(req.url)
   const path = url.pathname
   const method = req.method
 
   if (path === '/api/bootstrap' && method === 'GET') {
-    return {
-      response: await wrapHandler(async () => ({
-        ok: true,
-        data: await useCases.getBootstrap(provider),
-      })),
-      mutated: false,
-    }
+    return readResult(() => provider.getBootstrap())
   }
 
   if (path === '/api/provider' && method === 'GET') {
-    return {
-      response: await wrapHandler(async () => ({
-        ok: true,
-        data: await useCases.getContext(provider),
-      })),
-      mutated: false,
-    }
+    return readResult(() => provider.getContext())
   }
 
   if (path === '/api/board' && method === 'GET') {
-    return {
-      response: await wrapHandler(async () => ({
-        ok: true,
-        data: await useCases.getBoard(provider),
-      })),
-      mutated: false,
-    }
+    return readResult(() => provider.getBoard())
   }
 
   if (path === '/api/columns' && method === 'GET') {
-    return {
-      response: await wrapHandler(async () => ({
-        ok: true,
-        data: await useCases.listColumns(provider),
-      })),
-      mutated: false,
-    }
+    return readResult(() => provider.listColumns())
   }
 
   if (path === '/api/tasks' && method === 'GET') {
-    return {
-      response: await wrapHandler(async () => {
-        const column = url.searchParams.get('column') ?? undefined
-        const priority = url.searchParams.get('priority') ?? undefined
-        const assignee = url.searchParams.get('assignee') ?? undefined
-        const project = url.searchParams.get('project') ?? undefined
-        const sort = url.searchParams.get('sort') ?? undefined
-        const limit = parsePositiveInt(url.searchParams.get('limit'))
-        return {
-          ok: true,
-          data: await useCases.listTasks(provider, {
-            column,
-            priority,
-            assignee,
-            project,
-            sort,
-            limit,
-          }),
-        }
-      }),
-      mutated: false,
-    }
+    return readResult(() => {
+      const column = url.searchParams.get('column') ?? undefined
+      const priority = url.searchParams.get('priority') ?? undefined
+      const assignee = url.searchParams.get('assignee') ?? undefined
+      const project = url.searchParams.get('project') ?? undefined
+      const sort = url.searchParams.get('sort') ?? undefined
+      const limit = parsePositiveInt(url.searchParams.get('limit'))
+      return provider.listTasks({ column, priority, assignee, project, sort, limit })
+    })
   }
 
   if (path === '/api/tasks' && method === 'POST') {
-    let created: Task | null = null
-    const response = await wrapHandler(async () => {
+    return mutationResult(async () => {
       const body = await parseJsonBody<Partial<CreateTaskInput>>(req)
       requireArgument(body.title, 'title')
-      created = await useCases.createTask(provider, {
-        title: body.title!,
-        description: body.description,
-        column: body.column,
-        priority: body.priority,
-        assignee: body.assignee,
-        project: body.project,
-        labels: body.labels,
-        metadata: body.metadata,
-      })
-      return { ok: true, data: created }
-    })
-    const event = response.ok && created ? upsertEvent(created) : undefined
-    return { response, mutated: response.ok, event }
+      return provider.createTask(
+        normalizeCreateTaskInput({
+          title: body.title!,
+          description: body.description,
+          column: body.column,
+          priority: body.priority,
+          assignee: body.assignee,
+          project: body.project,
+          labels: body.labels,
+          metadata: body.metadata,
+        }),
+      )
+    }, upsertEvent)
   }
 
   const taskMatch = path.match(/^\/api\/tasks\/([^/]+)$/)
@@ -181,70 +167,47 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     const id = decodeURIComponent(taskMatch[1]!)
 
     if (method === 'GET') {
-      return {
-        response: await wrapHandler(async () => ({
-          ok: true,
-          data: await useCases.getTask(provider, id),
-        })),
-        mutated: false,
-      }
+      return readResult(() => provider.getTask(id))
     }
 
     if (method === 'PATCH') {
-      let updated: Task | null = null
-      const response = await wrapHandler(async () => {
+      return mutationResult(async () => {
         const body = await parseJsonBody<UpdateTaskInput>(req)
-        updated = await useCases.updateTask(provider, id, body)
-        return { ok: true, data: updated }
-      })
-      const event = response.ok && updated ? upsertEvent(updated) : undefined
-      return { response, mutated: response.ok, event }
+        return provider.updateTask(id, body)
+      }, upsertEvent)
     }
 
     if (method === 'DELETE') {
-      const response = await wrapHandler(async () => ({
-        ok: true,
-        data: await useCases.deleteTask(provider, id),
-      }))
-      const event: WsEvent | undefined = response.ok ? { type: 'task:delete', id } : undefined
-      return { response, mutated: response.ok, event }
+      return mutationResult(
+        () => provider.deleteTask(id),
+        () => ({ type: 'task:delete', id }),
+      )
     }
   }
 
   const moveMatch = path.match(/^\/api\/tasks\/([^/]+)\/move$/)
   if (moveMatch && method === 'PATCH') {
     const id = decodeURIComponent(moveMatch[1]!)
-    let moved: Task | null = null
-    const response = await wrapHandler(async () => {
+    return mutationResult(async () => {
       const body = await parseJsonBody<MoveTaskBody>(req)
       requireArgument(body.column, 'column')
-      moved = await useCases.moveTask(provider, id, body.column!)
-      return { ok: true, data: moved }
-    })
-    const event = response.ok && moved ? upsertEvent(moved) : undefined
-    return { response, mutated: response.ok, event }
+      return provider.moveTask(id, body.column!)
+    }, upsertEvent)
   }
 
   const commentsMatch = path.match(/^\/api\/tasks\/([^/]+)\/comments$/)
   if (commentsMatch) {
     const id = decodeURIComponent(commentsMatch[1]!)
     if (method === 'GET') {
-      return {
-        response: await wrapHandler(async () => ({
-          ok: true,
-          data: await useCases.listComments(provider, id),
-        })),
-        mutated: false,
-      }
+      return readResult(() => provider.listComments(id))
     }
 
     if (method === 'POST') {
-      const response = await wrapHandler(async () => {
+      return mutationResult(async () => {
         const body = await parseJsonBody<CommentBody>(req)
         requireArgument(body.body, 'body')
-        return { ok: true, data: await useCases.addComment(provider, id, body.body!) }
+        return provider.comment(id, body.body!)
       })
-      return { response, mutated: response.ok }
     }
   }
 
@@ -254,52 +217,35 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     const commentId = decodeURIComponent(commentMatch[2]!)
 
     if (method === 'PATCH') {
-      const response = await wrapHandler(async () => {
+      return mutationResult(async () => {
         const body = await parseJsonBody<CommentBody>(req)
         requireArgument(body.body, 'body')
-        return { ok: true, data: await useCases.updateComment(provider, id, commentId, body.body!) }
+        return provider.updateComment(id, commentId, body.body!)
       })
-      return { response, mutated: response.ok }
     }
   }
 
   if (path === '/api/activity' && method === 'GET') {
-    return {
-      response: await wrapHandler(async () => {
-        const taskId = url.searchParams.get('taskId') ?? undefined
-        const limit = parsePositiveInt(url.searchParams.get('limit'))
-        return { ok: true, data: await useCases.getActivity(provider, limit, taskId) }
-      }),
-      mutated: false,
-    }
+    return readResult(() => {
+      const taskId = url.searchParams.get('taskId') ?? undefined
+      const limit = parsePositiveInt(url.searchParams.get('limit'))
+      return provider.getActivity(limit, taskId)
+    })
   }
 
   if (path === '/api/metrics' && method === 'GET') {
-    return {
-      response: await wrapHandler(async () => ({
-        ok: true,
-        data: await useCases.getMetrics(provider),
-      })),
-      mutated: false,
-    }
+    return readResult(() => provider.getMetrics())
   }
 
   if (path === '/api/config' && method === 'GET') {
-    return {
-      response: await wrapHandler(async () => ({
-        ok: true,
-        data: await useCases.getConfig(provider),
-      })),
-      mutated: false,
-    }
+    return readResult(() => provider.getConfig())
   }
 
   if (path === '/api/config' && method === 'PATCH') {
-    const response = await wrapHandler(async () => {
+    return mutationResult(async () => {
       const body = await parseJsonBody<Partial<BoardConfig>>(req)
-      return { ok: true, data: await useCases.patchConfig(provider, body) }
+      return provider.patchConfig(body)
     })
-    return { response, mutated: response.ok }
   }
 
   const webhookMatch = path.match(/^\/api\/webhooks\/([^/]+)$/)

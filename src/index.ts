@@ -10,13 +10,13 @@ import { columnAdd, columnDelete, columnList, columnRename, columnReorder } from
 import { bulkClearDoneCmd, bulkMoveAllCmd } from './commands/bulk'
 import { getConfigPath, loadConfig, saveConfig } from './config'
 import { parsePositiveInt } from './transport-input'
-import type { CliOutput, Priority } from './types'
+import type { CliOutput, Priority, ProviderCapabilities } from './types'
 import { unsupportedOperation } from './providers/errors'
 import { openKanbanRuntime } from './provider-runtime'
 import { trackerConfigFromEnv } from './tracker-config'
 import type { KanbanProvider } from './providers/types'
 import { resolvePollingSyncIntervalMs } from './sync-config'
-import * as useCases from './use-cases'
+import { normalizeCreateTaskInput } from './use-cases'
 
 interface ParsedArgs {
   values: Record<string, unknown>
@@ -24,30 +24,46 @@ interface ParsedArgs {
 }
 
 function parseCliArgs(argv: string[]): ParsedArgs {
-  return parseArgs({
-    args: argv,
-    options: {
-      pretty: { type: 'boolean', default: false },
-      db: { type: 'string' },
-      help: { type: 'boolean', short: 'h', default: false },
-      d: { type: 'string' },
-      c: { type: 'string' },
-      p: { type: 'string' },
-      a: { type: 'string' },
-      m: { type: 'string' },
-      l: { type: 'string' },
-      label: { type: 'string', multiple: true },
-      labels: { type: 'string', multiple: true },
-      sort: { type: 'string' },
-      title: { type: 'string' },
-      position: { type: 'string' },
-      color: { type: 'string' },
-      project: { type: 'string' },
-      role: { type: 'string' },
-    },
-    strict: false,
-    allowPositionals: true,
-  })
+  try {
+    return parseArgs({
+      args: argv,
+      options: {
+        pretty: { type: 'boolean', default: false },
+        db: { type: 'string' },
+        help: { type: 'boolean', short: 'h', default: false },
+        d: { type: 'string' },
+        c: { type: 'string' },
+        p: { type: 'string' },
+        a: { type: 'string' },
+        m: { type: 'string' },
+        l: { type: 'string' },
+        label: { type: 'string', multiple: true },
+        labels: { type: 'string', multiple: true },
+        sort: { type: 'string' },
+        title: { type: 'string' },
+        position: { type: 'string' },
+        color: { type: 'string' },
+        project: { type: 'string' },
+        role: { type: 'string' },
+      },
+      strict: true,
+      allowPositionals: true,
+    })
+  } catch (err) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      err instanceof Error ? err.message : String(err),
+    )
+  }
+}
+
+function requireCapability(
+  capabilities: ProviderCapabilities,
+  capability: keyof ProviderCapabilities,
+  feature: string,
+): void {
+  if (!capabilities[capability])
+    unsupportedOperation(`${feature} is not supported by this provider`)
 }
 
 function requireLocalProvider(providerType: string, feature: string): void {
@@ -65,21 +81,23 @@ async function routeTask(
       const title = positionals[2]
       if (!title) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task title is required')
       return success(
-        await useCases.createTask(provider, {
-          title,
-          description: values.d as string | undefined,
-          column: values.c as string | undefined,
-          priority: values.p as Priority | undefined,
-          assignee: values.a as string | undefined,
-          project: values.project as string | undefined,
-          labels: [values.label, values.labels],
-          metadata: values.m as string | undefined,
-        }),
+        await provider.createTask(
+          normalizeCreateTaskInput({
+            title,
+            description: values.d as string | undefined,
+            column: values.c as string | undefined,
+            priority: values.p as Priority | undefined,
+            assignee: values.a as string | undefined,
+            project: values.project as string | undefined,
+            labels: [values.label, values.labels],
+            metadata: values.m as string | undefined,
+          }),
+        ),
       )
     }
     case 'list':
       return success(
-        await useCases.listTasks(provider, {
+        await provider.listTasks({
           column: values.c as string | undefined,
           priority: values.p as string | undefined,
           assignee: values.a as string | undefined,
@@ -91,13 +109,13 @@ async function routeTask(
     case 'view': {
       const id = positionals[2]
       if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
-      return success(await useCases.getTask(provider, id))
+      return success(await provider.getTask(id))
     }
     case 'update': {
       const id = positionals[2]
       if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
       return success(
-        await useCases.updateTask(provider, id, {
+        await provider.updateTask(id, {
           title: values.title as string | undefined,
           description: values.d as string | undefined,
           priority: values.p as Priority | undefined,
@@ -110,7 +128,7 @@ async function routeTask(
     case 'delete': {
       const id = positionals[2]
       if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
-      return success(await useCases.deleteTask(provider, id))
+      return success(await provider.deleteTask(id))
     }
     case 'move': {
       const id = positionals[2]
@@ -118,7 +136,7 @@ async function routeTask(
       if (!id || !column) {
         throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Usage: kanban task move <id> <column>')
       }
-      return success(await useCases.moveTask(provider, id, column))
+      return success(await provider.moveTask(id, column))
     }
     case 'assign': {
       const id = positionals[2]
@@ -129,7 +147,7 @@ async function routeTask(
           'Usage: kanban task assign <id> <assignee>',
         )
       }
-      return success(await useCases.updateTask(provider, id, { assignee }))
+      return success(await provider.updateTask(id, { assignee }))
     }
     case 'prioritize': {
       const id = positionals[2]
@@ -140,7 +158,7 @@ async function routeTask(
           'Usage: kanban task prioritize <id> <level>',
         )
       }
-      return success(await useCases.updateTask(provider, id, { priority: priority as Priority }))
+      return success(await provider.updateTask(id, { priority: priority as Priority }))
     }
     default:
       throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown task command '${action}'`)
@@ -156,7 +174,7 @@ async function routeComment(
     case 'list': {
       const id = positionals[2]
       if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
-      return success(await useCases.listComments(provider, id))
+      return success(await provider.listComments(id))
     }
     case 'add': {
       const id = positionals[2]
@@ -167,7 +185,7 @@ async function routeComment(
           'Usage: kanban comment add <task-id> <body>',
         )
       }
-      return success(await useCases.addComment(provider, id, body))
+      return success(await provider.comment(id, body))
     }
     case 'update': {
       const id = positionals[2]
@@ -179,7 +197,7 @@ async function routeComment(
           'Usage: kanban comment update <task-id> <comment-id> <body>',
         )
       }
-      return success(await useCases.updateComment(provider, id, commentId, body))
+      return success(await provider.updateComment(id, commentId, body))
     }
     default:
       throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown comment command '${action}'`)
@@ -188,12 +206,12 @@ async function routeComment(
 
 function routeColumn(
   db: Database,
-  providerType: string,
+  capabilities: ProviderCapabilities,
   action: string | undefined,
   positionals: string[],
   values: Record<string, unknown>,
 ): CliOutput {
-  requireLocalProvider(providerType, 'Column commands')
+  requireCapability(capabilities, 'columnCrud', 'Column commands')
   switch (action) {
     case 'add':
       return columnAdd(db, {
@@ -216,11 +234,11 @@ function routeColumn(
 
 function routeBulk(
   db: Database,
-  providerType: string,
+  capabilities: ProviderCapabilities,
   action: string | undefined,
   positionals: string[],
 ): CliOutput {
-  requireLocalProvider(providerType, 'Bulk commands')
+  requireCapability(capabilities, 'bulk', 'Bulk commands')
   switch (action) {
     case 'move-all':
       return bulkMoveAllCmd(db, { from: positionals[2], to: positionals[3] })
@@ -233,25 +251,21 @@ function routeBulk(
 
 async function routeConfig(
   provider: KanbanProvider,
+  capabilities: ProviderCapabilities,
   dbPath: string,
   action: string | undefined,
   positionals: string[],
   values: Record<string, unknown>,
 ): Promise<CliOutput> {
-  if (provider.type !== 'local') {
-    if (action === 'show' || action === undefined) {
-      return success(await useCases.getConfig(provider))
-    }
-    unsupportedOperation('Config mutation is only available in local mode')
+  if (action === 'show' || action === undefined) {
+    return success(await provider.getConfig())
   }
+  requireCapability(capabilities, 'configEdit', 'Config mutation')
 
   const configPath = getConfigPath(dbPath)
   const config = loadConfig(dbPath)
 
   switch (action) {
-    case 'show':
-    case undefined:
-      return success(await useCases.getConfig(provider))
     case 'set-member': {
       const name = positionals[2]
       if (!name) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Member name is required')
@@ -294,7 +308,7 @@ async function routeConfig(
   }
 }
 
-async function routeBoard(
+async function routeLocalBoard(
   db: Database,
   provider: KanbanProvider,
   action: string | undefined,
@@ -310,7 +324,7 @@ async function routeBoard(
         initSchema(db)
         seedDefaultColumns(db, columnNames)
       }
-      return success(await useCases.getBoard(provider))
+      return success(await provider.getBoard())
     case 'reset':
       requireLocalProvider(provider.type, 'Board reset')
       return boardReset(db, columnNames)
@@ -332,29 +346,28 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
   })
 
   try {
-    const { provider, sqliteDb, dbPath, trackerConfig } = runtime
+    const { provider, sqliteDb, dbPath, trackerConfig, capabilities } = runtime
     const group = positionals[0]
     const action = positionals[1]
     const defaultColumns =
       trackerConfig.provider === 'local' ? trackerConfig.defaultColumns : undefined
 
     if (!group) {
-      if (sqliteDb)
+      if (sqliteDb && provider.type === 'local')
         return {
-          output: await routeBoard(sqliteDb, provider, undefined, defaultColumns),
+          output: await routeLocalBoard(sqliteDb, provider, undefined, defaultColumns),
           exitCode: 0,
         }
-      return { output: success(await useCases.getBoard(provider)), exitCode: 0 }
+      return { output: success(await provider.getBoard()), exitCode: 0 }
     }
 
     let output: CliOutput
     switch (group) {
       case 'board':
         if (sqliteDb) {
-          output = await routeBoard(sqliteDb, provider, action, defaultColumns)
+          output = await routeLocalBoard(sqliteDb, provider, action, defaultColumns)
         } else {
-          if (action === 'view' || action === undefined)
-            output = success(await useCases.getBoard(provider))
+          if (action === 'view' || action === undefined) output = success(await provider.getBoard())
           else unsupportedOperation(`board ${action} is not available with KANBAN_STORAGE=postgres`)
         }
         break
@@ -367,12 +380,12 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
       case 'column':
         if (!sqliteDb)
           unsupportedOperation('Column commands are not available with KANBAN_STORAGE=postgres')
-        output = routeColumn(sqliteDb, provider.type, action, positionals, values)
+        output = routeColumn(sqliteDb, capabilities, action, positionals, values)
         break
       case 'bulk':
         if (!sqliteDb)
           unsupportedOperation('Bulk commands are not available with KANBAN_STORAGE=postgres')
-        output = routeBulk(sqliteDb, provider.type, action, positionals)
+        output = routeBulk(sqliteDb, capabilities, action, positionals)
         break
       case 'config':
         // routeConfig persists to the SQLite-side config file, so it only runs
@@ -380,10 +393,10 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
         // repository (configEdit:false), so edits are refused here — matching the
         // HTTP API, which fails through the provider's patchConfig.
         if (sqliteDb) {
-          output = await routeConfig(provider, dbPath, action, positionals, values)
+          output = await routeConfig(provider, capabilities, dbPath, action, positionals, values)
         } else {
           if (action === 'show' || action === undefined)
-            output = success(await useCases.getConfig(provider))
+            output = success(await provider.getConfig())
           else
             unsupportedOperation(`config ${action} is not available with KANBAN_STORAGE=postgres`)
         }
@@ -455,19 +468,27 @@ export interface ServeOptions {
 }
 
 export function parseServeArgs(argv: string[]): ServeOptions {
-  const { values } = parseArgs({
-    args: argv,
-    options: {
-      db: { type: 'string' },
-      port: { type: 'string' },
-      'sync-interval-ms': { type: 'string' },
-      tunnel: { type: 'boolean', default: false },
-      token: { type: 'string' },
-      'allowed-origin': { type: 'string' },
-    },
-    strict: false,
-    allowPositionals: true,
-  })
+  let values: Record<string, unknown>
+  try {
+    values = parseArgs({
+      args: argv,
+      options: {
+        db: { type: 'string' },
+        port: { type: 'string' },
+        'sync-interval-ms': { type: 'string' },
+        tunnel: { type: 'boolean', default: false },
+        token: { type: 'string' },
+        'allowed-origin': { type: 'string' },
+      },
+      strict: true,
+      allowPositionals: true,
+    }).values
+  } catch (err) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      err instanceof Error ? err.message : String(err),
+    )
+  }
   const port = values.port
     ? parseInt(values.port as string, 10)
     : parseInt(process.env['PORT'] || '3000', 10)
@@ -496,20 +517,42 @@ export interface McpOptions {
 }
 
 export function parseMcpArgs(argv: string[]): McpOptions {
-  const { values } = parseArgs({
-    args: argv,
-    options: { db: { type: 'string' } },
-    strict: false,
-    allowPositionals: true,
-  })
+  let values: Record<string, unknown>
+  try {
+    values = parseArgs({
+      args: argv,
+      options: { db: { type: 'string' } },
+      strict: true,
+      allowPositionals: true,
+    }).values
+  } catch (err) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      err instanceof Error ? err.message : String(err),
+    )
+  }
   return { db: values.db as string | undefined }
+}
+
+// Bad serve/mcp flags should print the same structured error envelope as the
+// plain CLI branch, not an uncaught stack trace.
+function parseEntryArgs<T>(parse: () => T): T {
+  try {
+    return parse()
+  } catch (err) {
+    if (err instanceof KanbanError) {
+      console.error(formatOutput(error(err.code, err.message), false))
+      process.exit(1)
+    }
+    throw err
+  }
 }
 
 if (import.meta.main) {
   const argv = process.argv.slice(2)
 
   if (argv[0] === 'mcp') {
-    const opts = parseMcpArgs(argv)
+    const opts = parseEntryArgs(() => parseMcpArgs(argv))
     const runtime = await openKanbanRuntime({ dbPath: opts.db ?? getDbPath() })
     const { startStdioMcpServer } = await import('./commands/mcp')
     try {
@@ -518,7 +561,7 @@ if (import.meta.main) {
       await runtime.close()
     }
   } else if (argv[0] === 'serve') {
-    const opts = parseServeArgs(argv)
+    const opts = parseEntryArgs(() => parseServeArgs(argv))
 
     // A tunnel exposes the dashboard publicly, so refuse to start one without a
     // token. Plain localhost serve stays open for backward compatibility.

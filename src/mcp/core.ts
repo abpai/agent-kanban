@@ -1,6 +1,5 @@
 import type { KanbanProvider } from '../providers/types'
 import type { BoardView, Task, TaskComment } from '../types'
-import * as useCases from '../use-cases'
 import { TrackerMcpError, toTrackerMcpError } from './errors'
 import type { TrackerMcpHooks, TrackerMcpPolicy } from './types'
 
@@ -138,7 +137,7 @@ export function createTrackerCore<TScope>(input: {
           ticketId,
           execute: async () => {
             await policy.canReadTicket(scope, ticketId)
-            return useCases.getTask(provider, ticketId)
+            return provider.getTask(ticketId)
           },
         })
       },
@@ -150,7 +149,7 @@ export function createTrackerCore<TScope>(input: {
           ticketId,
           execute: async () => {
             await policy.canReadTicket(scope, ticketId)
-            const comments = await useCases.listComments(provider, ticketId)
+            const comments = await provider.listComments(ticketId)
             return filterComments(scope, comments, policy)
           },
           resultMeta: (comments) => ({ commentCount: comments.length }),
@@ -163,7 +162,7 @@ export function createTrackerCore<TScope>(input: {
           tool: 'getBoard',
           execute: async () => {
             await policy.canReadBoard?.(scope)
-            const board = await useCases.getBoard(provider)
+            const board = await provider.getBoard()
             return filterBoard(scope, board, policy)
           },
           resultMeta: (board) => ({
@@ -179,7 +178,7 @@ export function createTrackerCore<TScope>(input: {
           ticketId,
           execute: async () => {
             await policy.canPostComment(scope, ticketId, body)
-            return useCases.addComment(provider, ticketId, body)
+            return provider.comment(ticketId, body)
           },
           resultMeta: (comment) => ({ commentId: comment.id }),
         })
@@ -191,9 +190,9 @@ export function createTrackerCore<TScope>(input: {
           tool: 'updateComment',
           ticketId,
           execute: async () => {
-            const existing = await useCases.getComment(provider, ticketId, commentId)
+            const existing = await provider.getComment(ticketId, commentId)
             await policy.canUpdateComment(scope, ticketId, existing, body)
-            return useCases.updateComment(provider, ticketId, commentId, body)
+            return provider.updateComment(ticketId, commentId, body)
           },
           resultMeta: (comment) => ({ commentId: comment.id }),
         })
@@ -206,7 +205,7 @@ export function createTrackerCore<TScope>(input: {
           ticketId,
           execute: async () => {
             await policy.canMoveTicket(scope, ticketId, column)
-            await useCases.moveTask(provider, ticketId, column)
+            await provider.moveTask(ticketId, column)
           },
           resultMeta: { movedTo: column },
         })
