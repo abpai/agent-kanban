@@ -125,8 +125,11 @@ prior branch lands or is used as the base.
     true.
     Status: confirmed. `TaskDetail.tsx` has repeated select-edit blocks;
     `board-slice.ts` defaults capabilities on.
-    Action: later. Treat as a UI PR with bootstrap-state testing.
+    Action: addressed in the seventh stacked PR. The UI store now defaults
+    capabilities closed until bootstrap supplies provider capabilities, and
+    `TaskDetail` uses one reusable editable-select component for priority,
+    assignee, and project fields.
 
 ## Suggested stack after the Postgres cache atomicity PR
 
-1. UI capability defaults and `TaskDetail` editable field extraction.
+All planned items from this feedback pass have been stacked.
