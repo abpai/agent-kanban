@@ -5,7 +5,6 @@ import { generateId } from '../id'
 import { assembleBoardMetrics, classifyColumnRoles } from '../metrics-spec'
 import type {
   ActivityEntry,
-  BoardBootstrap,
   BoardConfig,
   BoardMetrics,
   BoardView,
@@ -17,14 +16,8 @@ import type {
 } from '../types'
 import { POSTGRES_LOCAL_CAPABILITIES } from './capabilities'
 import { unsupportedOperation } from './errors'
-import type {
-  CreateTaskInput,
-  KanbanProvider,
-  ProviderContext,
-  ProviderSyncStatus,
-  TaskListFilters,
-  UpdateTaskInput,
-} from './types'
+import { LocalProviderCore, type LocalStorePort } from './local-core'
+import type { CreateTaskInput, TaskListFilters, UpdateTaskInput } from './types'
 import type { LocalTrackerConfig } from '../tracker-config'
 import { normalizeLabels, parseStoredLabels } from '../labels'
 
@@ -98,8 +91,8 @@ function parseMetadata(metadata: string | undefined): string {
   }
 }
 
-export class PostgresLocalProvider implements KanbanProvider {
-  readonly type = 'local' as const
+class PostgresLocalStore implements LocalStorePort {
+  readonly capabilities = POSTGRES_LOCAL_CAPABILITIES
   private readonly ready: Promise<void>
 
   constructor(
@@ -294,25 +287,6 @@ export class PostgresLocalProvider implements KanbanProvider {
     `
   }
 
-  async getContext(): Promise<ProviderContext> {
-    await this.ready
-    return { provider: this.type, capabilities: POSTGRES_LOCAL_CAPABILITIES, team: null }
-  }
-
-  async getBootstrap(): Promise<BoardBootstrap> {
-    await this.ready
-    const metrics = await this.getMetrics()
-    return {
-      provider: this.type,
-      capabilities: POSTGRES_LOCAL_CAPABILITIES,
-      board: await this.getBoard(),
-      config: await this.getConfig(),
-      metrics,
-      activity: await this.getActivity(50),
-      team: null,
-    }
-  }
-
   async getBoard(): Promise<BoardView> {
     await this.ready
     const columns = await this.listColumns()
@@ -386,6 +360,11 @@ export class PostgresLocalProvider implements KanbanProvider {
     return this.enrichTask(row, counts.get(row.id) ?? 0)
   }
 
+  async getTaskVersion(idOrRef: string): Promise<string> {
+    const row = await this.requireTask(idOrRef)
+    return String(row.revision ?? 0)
+  }
+
   async createTask(input: CreateTaskInput): Promise<Task> {
     await this.ready
     const priority = input.priority ?? 'medium'
@@ -418,18 +397,12 @@ export class PostgresLocalProvider implements KanbanProvider {
     return this.getTask(id)
   }
 
-  async updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task> {
+  async updateTask(
+    idOrRef: string,
+    input: Omit<UpdateTaskInput, 'expectedVersion'>,
+  ): Promise<Task> {
     await this.ready
     const current = await this.requireTask(idOrRef)
-    if (
-      input.expectedVersion !== undefined &&
-      String(current.revision ?? 0) !== input.expectedVersion
-    ) {
-      throw new KanbanError(
-        ErrorCode.CONFLICT,
-        `Task ${idOrRef} was modified since you loaded it (expected version ${input.expectedVersion}, current ${current.revision ?? 0})`,
-      )
-    }
 
     if (input.priority !== undefined) assertPriority(input.priority)
     const metadata = input.metadata === undefined ? undefined : parseMetadata(input.metadata)
@@ -763,8 +736,13 @@ export class PostgresLocalProvider implements KanbanProvider {
     // and fail loudly so the HTTP API and CLI agree.
     unsupportedOperation('Editing board config is not supported with KANBAN_STORAGE=postgres')
   }
+}
 
-  async getSyncStatus(): Promise<ProviderSyncStatus | null> {
-    return null
+export class PostgresLocalProvider extends LocalProviderCore {
+  constructor(
+    sql: Sql,
+    config: Pick<LocalTrackerConfig, 'defaultColumns' | 'defaultTaskColumn'> = {},
+  ) {
+    super(new PostgresLocalStore(sql, config))
   }
 }
