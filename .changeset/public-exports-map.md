@@ -2,6 +2,6 @@
 '@andypai/agent-kanban': minor
 ---
 
-Add a public `exports` map declaring stable subpaths (`./types`, `./providers/types`, `./provider-runtime`) alongside the package root. Consumers can now import the public surface without reaching into raw `src/*` internal paths, so an internal file move no longer silently breaks downstreams.
+Add a public `exports` map declaring stable subpaths (`./types`, `./providers/types`, `./provider-runtime`) alongside the package root, so consumers import the public surface by name instead of reaching into raw `src/*` internal paths.
 
-A `./src/*` deprecation bridge keeps every existing deep import resolving, so this is non-breaking; the bridge will be removed in a future major once consumers migrate to the declared subpaths.
+Note: with an `exports` map now in place, undeclared deep paths such as `@andypai/agent-kanban/src/types` no longer resolve — import the declared subpaths instead.
