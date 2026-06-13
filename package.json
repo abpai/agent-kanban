@@ -30,7 +30,6 @@
     "./types": "./src/types.ts",
     "./providers/types": "./src/providers/types.ts",
     "./provider-runtime": "./src/provider-runtime.ts",
-    "./src/*": "./src/*.ts",
     "./package.json": "./package.json"
   },
   "files": [
