@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- [#73](https://github.com/abpai/agent-kanban/pull/73) [`f41a981`](https://github.com/abpai/agent-kanban/commit/f41a981ad62c7c9a8aeeb9707f833de27682ab5d) Thanks [@abpai](https://github.com/abpai)! - Add a public `exports` map declaring stable subpaths (`./types`, `./providers/types`, `./provider-runtime`) alongside the package root, so consumers import the public surface by name instead of reaching into raw `src/*` internal paths.
+
+  Note: with an `exports` map now in place, undeclared deep paths such as `@andypai/agent-kanban/src/types` no longer resolve — import the declared subpaths instead.
+
 ## 0.6.5
 
 ### Patch Changes
