@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { initSchema, seedDefaultColumns, addTask } from '../db'
 import { KanbanError, ErrorCode } from '../errors'
 import { handleRequest } from '../api'
@@ -258,24 +261,45 @@ describe('handleRequest', () => {
     expect(Array.isArray(body.data.tasksByColumn)).toBe(true)
   })
 
-  test('F24: GET /api/config returns config; PATCH /api/config mutates without an event', async () => {
+  test('F24: GET /api/config returns config', async () => {
     const getReq = new Request('http://localhost/api/config', { method: 'GET' })
     const getRes = await handleRequest(provider, getReq)
     const getBody = (await getRes.response.json()) as { ok: boolean; data: { provider: string } }
     expect(getRes.response.status).toBe(200)
     expect(getRes.mutated).toBe(false)
     expect(getBody.data.provider).toBe('local')
+  })
 
-    const patchReq = new Request('http://localhost/api/config', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ members: [{ name: 'alice', role: 'human' }] }),
-    })
-    const patchRes = await handleRequest(provider, patchReq)
-    expect(patchRes.response.status).toBe(200)
-    expect(patchRes.mutated).toBe(true)
-    // config PATCH has no precise WsEvent → server falls back to a 'refresh' broadcast
-    expect(patchRes.event).toBeUndefined()
+  test('F24: PATCH /api/config mutates without a precise WsEvent', async () => {
+    // PATCH persists the config sidecar (config.json) next to the db path, so use
+    // a hermetic temp dir instead of the shared ':memory:' provider, which would
+    // write ./config.json into the checkout.
+    const dir = mkdtempSync(join(tmpdir(), 'kanban-api-config-'))
+    const cfgDb = new Database(':memory:')
+    cfgDb.run('PRAGMA foreign_keys = ON')
+    initSchema(cfgDb)
+    seedDefaultColumns(cfgDb)
+    const cfgProvider = createProvider(cfgDb, { provider: 'local' }, join(dir, 'board.db'))
+    try {
+      const patchReq = new Request('http://localhost/api/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ members: [{ name: 'alice', role: 'human' }] }),
+      })
+      const patchRes = await handleRequest(cfgProvider, patchReq)
+      const patchBody = (await patchRes.response.json()) as {
+        ok: boolean
+        data: { members: { name: string }[] }
+      }
+      expect(patchRes.response.status).toBe(200)
+      expect(patchRes.mutated).toBe(true)
+      // No precise WsEvent → the server falls back to a 'refresh' broadcast.
+      expect(patchRes.event).toBeUndefined()
+      expect(patchBody.data.members.map((m) => m.name)).toContain('alice')
+    } finally {
+      cfgDb.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
