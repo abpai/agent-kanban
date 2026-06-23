@@ -39,23 +39,24 @@ export function parseBoundedInt(
 
 /**
  * Parse an optional positive integer supplied through a transport boundary.
- * Returns `undefined` when the value is absent, otherwise delegates to
- * {@link parseBoundedInt} (min 1) and re-frames the error as "positive integer"
- * so invalid limits don't leak into provider logic (SQL `LIMIT`, `slice`, PG).
+ * Returns `undefined` when the value is absent/blank, otherwise resolves via
+ * {@link parseDecimalDigits} (which trims and caps at `MAX_SAFE_INTEGER`) and
+ * enforces `>= 1`, throwing `KanbanError(INVALID_ARGUMENT)` framed as "positive
+ * integer" so invalid limits don't leak into provider logic (SQL `LIMIT`,
+ * `slice`, PG).
  */
 export function parsePositiveInt(
   value: string | null | undefined,
   field = 'limit',
 ): number | undefined {
   if (value === null || value === undefined) return undefined
-  const trimmed = value.trim()
-  if (trimmed === '') return undefined
-  try {
-    return parseBoundedInt(trimmed, { min: 1, field })
-  } catch {
+  if (value.trim() === '') return undefined
+  const parsed = parseDecimalDigits(value)
+  if (parsed === null || parsed < 1) {
     throw new KanbanError(
       ErrorCode.INVALID_ARGUMENT,
       `${field} must be a positive integer (received '${value}')`,
     )
   }
+  return parsed
 }
