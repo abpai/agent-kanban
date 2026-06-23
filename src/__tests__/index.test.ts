@@ -85,9 +85,17 @@ describe('parseServeArgs', () => {
     })
   })
 
-  test('--sync-interval-ms rejects invalid values', () => {
-    for (const raw of ['999', '0']) {
+  test('--sync-interval-ms rejects below-minimum and overflow values as INVALID_ARGUMENT', () => {
+    // The whole flag family reports rejections with one code: a digit-but-too-small
+    // value, OR a digit string so long that Number() overflows to Infinity, must
+    // not leak the resolver's INVALID_CONFIG (consistency with --port).
+    for (const raw of ['999', '0', '9'.repeat(309)]) {
       expect(() => parseServeArgs(['serve', '--sync-interval-ms', raw])).toThrow(KanbanError)
+      try {
+        parseServeArgs(['serve', '--sync-interval-ms', raw])
+      } catch (err) {
+        expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+      }
     }
   })
 

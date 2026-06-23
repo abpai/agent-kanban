@@ -75,8 +75,14 @@ export function startCloudflareTunnel(port: number, opts: TunnelOptions = {}): T
     }
   }
 
-  void scanForUrl(child.stdout as ReadableStream<Uint8Array>)
-  void scanForUrl(child.stderr as ReadableStream<Uint8Array>)
+  // A stream error while draining stdout/stderr (e.g. the pipe tears down as the
+  // child is killed) must not surface as an unhandled rejection; the child.exited
+  // handler below still emits the no-URL warning when nothing was announced.
+  const drain = (stream: ReadableStream<Uint8Array> | null | undefined): void => {
+    void scanForUrl(stream).catch(() => {})
+  }
+  drain(child.stdout as ReadableStream<Uint8Array>)
+  drain(child.stderr as ReadableStream<Uint8Array>)
 
   void child.exited.then((code) => {
     if (!announced) {

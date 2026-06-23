@@ -513,11 +513,18 @@ export function parseServeArgs(argv: string[]): ServeOptions {
 
 function parseSyncIntervalMs(raw: string): number {
   // resolvePollingSyncIntervalMs parses with Number(), which tolerates hex /
-  // scientific notation (`0x1000`, `1e3`) and treats empty as the default.
-  // Enforce a strict digits-only CLI contract here (matching --port) before
-  // delegating to the shared >= 1000 range check.
+  // scientific notation (`0x1000`, `1e3`), treats empty as the default, and
+  // reports anything it rejects as INVALID_CONFIG. Mirror its exact reject set
+  // here (non-digit, the Number()->Infinity overflow of a very long digit string,
+  // or < 1000) but throw INVALID_ARGUMENT, so every rejection on this flag
+  // surfaces one code (matching --port) instead of leaking INVALID_CONFIG.
   const trimmed = raw.trim()
-  if (!/^\d+$/.test(trimmed)) {
+  const parsed = Number(trimmed)
+  if (
+    !/^\d+$/.test(trimmed) ||
+    !Number.isInteger(parsed) ||
+    parsed < MIN_POLLING_SYNC_INTERVAL_MS
+  ) {
     throw new KanbanError(
       ErrorCode.INVALID_ARGUMENT,
       `--sync-interval-ms must be an integer >= ${MIN_POLLING_SYNC_INTERVAL_MS}`,
