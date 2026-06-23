@@ -224,6 +224,59 @@ describe('handleRequest', () => {
     expect(body.data.provider).toBe('local')
     expect(body.data.capabilities.taskDelete).toBe(true)
   })
+
+  test('F22: GET /api/activity returns an ok envelope wrapping an array', async () => {
+    addTask(db, 'Generates activity')
+    const req = new Request('http://localhost/api/activity?limit=5', { method: 'GET' })
+    const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as { ok: boolean; data: unknown[] }
+    expect(result.response.status).toBe(200)
+    expect(result.mutated).toBe(false)
+    expect(body.ok).toBe(true)
+    expect(Array.isArray(body.data)).toBe(true)
+  })
+
+  test('F22: GET /api/activity rejects an invalid limit through the envelope', async () => {
+    const req = new Request('http://localhost/api/activity?limit=0', { method: 'GET' })
+    const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    expect(result.response.status).toBe(400)
+    expect(body.error.code).toBe('INVALID_ARGUMENT')
+  })
+
+  test('F23: GET /api/metrics returns the metrics envelope', async () => {
+    const req = new Request('http://localhost/api/metrics', { method: 'GET' })
+    const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as {
+      ok: boolean
+      data: { totalTasks: number; tasksByColumn: unknown[] }
+    }
+    expect(result.response.status).toBe(200)
+    expect(result.mutated).toBe(false)
+    expect(body.ok).toBe(true)
+    expect(typeof body.data.totalTasks).toBe('number')
+    expect(Array.isArray(body.data.tasksByColumn)).toBe(true)
+  })
+
+  test('F24: GET /api/config returns config; PATCH /api/config mutates without an event', async () => {
+    const getReq = new Request('http://localhost/api/config', { method: 'GET' })
+    const getRes = await handleRequest(provider, getReq)
+    const getBody = (await getRes.response.json()) as { ok: boolean; data: { provider: string } }
+    expect(getRes.response.status).toBe(200)
+    expect(getRes.mutated).toBe(false)
+    expect(getBody.data.provider).toBe('local')
+
+    const patchReq = new Request('http://localhost/api/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ members: [{ name: 'alice', role: 'human' }] }),
+    })
+    const patchRes = await handleRequest(provider, patchReq)
+    expect(patchRes.response.status).toBe(200)
+    expect(patchRes.mutated).toBe(true)
+    // config PATCH has no precise WsEvent → server falls back to a 'refresh' broadcast
+    expect(patchRes.event).toBeUndefined()
+  })
 })
 
 // Minimal provider whose only relevant field is `type` plus an overridable

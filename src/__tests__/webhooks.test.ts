@@ -1,7 +1,12 @@
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { createHmac } from 'node:crypto'
-import { verifyHmacSha256, verifySha256HmacSignatureHeader } from '../webhooks'
+import {
+  authorizeWebhook,
+  headerLower,
+  verifyHmacSha256,
+  verifySha256HmacSignatureHeader,
+} from '../webhooks'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
 import { JiraClient } from '../providers/jira-client'
 import { LinearProvider } from '../providers/linear'
@@ -66,6 +71,47 @@ describe('verifyHmacSha256', () => {
 
   test('rejects missing signature', () => {
     expect(verifyHmacSha256('s3cr3t', 'a', undefined)).toBe(false)
+  })
+})
+
+describe('authorizeWebhook (F32)', () => {
+  const verify = (secret: string, body: string, sig: string | undefined | null): boolean =>
+    verifyHmacSha256(secret, body, sig)
+
+  test('no secret configured → open mode (returns null, request allowed)', () => {
+    expect(
+      authorizeWebhook({ secret: undefined, rawBody: '{}', signature: 'anything', verify }),
+    ).toBeNull()
+    expect(authorizeWebhook({ secret: '', rawBody: '{}', signature: undefined, verify })).toBeNull()
+  })
+
+  test('secret configured + valid signature → null (proceed)', () => {
+    const body = '{"a":1}'
+    const sig = createHmac('sha256', 's3cr3t').update(body).digest('hex')
+    expect(authorizeWebhook({ secret: 's3cr3t', rawBody: body, signature: sig, verify })).toBeNull()
+  })
+
+  test('secret configured + bad signature → unauthorized result', () => {
+    const result = authorizeWebhook({
+      secret: 's3cr3t',
+      rawBody: '{"a":1}',
+      signature: 'deadbeef',
+      verify,
+    })
+    expect(result).toEqual({ handled: false, unauthorized: true, message: 'Invalid signature' })
+  })
+})
+
+describe('headerLower (F35)', () => {
+  test('case-insensitive lookup returns the matching value', () => {
+    const headers = { 'X-Hub-Signature': 'sha256=abc', 'Content-Type': 'application/json' }
+    expect(headerLower(headers, 'x-hub-signature')).toBe('sha256=abc')
+    expect(headerLower(headers, 'X-HUB-SIGNATURE')).toBe('sha256=abc')
+    expect(headerLower(headers, 'content-type')).toBe('application/json')
+  })
+
+  test('missing header → undefined', () => {
+    expect(headerLower({ a: '1' }, 'linear-signature')).toBeUndefined()
   })
 })
 
