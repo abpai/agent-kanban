@@ -20,11 +20,11 @@ That buys you a few things that are easy to miss at first:
 
 ## Documentation
 
-- [`docs/readme.md`](docs/readme.md) for the documentation index
-- [`docs/workflow.md`](docs/workflow.md) for a common day-to-day workflow
-- [`docs/mcp.md`](docs/mcp.md) for the reusable tracker MCP module
-- [`docs/providers/linear.md`](docs/providers/linear.md) for Linear provider details
-- [`docs/providers/jira.md`](docs/providers/jira.md) for Jira provider details
+- [`docs/readme.md`](https://github.com/abpai/agent-kanban/blob/main/docs/readme.md) for the documentation index
+- [`docs/workflow.md`](https://github.com/abpai/agent-kanban/blob/main/docs/workflow.md) for a common day-to-day workflow
+- [`docs/mcp.md`](https://github.com/abpai/agent-kanban/blob/main/docs/mcp.md) for the reusable tracker MCP module
+- [`docs/providers/linear.md`](https://github.com/abpai/agent-kanban/blob/main/docs/providers/linear.md) for Linear provider details
+- [`docs/providers/jira.md`](https://github.com/abpai/agent-kanban/blob/main/docs/providers/jira.md) for Jira provider details
 - [`SKILL.md`](SKILL.md) for agent-specific repo usage instructions
 
 ## Install
@@ -286,7 +286,8 @@ kanban mcp --db /path/to/board.db
 ```
 
 Runs the bundled MCP server over stdio for local MCP clients such as Claude
-Desktop. See [`docs/mcp.md`](docs/mcp.md) for the tool surface and caveats.
+Desktop. See [`docs/mcp.md`](https://github.com/abpai/agent-kanban/blob/main/docs/mcp.md)
+for the tool surface and caveats.
 
 ## Global flags
 
@@ -350,7 +351,8 @@ There are two ways to use it today:
 - run `kanban mcp` for a bundled stdio MCP server
 - import the helpers in `src/mcp/` from a sibling workspace or in-repo consumer
 
-See [`docs/mcp.md`](docs/mcp.md) for the current default tool set, the auth and
+See [`docs/mcp.md`](https://github.com/abpai/agent-kanban/blob/main/docs/mcp.md)
+for the current default tool set, the auth and
 policy model, and the caveats around source-level imports and `kanban serve`.
 
 ## Scripts
@@ -435,7 +437,8 @@ If you want to contribute or report an issue, start with these guides:
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - [SECURITY.md](SECURITY.md)
 
-Longer product and workflow docs live under [`docs/`](docs/readme.md).
+Longer product and workflow docs live under
+[`docs/`](https://github.com/abpai/agent-kanban/blob/main/docs/readme.md).
 
 ## License
 
