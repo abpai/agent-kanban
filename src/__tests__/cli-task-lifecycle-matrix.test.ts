@@ -82,6 +82,12 @@ function cliEnv(overrides: Record<string, string> = {}): Record<string, string> 
     ...env,
     KANBAN_PROVIDER: 'local',
     KANBAN_STORAGE: 'sqlite',
+    // Force color off in the spawned CLI. An ambient FORCE_COLOR (e.g. from the
+    // host terminal or CI) makes Bun wrap the error JSON on stderr in ANSI codes,
+    // which breaks the JSON.parse(result.stderr) assertions. Pinning NO_COLOR /
+    // FORCE_COLOR=0 here keeps stderr plain regardless of the host environment.
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
     ...overrides,
   }
 }

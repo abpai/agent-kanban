@@ -6,6 +6,9 @@
 .scratch/
 .workflow/
 
+# Generated agent/QA session artifacts (xlsx/png/ndjson ledger dumps, etc.)
+outputs/
+
 # General
 .DS_Store
 .AppleDouble
