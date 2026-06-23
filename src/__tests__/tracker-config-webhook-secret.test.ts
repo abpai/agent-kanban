@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { WEBHOOK_SECRET_ENV, trackerProviderFromEnv } from '../tracker-config'
+import {
+  WEBHOOK_SECRET_ENV,
+  trackerProviderFromEnv,
+  webhookSecretFromEnv,
+  type TrackerProvider,
+} from '../tracker-config'
 
 // OBS-2: the provider -> webhook-secret-env mapping is a single source of truth.
 // WEBHOOK_SECRET_ENV is typed Record<TrackerProvider, …>, so adding a new
@@ -51,5 +56,34 @@ describe('trackerProviderFromEnv', () => {
     for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
       expect(trackerProviderFromEnv({ KANBAN_PROVIDER: name })).toBe('local')
     }
+  })
+})
+
+describe('webhookSecretFromEnv', () => {
+  // The runtime signature enforcement in jira-core/linear-core resolves its secret
+  // through this helper, and the assertTunnelSecurity tunnel gate resolves the same
+  // env name through WEBHOOK_SECRET_ENV. These tests pin that they read the SAME env
+  // name, so the gate and enforcement can't drift into a fail-open.
+  test('reads exactly the env name WEBHOOK_SECRET_ENV declares for each provider', () => {
+    for (const [provider, envName] of Object.entries(WEBHOOK_SECRET_ENV)) {
+      if (envName === null) continue
+      const secret = `secret-for-${envName}`
+      expect(webhookSecretFromEnv(provider as TrackerProvider, { [envName]: secret })).toBe(secret)
+    }
+  })
+
+  test('returns undefined when the declared secret env is unset (open dev mode)', () => {
+    expect(webhookSecretFromEnv('jira', {})).toBeUndefined()
+    expect(webhookSecretFromEnv('linear', {})).toBeUndefined()
+  })
+
+  test('local has no webhook secret env, so it never resolves a secret', () => {
+    expect(webhookSecretFromEnv('local', { JIRA_WEBHOOK_SECRET: 'x' })).toBeUndefined()
+  })
+
+  test('does not read a different env than the one the provider declares', () => {
+    // Setting Linear's secret must not satisfy Jira's lookup, and vice versa.
+    expect(webhookSecretFromEnv('jira', { LINEAR_WEBHOOK_SECRET: 'l' })).toBeUndefined()
+    expect(webhookSecretFromEnv('linear', { JIRA_WEBHOOK_SECRET: 'j' })).toBeUndefined()
   })
 })

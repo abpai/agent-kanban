@@ -37,6 +37,23 @@ export function trackerProviderFromEnv(
     : 'local'
 }
 
+/**
+ * Resolve a provider's webhook signing secret from `env` via WEBHOOK_SECRET_ENV
+ * (the single source of truth), returning `undefined` when the provider declares
+ * no secret env or the env var is unset — the case where the webhook handler
+ * falls back to open dev mode. The runtime signature enforcement (the provider
+ * webhook handlers) and the assertTunnelSecurity tunnel gate both resolve the
+ * secret env name through this same map, so the gate cannot require one env name
+ * while enforcement reads another (a fail-open if they drifted).
+ */
+export function webhookSecretFromEnv(
+  provider: TrackerProvider,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const envName = WEBHOOK_SECRET_ENV[provider]
+  return envName ? env[envName] : undefined
+}
+
 export interface LocalTrackerConfig {
   provider: 'local'
   defaultColumns?: string[]
