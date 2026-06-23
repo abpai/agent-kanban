@@ -393,6 +393,54 @@ describe('startServer auth + CORS', () => {
     expect(body.error.code).toBe('INTERNAL_ERROR')
   })
 
+  test('F06: a `/kanban`-prefixed API path still enforces the auth gate (no prefix bypass)', async () => {
+    const runtime = startServer(makeProvider(), 0, { authToken: TOKEN })
+    runtimes.push(runtime)
+
+    const noAuth = await fetch(`http://127.0.0.1:${runtime.port}/kanban/api/bootstrap`)
+    expect(noAuth.status).toBe(401)
+
+    const withAuth = await fetch(`http://127.0.0.1:${runtime.port}/kanban/api/bootstrap`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    })
+    expect(withAuth.status).toBe(200)
+
+    // Health stays public under the prefix too.
+    const health = await fetch(`http://127.0.0.1:${runtime.port}/kanban/api/health`)
+    expect(health.status).toBe(200)
+  })
+
+  test('F13: a connected WS client receives task:upsert when a task is created via the API', async () => {
+    const runtime = startServer(makeProvider(), 0)
+    runtimes.push(runtime)
+
+    const ws = new WebSocket(`ws://127.0.0.1:${runtime.port}/ws`)
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve()
+      ws.onerror = () => reject(new Error('ws connection failed'))
+    })
+    const received = new Promise<{
+      type: string
+      task?: { column_id?: string }
+      columnId?: string
+    }>((resolve) => {
+      ws.onmessage = (e) => resolve(JSON.parse(String(e.data)))
+    })
+    // Let the open handler register the socket before the mutation broadcasts.
+    await sleep(25)
+
+    await fetch(`http://127.0.0.1:${runtime.port}/api/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Broadcast me' }),
+    })
+
+    const msg = await received
+    expect(msg.type).toBe('task:upsert')
+    expect(msg.columnId).toBe('backlog')
+    ws.close()
+  })
+
   test('wsClients are tracked per server instance, not shared globally', async () => {
     const a = startServer(makeProvider(), 0)
     runtimes.push(a)
