@@ -129,6 +129,34 @@ describe('parseServeArgs', () => {
       expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
     }
   })
+
+  test('D6: rejects non-integer / out-of-range / trailing-garbage ports', () => {
+    for (const bad of ['abc', '123abc', '-1', '70000', '3.5', '0x10', '']) {
+      expect(() => parseServeArgs(['serve', `--port=${bad}`])).toThrow(KanbanError)
+      try {
+        parseServeArgs(['serve', `--port=${bad}`])
+      } catch (err) {
+        expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+      }
+    }
+  })
+
+  test('D6: accepts valid ports including 0 (OS-assigned ephemeral)', () => {
+    expect(parseServeArgs(['serve', '--port=0']).port).toBe(0)
+    expect(parseServeArgs(['serve', '--port=8080']).port).toBe(8080)
+    expect(parseServeArgs(['serve', '--port=65535']).port).toBe(65535)
+  })
+
+  test('D6: an invalid PORT env value is rejected too', () => {
+    const prev = process.env['PORT']
+    process.env['PORT'] = 'not-a-port'
+    try {
+      expect(() => parseServeArgs(['serve'])).toThrow(KanbanError)
+    } finally {
+      if (prev === undefined) delete process.env['PORT']
+      else process.env['PORT'] = prev
+    }
+  })
 })
 
 describe('assertTunnelSecurity (F44 + D5)', () => {

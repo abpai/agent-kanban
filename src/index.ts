@@ -489,9 +489,12 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       err instanceof Error ? err.message : String(err),
     )
   }
-  const port = values.port
-    ? parseInt(values.port as string, 10)
-    : parseInt(process.env['PORT'] || '3000', 10)
+  // Use `!== undefined` (not truthiness) so an explicit empty `--port=` is
+  // validated and rejected rather than silently falling back to the default.
+  const port =
+    values.port !== undefined
+      ? parsePort(values.port as string, '--port')
+      : parsePort(process.env['PORT'] || '3000', 'PORT')
   // Flags win over env so a one-off `--token` can override the ambient config.
   const authToken = (values.token as string | undefined) || process.env['KANBAN_API_TOKEN']
   const allowedOrigin =
@@ -510,6 +513,28 @@ export function parseServeArgs(argv: string[]): ServeOptions {
 
 function parseSyncIntervalMs(raw: string): number {
   return resolvePollingSyncIntervalMs(raw, { label: '--sync-interval-ms' })
+}
+
+// `parseInt` silently accepts `123abc` (→123) and `-1`, and yields NaN for
+// non-numeric input, so validate the port explicitly: digits only, 0–65535
+// (0 lets the OS pick an ephemeral port). Throws so a bad value surfaces as the
+// structured INVALID_ARGUMENT envelope rather than booting on a garbage port.
+function parsePort(raw: string, label: string): number {
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      `${label} must be an integer between 0 and 65535`,
+    )
+  }
+  const port = Number(trimmed)
+  if (port > 65535) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      `${label} must be an integer between 0 and 65535`,
+    )
+  }
+  return port
 }
 
 /**
