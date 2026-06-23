@@ -2,7 +2,7 @@
 
 > Adversarial plan → execute → review QA loop. Source of truth for this scope.
 > Orchestrator: Claude (Opus 4.8). Executor: Claude. Reviewer: `codex exec` (separate invocation).
-> All dates absolute. Created 2026-06-22. Plan rev 6 (post final-gate G5.2: +D7).
+> All dates absolute. Created 2026-06-22. Plan rev 7 (DONE — G5.3 APPROVE).
 
 ## Scope (enumerated, finite, terminal)
 
@@ -153,6 +153,12 @@ No new endpoints/features; no provider-internal webhook event-parsing changes; n
 | 7 (self re-scan, post-D7)               | 2026-06-22 | 0                  | 0                 | --port + --sync-interval-ms now both strict digits-only + tested          |
 
 → EC7 needs **two consecutive** zero/zero passes. Pass 4 found D6, so the count restarts: pass 5 is zero/zero; one more clean Reviewer pass (G5.2) makes two consecutive. Honest status: **not yet satisfied** until G5.2 confirms.
+
+## Out-of-scope observations (not fixed — recorded for a future slice)
+
+| ID    | Where                                  | Observation                                                                                                                                                                                                                                                                                | Sev | Why not fixed                                                                                                                                                                                                                             |
+| ----- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OBS-1 | `src/sync-config.ts:13` (out of scope) | `resolvePollingSyncIntervalMs` parses with `Number()`, so the **env** var `KANBAN_SYNC_INTERVAL_MS=1e3`/`0x3e8` is accepted via alternate notation. Always yields a valid integer ≥1000 (guarded by `Number.isInteger` + min check), so it is notation-leniency, not an invalid-value bug. | Low | `sync-config.ts` is explicitly OUT OF SCOPE (storage/sync/tracker config modules) per the G0.3-approved plan; fixing it is drift. The in-scope CLI flag `--sync-interval-ms` IS strict (D7). Reviewer (G5.3) agreed this is non-blocking. |
 
 ## Reviewer gate log
 
