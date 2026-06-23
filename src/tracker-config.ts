@@ -1,6 +1,7 @@
 import { ErrorCode, KanbanError } from './errors'
 import { providerNotConfigured } from './providers/errors'
 import { resolvePollingSyncIntervalMs } from './sync-config'
+import { parseDecimalDigits } from './transport-input'
 
 export type TrackerProvider = 'local' | 'linear' | 'jira'
 
@@ -120,15 +121,14 @@ export function trackerConfigFromEnv(
         `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required when KANBAN_PROVIDER=jira`,
       )
     }
-    const boardIdRaw = env['JIRA_BOARD_ID']
-    const boardId = boardIdRaw ? Number.parseInt(boardIdRaw, 10) : undefined
+    const boardId = jiraBoardIdFromEnv(env['JIRA_BOARD_ID'])
     return {
       provider,
       baseUrl: baseUrl!,
       email: email!,
       apiToken: apiToken!,
       projectKey: projectKey!,
-      ...(Number.isFinite(boardId) ? { boardId } : {}),
+      ...(boardId !== undefined ? { boardId } : {}),
       defaultIssueType: env['JIRA_ISSUE_TYPE'] ?? 'Task',
       syncIntervalMs: resolvePollingSyncIntervalMs(env['KANBAN_SYNC_INTERVAL_MS']),
     }
@@ -142,6 +142,24 @@ export function trackerConfigFromEnv(
       ? { defaultTaskColumn: env['KANBAN_DEFAULT_TASK_COLUMN']!.trim() }
       : {}),
   }
+}
+
+/**
+ * Resolve the optional `JIRA_BOARD_ID` env var to a positive integer board id.
+ * Unset/blank → `undefined` (no board pinned). A set-but-invalid value throws
+ * `INVALID_CONFIG` rather than silently falling back: the previous
+ * `Number.parseInt` accepted trailing garbage and signs (`'12abc'→12`,
+ * `'-5'→-5`, `'1e3'→1`), quietly pinning a *wrong* board. This matches how
+ * resolvePollingSyncIntervalMs treats a malformed optional numeric env var.
+ */
+function jiraBoardIdFromEnv(raw: string | undefined): number | undefined {
+  const value = raw?.trim()
+  if (!value) return undefined
+  const parsed = parseDecimalDigits(value)
+  if (parsed === null || parsed < 1) {
+    throw new KanbanError(ErrorCode.INVALID_CONFIG, 'JIRA_BOARD_ID must be a positive integer')
+  }
+  return parsed
 }
 
 function defaultColumnsFromEnv(env: Record<string, string | undefined>): string[] | undefined {
