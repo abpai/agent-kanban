@@ -1,6 +1,34 @@
 import { describe, expect, test } from 'bun:test'
 import { ErrorCode, KanbanError } from '../errors'
-import { parseBoundedInt, parsePositiveInt } from '../transport-input'
+import { parseBoundedInt, parseDecimalDigits, parsePositiveInt } from '../transport-input'
+
+describe('parseDecimalDigits', () => {
+  test('parses plain decimal digit strings (whitespace-trimmed)', () => {
+    expect(parseDecimalDigits('0')).toBe(0)
+    expect(parseDecimalDigits('42')).toBe(42)
+    expect(parseDecimalDigits('  1000  ')).toBe(1000)
+    expect(parseDecimalDigits(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER)
+  })
+
+  test('returns null for anything that is not exact non-negative decimal digits', () => {
+    for (const raw of [
+      '',
+      '   ',
+      'notanumber',
+      '12abc',
+      '-1',
+      '3.5',
+      '0x10',
+      '1e3',
+      '1_000',
+      '+5',
+      '9007199254740993', // past MAX_SAFE_INTEGER → precision loss
+      '9'.repeat(309), // Number() → Infinity
+    ]) {
+      expect(parseDecimalDigits(raw)).toBeNull()
+    }
+  })
+})
 
 describe('parseBoundedInt', () => {
   test('accepts in-range digit strings (inclusive bounds)', () => {

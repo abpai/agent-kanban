@@ -132,12 +132,35 @@ describe('jira-wiring', () => {
     expect(provider.type).toBe('jira')
   })
 
-  test('JIRA_BOARD_ID non-numeric falls back to undefined in env loader', () => {
+  test('JIRA_BOARD_ID unset omits boardId (no board pinned)', () => {
     setJiraRequiredEnv()
-    process.env['JIRA_BOARD_ID'] = 'notanumber'
     const config = trackerConfigFromEnv()
     expect(config.provider).toBe('jira')
     expect(config).not.toHaveProperty('boardId')
+  })
+
+  test('JIRA_BOARD_ID accepts a plain positive integer', () => {
+    setJiraRequiredEnv()
+    process.env['JIRA_BOARD_ID'] = '  42  '
+    const config = trackerConfigFromEnv()
+    expect(config.provider).toBe('jira')
+    expect((config as { boardId?: number }).boardId).toBe(42)
+  })
+
+  test('JIRA_BOARD_ID rejects malformed values as INVALID_CONFIG (no silent wrong board)', () => {
+    setJiraRequiredEnv()
+    // Number.parseInt would have quietly coerced these to 12 / 1 / -5 / 0 and
+    // pinned a wrong board; they must now be rejected.
+    for (const raw of ['notanumber', '12abc', '1e3', '0x10', '3.5', '-5', '0']) {
+      process.env['JIRA_BOARD_ID'] = raw
+      let code: string | undefined
+      try {
+        trackerConfigFromEnv()
+      } catch (err) {
+        code = (err as KanbanError).code
+      }
+      expect(code).toBe(ErrorCode.INVALID_CONFIG)
+    }
   })
 
   test('trackerConfigFromEnv carries remote polling sync interval', () => {
