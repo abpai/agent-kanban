@@ -15,7 +15,7 @@ import { unsupportedOperation } from './providers/errors'
 import { openKanbanRuntime } from './provider-runtime'
 import { trackerConfigFromEnv } from './tracker-config'
 import type { KanbanProvider } from './providers/types'
-import { resolvePollingSyncIntervalMs } from './sync-config'
+import { MIN_POLLING_SYNC_INTERVAL_MS } from './sync-config'
 import { normalizeCreateTaskInput } from './use-cases'
 
 interface ParsedArgs {
@@ -489,9 +489,12 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       err instanceof Error ? err.message : String(err),
     )
   }
-  const port = values.port
-    ? parseInt(values.port as string, 10)
-    : parseInt(process.env['PORT'] || '3000', 10)
+  // Use `!== undefined` (not truthiness) so an explicit empty `--port=` is
+  // validated and rejected rather than silently falling back to the default.
+  const port =
+    values.port !== undefined
+      ? parsePort(values.port as string, '--port')
+      : parsePort(process.env['PORT'] || '3000', 'PORT')
   // Flags win over env so a one-off `--token` can override the ambient config.
   const authToken = (values.token as string | undefined) || process.env['KANBAN_API_TOKEN']
   const allowedOrigin =
@@ -499,7 +502,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
   return {
     db: values.db as string | undefined,
     port,
-    ...(values['sync-interval-ms']
+    ...(values['sync-interval-ms'] !== undefined
       ? { syncIntervalMs: parseSyncIntervalMs(values['sync-interval-ms'] as string) }
       : {}),
     tunnel: Boolean(values.tunnel),
@@ -509,7 +512,82 @@ export function parseServeArgs(argv: string[]): ServeOptions {
 }
 
 function parseSyncIntervalMs(raw: string): number {
-  return resolvePollingSyncIntervalMs(raw, { label: '--sync-interval-ms' })
+  // Strict digits-only CLI contract (matching --port): reject non-digit input,
+  // the Number() overflow/precision-loss of an over-long digit string
+  // (isSafeInteger also excludes Infinity and values past MAX_SAFE_INTEGER), and
+  // values below the minimum — all as INVALID_ARGUMENT. The shared
+  // resolvePollingSyncIntervalMs (sync-config.ts) is intentionally more lenient
+  // (Number() accepts hex/scientific; isInteger accepts past MAX_SAFE_INTEGER)
+  // and reports INVALID_CONFIG, so validate here and return the parsed value
+  // directly rather than re-parsing the same string through it.
+  const trimmed = raw.trim()
+  const parsed = Number(trimmed)
+  if (
+    !/^\d+$/.test(trimmed) ||
+    !Number.isSafeInteger(parsed) ||
+    parsed < MIN_POLLING_SYNC_INTERVAL_MS
+  ) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      `--sync-interval-ms must be an integer >= ${MIN_POLLING_SYNC_INTERVAL_MS}`,
+    )
+  }
+  return parsed
+}
+
+// `parseInt` silently accepts `123abc` (→123) and `-1`, and yields NaN for
+// non-numeric input, so validate the port explicitly: digits only, 0–65535
+// (0 lets the OS pick an ephemeral port). Throws so a bad value surfaces as the
+// structured INVALID_ARGUMENT envelope rather than booting on a garbage port.
+function parsePort(raw: string, label: string): number {
+  const trimmed = raw.trim()
+  const port = Number(trimmed)
+  if (!/^\d+$/.test(trimmed) || port > 65535) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      `${label} must be an integer between 0 and 65535`,
+    )
+  }
+  return port
+}
+
+/**
+ * Guards public-tunnel startup. A `--tunnel` exposes the server to the internet,
+ * so it must require both:
+ *   1. an API token (KANBAN_API_TOKEN / --token) for the `/api/*` + `/ws` surface, and
+ *   2. a provider webhook signing secret, because `/api/webhooks/*` is exempt from
+ *      the API token and falls back to "open dev mode" (accept unsigned payloads)
+ *      when the secret is unset — which over a public tunnel means unauthenticated
+ *      writes to the cache.
+ * Throws KanbanError on violation; the caller prints the message and exits non-zero.
+ */
+export function assertTunnelSecurity(
+  opts: { tunnel: boolean; authToken?: string },
+  env: Record<string, string | undefined>,
+): void {
+  if (!opts.tunnel) return
+  if (!opts.authToken) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      'Refusing to start a public tunnel without an API token. ' +
+        'Set KANBAN_API_TOKEN or pass --token <token>.',
+    )
+  }
+  const providerType = (env['KANBAN_PROVIDER'] ?? 'local').trim().toLowerCase()
+  const webhookSecretEnv =
+    providerType === 'jira'
+      ? 'JIRA_WEBHOOK_SECRET'
+      : providerType === 'linear'
+        ? 'LINEAR_WEBHOOK_SECRET'
+        : null
+  if (webhookSecretEnv && !env[webhookSecretEnv]) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      `Refusing to start a public tunnel: ${providerType} webhooks accept unsigned payloads ` +
+        `(open dev mode) without ${webhookSecretEnv}, which would expose unauthenticated writes ` +
+        `over the public URL. Set ${webhookSecretEnv}.`,
+    )
+  }
 }
 
 export interface McpOptions {
@@ -563,13 +641,14 @@ if (import.meta.main) {
   } else if (argv[0] === 'serve') {
     const opts = parseEntryArgs(() => parseServeArgs(argv))
 
-    // A tunnel exposes the dashboard publicly, so refuse to start one without a
-    // token. Plain localhost serve stays open for backward compatibility.
-    if (opts.tunnel && !opts.authToken) {
-      console.error(
-        'Refusing to start a public tunnel without an API token. ' +
-          'Set KANBAN_API_TOKEN or pass --token <token>.',
-      )
+    // A tunnel exposes the dashboard publicly, so refuse to start one unless it is
+    // safe: an API token for /api + /ws, and a provider webhook secret so the
+    // auth-exempt /api/webhooks/* surface can't accept unsigned writes. Plain
+    // localhost serve stays open for backward compatibility.
+    try {
+      assertTunnelSecurity(opts, process.env)
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err))
       process.exit(1)
     }
 
@@ -595,7 +674,10 @@ if (import.meta.main) {
     if (opts.tunnel) {
       const { startCloudflareTunnel } = await import('./tunnel')
       try {
-        tunnelHandle = startCloudflareTunnel(opts.port)
+        // Use the resolved bound port, not opts.port: with `--port=0` the OS
+        // picks an ephemeral port, so opts.port (0) would point cloudflared at
+        // localhost:0 and never reach the server.
+        tunnelHandle = startCloudflareTunnel(server.port)
       } catch {
         // startCloudflareTunnel already logged a friendly message
       }

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ErrorCode, KanbanError, type ErrorCodeValue } from '../errors'
 import type { Task, TaskComment } from '../types'
-import { parseMcpArgs, parseServeArgs, run } from '../index'
+import { assertTunnelSecurity, parseMcpArgs, parseServeArgs, run } from '../index'
 
 async function withTempDb(runTest: (dbPath: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'kanban-run-'))
@@ -85,10 +85,36 @@ describe('parseServeArgs', () => {
     })
   })
 
-  test('--sync-interval-ms rejects invalid values', () => {
-    for (const raw of ['999', '0']) {
+  test('--sync-interval-ms rejects below-minimum and overflow values as INVALID_ARGUMENT', () => {
+    // The whole flag family reports rejections with one code: a digit-but-too-small
+    // value, a value past MAX_SAFE_INTEGER (silent precision loss), OR a digit
+    // string so long that Number() overflows to Infinity — all INVALID_ARGUMENT.
+    for (const raw of ['999', '0', '9007199254740993', '9'.repeat(309)]) {
       expect(() => parseServeArgs(['serve', '--sync-interval-ms', raw])).toThrow(KanbanError)
+      try {
+        parseServeArgs(['serve', '--sync-interval-ms', raw])
+      } catch (err) {
+        expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+      }
     }
+  })
+
+  test('D7: --sync-interval-ms rejects non-digit notation (hex/scientific/garbage/empty)', () => {
+    for (const bad of ['0x1000', '1e3', '1_000', '3.5', 'abc', '-1000']) {
+      expect(() => parseServeArgs(['serve', `--sync-interval-ms=${bad}`])).toThrow(KanbanError)
+      try {
+        parseServeArgs(['serve', `--sync-interval-ms=${bad}`])
+      } catch (err) {
+        expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+      }
+    }
+    // explicit empty is rejected rather than silently falling back to the default
+    expect(() => parseServeArgs(['serve', '--sync-interval-ms='])).toThrow(KanbanError)
+  })
+
+  test('D7: --sync-interval-ms accepts a plain integer >= 1000', () => {
+    expect(parseServeArgs(['serve', '--sync-interval-ms=1000']).syncIntervalMs).toBe(1000)
+    expect(parseServeArgs(['serve', '--sync-interval-ms=600000']).syncIntervalMs).toBe(600000)
   })
 
   test('--token / --allowed-origin flags and env are parsed; flags win over env', () => {
@@ -127,6 +153,84 @@ describe('parseServeArgs', () => {
       parseServeArgs(['serve', '--bogus'])
     } catch (err) {
       expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+    }
+  })
+
+  test('D6: rejects non-integer / out-of-range / trailing-garbage ports', () => {
+    for (const bad of ['abc', '123abc', '-1', '70000', '3.5', '0x10', '']) {
+      expect(() => parseServeArgs(['serve', `--port=${bad}`])).toThrow(KanbanError)
+      try {
+        parseServeArgs(['serve', `--port=${bad}`])
+      } catch (err) {
+        expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+      }
+    }
+  })
+
+  test('D6: accepts valid ports including 0 (OS-assigned ephemeral)', () => {
+    expect(parseServeArgs(['serve', '--port=0']).port).toBe(0)
+    expect(parseServeArgs(['serve', '--port=8080']).port).toBe(8080)
+    expect(parseServeArgs(['serve', '--port=65535']).port).toBe(65535)
+  })
+
+  test('D6: an invalid PORT env value is rejected too', () => {
+    const prev = process.env['PORT']
+    process.env['PORT'] = 'not-a-port'
+    try {
+      expect(() => parseServeArgs(['serve'])).toThrow(KanbanError)
+    } finally {
+      if (prev === undefined) delete process.env['PORT']
+      else process.env['PORT'] = prev
+    }
+  })
+})
+
+describe('assertTunnelSecurity (F44 + D5)', () => {
+  test('no tunnel: always allowed regardless of token/secret', () => {
+    expect(() => assertTunnelSecurity({ tunnel: false }, {})).not.toThrow()
+  })
+
+  test('F44: tunnel without an API token is refused', () => {
+    expect(() => assertTunnelSecurity({ tunnel: true }, {})).toThrow(KanbanError)
+    try {
+      assertTunnelSecurity({ tunnel: true }, {})
+    } catch (err) {
+      expect((err as KanbanError).message).toContain('without an API token')
+    }
+  })
+
+  test('tunnel + token on the local provider is allowed (local has no webhooks)', () => {
+    expect(() =>
+      assertTunnelSecurity({ tunnel: true, authToken: 't' }, { KANBAN_PROVIDER: 'local' }),
+    ).not.toThrow()
+    // default provider is local when KANBAN_PROVIDER is unset
+    expect(() => assertTunnelSecurity({ tunnel: true, authToken: 't' }, {})).not.toThrow()
+  })
+
+  test('D5: tunnel + token on jira without JIRA_WEBHOOK_SECRET is refused', () => {
+    try {
+      assertTunnelSecurity({ tunnel: true, authToken: 't' }, { KANBAN_PROVIDER: 'jira' })
+      throw new Error('expected refusal')
+    } catch (err) {
+      expect((err as KanbanError).message).toContain('JIRA_WEBHOOK_SECRET')
+    }
+  })
+
+  test('D5: tunnel + token on jira WITH the secret is allowed', () => {
+    expect(() =>
+      assertTunnelSecurity(
+        { tunnel: true, authToken: 't' },
+        { KANBAN_PROVIDER: 'jira', JIRA_WEBHOOK_SECRET: 's' },
+      ),
+    ).not.toThrow()
+  })
+
+  test('D5: tunnel + token on linear without LINEAR_WEBHOOK_SECRET is refused', () => {
+    try {
+      assertTunnelSecurity({ tunnel: true, authToken: 't' }, { KANBAN_PROVIDER: 'Linear' })
+      throw new Error('expected refusal')
+    } catch (err) {
+      expect((err as KanbanError).message).toContain('LINEAR_WEBHOOK_SECRET')
     }
   })
 })
