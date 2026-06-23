@@ -2,7 +2,7 @@
 
 > Adversarial plan → execute → review QA loop. Source of truth for this scope.
 > Orchestrator: Claude (Opus 4.8). Executor: Claude. Reviewer: `codex exec` (separate invocation).
-> All dates absolute. Created 2026-06-22. Plan rev 4 (post Phase 3/4 review).
+> All dates absolute. Created 2026-06-22. Plan rev 5 (post final-gate G5.1: +D6).
 
 ## Scope (enumerated, finite, terminal)
 
@@ -36,16 +36,16 @@ No new endpoints/features; no provider-internal webhook event-parsing changes; n
 
 ## Falsifiable exit criteria — status
 
-| #   | Criterion                                                                                 | Status | Proof                                                     |
-| --- | ----------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------- |
-| EC1 | Every in-scope feature (F01–F55) has expected behaviour documented + cited to `file:line` | ✅     | Feature table below                                       |
-| EC2 | Every feature's Test Cases follow the `H/E/B/I/S/P` template (tests or `N/A — reason`)    | ✅     | Feature table Test Cases column                           |
-| EC3 | Every listed test runs green, or is explicitly WAIVED with reason                         | ✅     | `bun test` → 470 pass / 0 fail / 27 skip (2026-06-22)     |
-| EC4 | Every defect has repro + expected-vs-actual + severity + root cause, fixed or accepted    | ✅     | Defects table (D1–D5, all fixed)                          |
-| EC5 | `bun test && bun run check` passes before broad claims + at final regression              | ✅     | 470 pass; check exit 0 (lint+typecheck+ui:typecheck)      |
-| EC6 | No open critical/high defects; no regression vs baseline                                  | ✅     | 0 open defects; baseline 60→ now 113 in-scope tests green |
-| EC7 | Two consecutive discovery passes find zero new features AND zero new defects              | ✅     | Discovery-pass log (pass 2 + pass 3 both zero/zero)       |
-| EC8 | Separate `codex` Reviewer approves the final regression pass                              | ⏳     | Final regression review pending (gate G5)                 |
+| #   | Criterion                                                                                 | Status | Proof                                                                                     |
+| --- | ----------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------- |
+| EC1 | Every in-scope feature (F01–F55) has expected behaviour documented + cited to `file:line` | ✅     | Feature table below                                                                       |
+| EC2 | Every feature's Test Cases follow the `H/E/B/I/S/P` template (tests or `N/A — reason`)    | ✅     | Feature table Test Cases column                                                           |
+| EC3 | Every listed test runs green, or is explicitly WAIVED with reason                         | ✅     | `bun test` → 470 pass / 0 fail / 27 skip (2026-06-22)                                     |
+| EC4 | Every defect has repro + expected-vs-actual + severity + root cause, fixed or accepted    | ✅     | Defects table (D1–D6, all fixed)                                                          |
+| EC5 | `bun test && bun run check` passes before broad claims + at final regression              | ✅     | 470 pass; check exit 0 (lint+typecheck+ui:typecheck)                                      |
+| EC6 | No open critical/high defects; no regression vs baseline                                  | ✅     | 0 open defects; baseline 60→ now 124 in-scope tests green                                 |
+| EC7 | Two consecutive discovery passes find zero new features AND zero new defects              | ⏳     | Pass 5 (post-D6) zero/zero; needs one more clean Reviewer pass (G5.2) for two consecutive |
+| EC8 | Separate `codex` Reviewer approves the final regression pass                              | ⏳     | G5.1 found D6 (fixed); awaiting G5.2 re-approval                                          |
 
 ## Circuit breakers
 
@@ -57,7 +57,7 @@ No new endpoints/features; no provider-internal webhook event-parsing changes; n
 ## Baseline & final test counts
 
 - Baseline 2026-06-22: in-scope test files (server/api/webhooks/webhook-events) → **60 pass / 0 fail**.
-- Final 2026-06-22: in-scope test files (server/api/webhooks/webhook-events/tunnel/webhook-events-receipts + index parseServeArgs/assertTunnelSecurity) → **113 pass**; full suite **470 pass / 0 fail / 27 skip**.
+- Final 2026-06-22: in-scope test files (server/api/webhooks/webhook-events/tunnel/webhook-events-receipts + index parseServeArgs/assertTunnelSecurity/port) → **124 pass**; full suite **500 pass / 0 fail / 27 skip**.
 
 ---
 
@@ -110,7 +110,7 @@ No new endpoints/features; no provider-internal webhook event-parsing changes; n
 | F40        | `recordWebhookEvent`                     | Best-effort insert; swallow errors (`webhook-events.ts:102`)                              | H/E/I: webhook-events-receipts.test::"recordWebhookEvent (F40)" (values/null/flag/throw)                               | VERIFIED | —    | unit via fake Sql                   | 2026-06-22  |
 | F41        | `extractWebhookMeta`                     | jira/linear/unknown shapes (`webhook-events.ts:121`)                                      | H/E/I: webhook-events.test::"extractWebhookMeta"                                                                       | VERIFIED | —    | —                                   | 2026-06-22  |
 | F42        | tunnel spawn + default cmd               | Spawn cloudflared (`tunnel.ts:17`)                                                        | H: tunnel.test::"F51: detects…from stdout" (spawn path)                                                                | VERIFIED | —    | —                                   | 2026-06-22  |
-| F43        | `parseServeArgs`                         | Env/flag precedence + validation (`index.ts:470`)                                         | H/I: index.test::"parseServeArgs" (8 cases)                                                                            | VERIFIED | —    | —                                   | 2026-06-22  |
+| F43        | `parseServeArgs`                         | Env/flag precedence + `--port`/PORT validation (digits, 0–65535) (`index.ts:470,522`)     | H/I/B: index.test::"parseServeArgs" + "D6: rejects…ports"/"accepts valid ports"/"invalid PORT env"                     | FIXED    | Med  | D6                                  | 2026-06-22  |
 | F44        | Tunnel-without-token refusal             | Refuse public tunnel w/o token (`index.ts` assertTunnelSecurity)                          | S: index.test::"F44: tunnel without an API token is refused"                                                           | VERIFIED | —    | security                            | 2026-06-22  |
 | F45        | `StartedServer.stop()` teardown          | Clear timer + WS set + stop server (`server.ts:292`)                                      | H: exercised by every server.test `afterEach`; "stop twice" via tunnel F53 analog                                      | VERIFIED | —    | lifecycle                           | 2026-06-22  |
 | F46        | Top-level guard → enveloped 500          | handleRequest never throws (`api.ts` guard)                                               | E: api.test::"F55 regression"+"D2"+"D3" all assert enveloped, never thrown                                             | FIXED    | High | D1/D2                               | 2026-06-22  |
@@ -128,33 +128,37 @@ No new endpoints/features; no provider-internal webhook event-parsing changes; n
 
 ## Defects
 
-| ID  | Feat    | Repro                                                                      | Expected                         | Actual (pre-fix)                                              | Sev  | Root cause                                                                 | Status | Fix commit                       |
-| --- | ------- | -------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------- | ---- | -------------------------------------------------------------------------- | ------ | -------------------------------- |
-| D1  | F55     | POST `/api/webhooks/:target` where `provider.handleWebhook` throws         | Enveloped `{ok:false,error}` 500 | Unhandled rejection → bare non-enveloped 500                  | High | Webhook branch returned raw ApiResult, bypassing wrapHandler; no try/catch | FIXED  | 50c435b → generalized in f2c9502 |
-| D2  | F30/F46 | GET `/api/tasks/%E0%A4%A` (malformed %-encoding)                           | 400 enveloped                    | `decodeURIComponent` URIError escaped handleRequest           | High | Path-param decode outside any guard; many routes affected                  | FIXED  | f2c9502                          |
-| D3  | F27     | Provider throws `PROVIDER_UPSTREAM_ERROR`/`SYNC_REQUIRED`/`INTERNAL_ERROR` | 5xx (502/503/500)                | Default 400 (client error)                                    | Med  | `statusForCode` lacked these codes → default 400                           | FIXED  | f2c9502                          |
-| D4  | F51     | cloudflared prints the URL split across two stream chunks                  | URL detected                     | Missed (per-chunk match)                                      | Low  | `scanForUrl` matched each chunk in isolation                               | FIXED  | f2c9502                          |
-| D5  | F44     | `serve --tunnel --token X` on jira/linear with no webhook secret           | Refuse startup                   | Public tunnel accepts unsigned webhook writes (open dev mode) | High | Tunnel gate only required API token; webhooks are token-exempt             | FIXED  | f2c9502                          |
+| ID  | Feat    | Repro                                                                      | Expected                         | Actual (pre-fix)                                                       | Sev  | Root cause                                                                                     | Status | Fix commit                       |
+| --- | ------- | -------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------- | ---- | ---------------------------------------------------------------------------------------------- | ------ | -------------------------------- |
+| D1  | F55     | POST `/api/webhooks/:target` where `provider.handleWebhook` throws         | Enveloped `{ok:false,error}` 500 | Unhandled rejection → bare non-enveloped 500                           | High | Webhook branch returned raw ApiResult, bypassing wrapHandler; no try/catch                     | FIXED  | 50c435b → generalized in f2c9502 |
+| D2  | F30/F46 | GET `/api/tasks/%E0%A4%A` (malformed %-encoding)                           | 400 enveloped                    | `decodeURIComponent` URIError escaped handleRequest                    | High | Path-param decode outside any guard; many routes affected                                      | FIXED  | f2c9502                          |
+| D3  | F27     | Provider throws `PROVIDER_UPSTREAM_ERROR`/`SYNC_REQUIRED`/`INTERNAL_ERROR` | 5xx (502/503/500)                | Default 400 (client error)                                             | Med  | `statusForCode` lacked these codes → default 400                                               | FIXED  | f2c9502                          |
+| D4  | F51     | cloudflared prints the URL split across two stream chunks                  | URL detected                     | Missed (per-chunk match)                                               | Low  | `scanForUrl` matched each chunk in isolation                                                   | FIXED  | f2c9502                          |
+| D5  | F44     | `serve --tunnel --token X` on jira/linear with no webhook secret           | Refuse startup                   | Public tunnel accepts unsigned webhook writes (open dev mode)          | High | Tunnel gate only required API token; webhooks are token-exempt                                 | FIXED  | f2c9502                          |
+| D6  | F43     | `kanban serve --port=abc` / `=123abc` / `=-1` / `=70000`                   | Reject with INVALID_ARGUMENT     | `parseInt` → NaN/123/-1/70000 accepted; server boots on a garbage port | Med  | `parseServeArgs` used `parseInt` with no range/format check (F43 row overclaimed "validation") | FIXED  | 3403f37                          |
 
 **F47 (investigated, NOT a defect):** static-asset path traversal is not exploitable — the WHATWG URL parser normalizes `.`/`..`/`%2e%2e` out of `pathname`, encoded slashes (`%2f`) survive as literal non-separator segments through `node:path.join`, `Bun.file` does not decode, and the branch is gated off entirely unless `ui/dist` exists. Evidence captured 2026-06-22; reviewer-confirmed.
 
 ## Discovery-pass log (for EC7)
 
-| Pass                                    | Date       | New features found | New defects found | Notes                                                                        |
-| --------------------------------------- | ---------- | ------------------ | ----------------- | ---------------------------------------------------------------------------- |
-| 1 (Phase 1 enumeration)                 | 2026-06-22 | F01–F55 (initial)  | —                 | full read of in-scope files                                                  |
-| 2 (Phase 3 adversarial + Reviewer G3.1) | 2026-06-22 | 0                  | D1–D5             | probes + codex review found 5 defects                                        |
-| 3 (Reviewer G3.2 sweep + self re-read)  | 2026-06-22 | 0                  | 0                 | all D1–D5 fixed; only a test-hygiene nit (now fixed); no new product defects |
+| Pass                                    | Date       | New features found | New defects found | Notes                                                                     |
+| --------------------------------------- | ---------- | ------------------ | ----------------- | ------------------------------------------------------------------------- |
+| 1 (Phase 1 enumeration)                 | 2026-06-22 | F01–F55 (initial)  | —                 | full read of in-scope files                                               |
+| 2 (Phase 3 adversarial + Reviewer G3.1) | 2026-06-22 | 0                  | D1–D5             | probes + codex review found 5 defects                                     |
+| 3 (Reviewer G3.2 sweep)                 | 2026-06-22 | 0                  | 0 (product)       | all D1–D5 fixed; 1 test-hygiene nit (fixed); no new product defects       |
+| 4 (Reviewer G5.1 final gate)            | 2026-06-22 | 0                  | D6                | reviewer probed parseServeArgs → unvalidated `--port`                     |
+| 5 (self re-scan, post-D6)               | 2026-06-22 | 0                  | 0                 | no raw parseInt/Number left in scope; all numeric inputs validated+tested |
 
-→ Passes 2 had defects; passes after remediation (G3.2 sweep + the pending final regression pass) are the two consecutive zero/zero passes required by EC7.
+→ EC7 needs **two consecutive** zero/zero passes. Pass 4 found D6, so the count restarts: pass 5 is zero/zero; one more clean Reviewer pass (G5.2) makes two consecutive. Honest status: **not yet satisfied** until G5.2 confirms.
 
 ## Reviewer gate log
 
-| Gate | Phase            | Date       | Verdict | Notes                                                                                                         |
-| ---- | ---------------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------- |
-| G0.1 | Plan             | 2026-06-22 | REVISE  | missing branch rows, boundary, EC falsifiability, Done condition, severity rubric, PG waiver                  |
-| G0.2 | Plan             | 2026-06-22 | REVISE  | parseEntryArgs row, EC2 template, webhook-throw row                                                           |
-| G0.3 | Plan             | 2026-06-22 | APPROVE | scope finite, criteria falsifiable → Phase 1                                                                  |
-| G3.1 | Exec/Remediation | 2026-06-22 | REVISE  | D2 (decode escape), D3 (status mapping), D4 (tunnel chunk), D5 (tunnel unsigned webhooks); F47 confirmed safe |
-| G3.2 | Exec/Remediation | 2026-06-22 | APPROVE | all 4 findings resolved; 1 optional test-hygiene nit (fixed in b3a493b)                                       |
-| G5   | Final regression | 2026-06-22 | PENDING | final regression review                                                                                       |
+| Gate | Phase            | Date       | Verdict | Notes                                                                                                                           |
+| ---- | ---------------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| G0.1 | Plan             | 2026-06-22 | REVISE  | missing branch rows, boundary, EC falsifiability, Done condition, severity rubric, PG waiver                                    |
+| G0.2 | Plan             | 2026-06-22 | REVISE  | parseEntryArgs row, EC2 template, webhook-throw row                                                                             |
+| G0.3 | Plan             | 2026-06-22 | APPROVE | scope finite, criteria falsifiable → Phase 1                                                                                    |
+| G3.1 | Exec/Remediation | 2026-06-22 | REVISE  | D2 (decode escape), D3 (status mapping), D4 (tunnel chunk), D5 (tunnel unsigned webhooks); F47 confirmed safe                   |
+| G3.2 | Exec/Remediation | 2026-06-22 | APPROVE | all 4 findings resolved; 1 optional test-hygiene nit (fixed in b3a493b)                                                         |
+| G5.1 | Final regression | 2026-06-22 | REVISE  | codex found D6 (unvalidated `--port`) + flagged EC7 wording overclaim; D1–D5 confirmed genuinely fixed, F47 safe, waivers legit |
+| G5.2 | Final regression | 2026-06-22 | PENDING | re-review after D6 fix + EC7 correction                                                                                         |
