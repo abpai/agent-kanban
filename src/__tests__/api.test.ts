@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initSchema, seedDefaultColumns, addTask } from '../db'
+import { KanbanError, ErrorCode } from '../errors'
 import { handleRequest } from '../api'
 import { createProvider } from '../providers/index'
 import type { KanbanProvider } from '../providers/types'
@@ -222,5 +223,106 @@ describe('handleRequest', () => {
     expect(body.ok).toBe(true)
     expect(body.data.provider).toBe('local')
     expect(body.data.capabilities.taskDelete).toBe(true)
+  })
+})
+
+// Minimal provider whose only relevant field is `type` plus an overridable
+// handleWebhook — the webhook branch of handleRequest is the surface under test.
+function webhookProvider(
+  type: string,
+  handleWebhook?: KanbanProvider['handleWebhook'],
+): KanbanProvider {
+  const p: Partial<KanbanProvider> = { type: type as KanbanProvider['type'] }
+  if (handleWebhook) p.handleWebhook = handleWebhook
+  return p as KanbanProvider
+}
+
+function webhookRequest(target: string): Request {
+  return new Request(`http://localhost/api/webhooks/${target}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+}
+
+describe('handleRequest webhook route (F25)', () => {
+  test('target that does not match the active provider → 400 UNSUPPORTED_OPERATION, not mutated', async () => {
+    const result = await handleRequest(
+      webhookProvider('local', async () => ({ handled: true })),
+      webhookRequest('jira'),
+    )
+    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    expect(result.response.status).toBe(400)
+    expect(result.mutated).toBe(false)
+    expect(body.error.code).toBe('UNSUPPORTED_OPERATION')
+  })
+
+  test('provider without handleWebhook → 400 UNSUPPORTED_OPERATION', async () => {
+    const result = await handleRequest(webhookProvider('local'), webhookRequest('local'))
+    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    expect(result.response.status).toBe(400)
+    expect(result.mutated).toBe(false)
+    expect(body.error.code).toBe('UNSUPPORTED_OPERATION')
+  })
+
+  test('unauthorized result → 401 PROVIDER_AUTH_FAILED, not mutated', async () => {
+    const result = await handleRequest(
+      webhookProvider('local', async () => ({ handled: false, unauthorized: true })),
+      webhookRequest('local'),
+    )
+    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    expect(result.response.status).toBe(401)
+    expect(result.mutated).toBe(false)
+    expect(body.error.code).toBe('PROVIDER_AUTH_FAILED')
+  })
+
+  test('handled result → 200, mutated true', async () => {
+    const result = await handleRequest(
+      webhookProvider('local', async () => ({ handled: true, message: 'ok' })),
+      webhookRequest('local'),
+    )
+    const body = (await result.response.json()) as { ok: boolean; data: { handled: boolean } }
+    expect(result.response.status).toBe(200)
+    expect(result.mutated).toBe(true)
+    expect(body.data.handled).toBe(true)
+  })
+
+  test('skipped (handled:false) result → 200, NOT mutated (no broadcast)', async () => {
+    const result = await handleRequest(
+      webhookProvider('local', async () => ({ handled: false, message: 'ignored' })),
+      webhookRequest('local'),
+    )
+    expect(result.response.status).toBe(200)
+    expect(result.mutated).toBe(false)
+  })
+})
+
+describe('handleRequest webhook route error containment (F55 regression)', () => {
+  test('a throwing handleWebhook is enveloped as 500 INTERNAL_ERROR, never escapes as a rejection', async () => {
+    const provider = webhookProvider('local', async () => {
+      throw new Error('boom from provider.handleWebhook')
+    })
+    // Must NOT reject — before the fix this threw out of handleRequest.
+    const result = await handleRequest(provider, webhookRequest('local'))
+    const body = (await result.response.json()) as {
+      ok: boolean
+      error: { code: string; message: string }
+    }
+    expect(result.response.status).toBe(500)
+    expect(result.mutated).toBe(false)
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
+    expect(body.error.message).toContain('boom')
+  })
+
+  test('a thrown KanbanError keeps its mapped status + code through the envelope', async () => {
+    const provider = webhookProvider('local', async () => {
+      throw new KanbanError(ErrorCode.CONFLICT, 'version conflict during webhook apply')
+    })
+    const result = await handleRequest(provider, webhookRequest('local'))
+    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    expect(result.response.status).toBe(409)
+    expect(result.mutated).toBe(false)
+    expect(body.error.code).toBe('CONFLICT')
   })
 })

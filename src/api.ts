@@ -286,25 +286,47 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     req.headers.forEach((value, key) => {
       headers[key] = value
     })
-    const result = await provider.handleWebhook({ headers, rawBody })
-    if (result.unauthorized) {
+    // The webhook branch returns a raw ApiResult (not via wrapHandler), so a
+    // throwing provider.handleWebhook would otherwise escape handleRequest as an
+    // unhandled rejection and surface as a bare, non-enveloped 500. Catch here so
+    // every failure stays inside the { ok:false, error } contract like the rest of
+    // the API, and never marks the request as mutated.
+    try {
+      const result = await provider.handleWebhook({ headers, rawBody })
+      if (result.unauthorized) {
+        return {
+          response: json(
+            {
+              ok: false,
+              error: { code: 'PROVIDER_AUTH_FAILED', message: result.message ?? 'Unauthorized' },
+            },
+            401,
+          ),
+          mutated: false,
+        }
+      }
       return {
-        response: json(
-          {
-            ok: false,
-            error: { code: 'PROVIDER_AUTH_FAILED', message: result.message ?? 'Unauthorized' },
-          },
-          401,
-        ),
+        response: json({
+          ok: true,
+          data: { handled: result.handled, message: result.message ?? null },
+        }),
+        mutated: result.handled,
+      }
+    } catch (err) {
+      if (err instanceof KanbanError) {
+        return {
+          response: json(
+            { ok: false, error: { code: err.code, message: err.message } },
+            statusForCode(err.code),
+          ),
+          mutated: false,
+        }
+      }
+      const msg = err instanceof Error ? err.message : String(err)
+      return {
+        response: json({ ok: false, error: { code: 'INTERNAL_ERROR', message: msg } }, 500),
         mutated: false,
       }
-    }
-    return {
-      response: json({
-        ok: true,
-        data: { handled: result.handled, message: result.message ?? null },
-      }),
-      mutated: result.handled,
     }
   }
 

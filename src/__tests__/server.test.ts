@@ -370,6 +370,29 @@ describe('startServer auth + CORS', () => {
     expect(res.status).not.toBe(401)
   })
 
+  test('a throwing provider webhook handler returns an enveloped 500, not a dropped connection', async () => {
+    const runtime = startServer(
+      makeProvider({
+        type: 'local',
+        async handleWebhook() {
+          throw new Error('boom during webhook apply')
+        },
+      }),
+      0,
+      { authToken: TOKEN },
+    )
+    runtimes.push(runtime)
+    const res = await fetch(`http://127.0.0.1:${runtime.port}/api/webhooks/local`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    const body = (await res.json()) as { ok: boolean; error: { code: string } }
+    expect(res.status).toBe(500)
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
+  })
+
   test('wsClients are tracked per server instance, not shared globally', async () => {
     const a = startServer(makeProvider(), 0)
     runtimes.push(a)
