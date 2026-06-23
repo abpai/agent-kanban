@@ -30,6 +30,7 @@ export class SqliteLocalStore implements LocalStorePort {
   constructor(
     private readonly db: Database,
     private readonly dbPath: string,
+    private readonly defaultTaskColumn?: string,
   ) {}
 
   getBoard() {
@@ -53,7 +54,10 @@ export class SqliteLocalStore implements LocalStorePort {
   }
 
   createTask(input: CreateTaskInput) {
-    return addTask(this.db, input.title, input)
+    return addTask(this.db, input.title, {
+      ...input,
+      column: input.column ?? this.defaultTaskColumn,
+    })
   }
 
   updateTask(idOrRef: string, input: Omit<UpdateTaskInput, 'expectedVersion'>) {
