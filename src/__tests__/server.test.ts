@@ -423,22 +423,29 @@ describe('startServer auth + CORS', () => {
       type: string
       task?: { column_id?: string }
       columnId?: string
-    }>((resolve) => {
+    }>((resolve, reject) => {
       ws.onmessage = (e) => resolve(JSON.parse(String(e.data)))
+      // Fast-fail with a clear message instead of hanging until the global test
+      // timeout if the broadcast never arrives (e.g. the socket was not yet
+      // registered when the mutation fired).
+      setTimeout(() => reject(new Error('timed out waiting for ws broadcast')), 4000)
     })
-    // Let the open handler register the socket before the mutation broadcasts.
-    await sleep(25)
+    try {
+      // Let the open handler register the socket before the mutation broadcasts.
+      await sleep(25)
 
-    await fetch(`http://127.0.0.1:${runtime.port}/api/tasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Broadcast me' }),
-    })
+      await fetch(`http://127.0.0.1:${runtime.port}/api/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Broadcast me' }),
+      })
 
-    const msg = await received
-    expect(msg.type).toBe('task:upsert')
-    expect(msg.columnId).toBe('backlog')
-    ws.close()
+      const msg = await received
+      expect(msg.type).toBe('task:upsert')
+      expect(msg.columnId).toBe('backlog')
+    } finally {
+      ws.close()
+    }
   })
 
   test('wsClients are tracked per server instance, not shared globally', async () => {

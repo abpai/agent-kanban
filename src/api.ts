@@ -76,18 +76,25 @@ function toResponse(result: CliOutput): Response {
   return json(result, statusForCode(result.error.code))
 }
 
+// Map any thrown error to the `{ ok:false, error }` envelope with the right
+// status. Shared by wrapHandler (per-handler) and handleRequest's top-level
+// guard so the two error paths can never drift apart.
+function errorResponse(err: unknown): Response {
+  if (err instanceof KanbanError) {
+    return json(
+      { ok: false, error: { code: err.code, message: err.message } },
+      statusForCode(err.code),
+    )
+  }
+  const msg = err instanceof Error ? err.message : String(err)
+  return json({ ok: false, error: { code: 'INTERNAL_ERROR', message: msg } }, 500)
+}
+
 async function wrapHandler(fn: () => Promise<CliOutput> | CliOutput): Promise<Response> {
   try {
     return toResponse(await fn())
   } catch (err) {
-    if (err instanceof KanbanError) {
-      return json(
-        { ok: false, error: { code: err.code, message: err.message } },
-        statusForCode(err.code),
-      )
-    }
-    const msg = err instanceof Error ? err.message : String(err)
-    return json({ ok: false, error: { code: 'INTERNAL_ERROR', message: msg } }, 500)
+    return errorResponse(err)
   }
 }
 
@@ -134,20 +141,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
   try {
     return await dispatchApiRequest(provider, req)
   } catch (err) {
-    if (err instanceof KanbanError) {
-      return {
-        response: json(
-          { ok: false, error: { code: err.code, message: err.message } },
-          statusForCode(err.code),
-        ),
-        mutated: false,
-      }
-    }
-    const msg = err instanceof Error ? err.message : String(err)
-    return {
-      response: json({ ok: false, error: { code: 'INTERNAL_ERROR', message: msg } }, 500),
-      mutated: false,
-    }
+    return { response: errorResponse(err), mutated: false }
   }
 }
 

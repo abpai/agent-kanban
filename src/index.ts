@@ -15,7 +15,7 @@ import { unsupportedOperation } from './providers/errors'
 import { openKanbanRuntime } from './provider-runtime'
 import { trackerConfigFromEnv } from './tracker-config'
 import type { KanbanProvider } from './providers/types'
-import { MIN_POLLING_SYNC_INTERVAL_MS, resolvePollingSyncIntervalMs } from './sync-config'
+import { MIN_POLLING_SYNC_INTERVAL_MS } from './sync-config'
 import { normalizeCreateTaskInput } from './use-cases'
 
 interface ParsedArgs {
@@ -512,17 +512,19 @@ export function parseServeArgs(argv: string[]): ServeOptions {
 }
 
 function parseSyncIntervalMs(raw: string): number {
-  // resolvePollingSyncIntervalMs parses with Number(), which tolerates hex /
-  // scientific notation (`0x1000`, `1e3`), treats empty as the default, and
-  // reports anything it rejects as INVALID_CONFIG. Mirror its exact reject set
-  // here (non-digit, the Number()->Infinity overflow of a very long digit string,
-  // or < 1000) but throw INVALID_ARGUMENT, so every rejection on this flag
-  // surfaces one code (matching --port) instead of leaking INVALID_CONFIG.
+  // Strict digits-only CLI contract (matching --port): reject non-digit input,
+  // the Number() overflow/precision-loss of an over-long digit string
+  // (isSafeInteger also excludes Infinity and values past MAX_SAFE_INTEGER), and
+  // values below the minimum — all as INVALID_ARGUMENT. The shared
+  // resolvePollingSyncIntervalMs (sync-config.ts) is intentionally more lenient
+  // (Number() accepts hex/scientific; isInteger accepts past MAX_SAFE_INTEGER)
+  // and reports INVALID_CONFIG, so validate here and return the parsed value
+  // directly rather than re-parsing the same string through it.
   const trimmed = raw.trim()
   const parsed = Number(trimmed)
   if (
     !/^\d+$/.test(trimmed) ||
-    !Number.isInteger(parsed) ||
+    !Number.isSafeInteger(parsed) ||
     parsed < MIN_POLLING_SYNC_INTERVAL_MS
   ) {
     throw new KanbanError(
@@ -530,7 +532,7 @@ function parseSyncIntervalMs(raw: string): number {
       `--sync-interval-ms must be an integer >= ${MIN_POLLING_SYNC_INTERVAL_MS}`,
     )
   }
-  return resolvePollingSyncIntervalMs(trimmed, { label: '--sync-interval-ms' })
+  return parsed
 }
 
 // `parseInt` silently accepts `123abc` (→123) and `-1`, and yields NaN for
@@ -539,14 +541,8 @@ function parseSyncIntervalMs(raw: string): number {
 // structured INVALID_ARGUMENT envelope rather than booting on a garbage port.
 function parsePort(raw: string, label: string): number {
   const trimmed = raw.trim()
-  if (!/^\d+$/.test(trimmed)) {
-    throw new KanbanError(
-      ErrorCode.INVALID_ARGUMENT,
-      `${label} must be an integer between 0 and 65535`,
-    )
-  }
   const port = Number(trimmed)
-  if (port > 65535) {
+  if (!/^\d+$/.test(trimmed) || port > 65535) {
     throw new KanbanError(
       ErrorCode.INVALID_ARGUMENT,
       `${label} must be an integer between 0 and 65535`,
@@ -678,7 +674,10 @@ if (import.meta.main) {
     if (opts.tunnel) {
       const { startCloudflareTunnel } = await import('./tunnel')
       try {
-        tunnelHandle = startCloudflareTunnel(opts.port)
+        // Use the resolved bound port, not opts.port: with `--port=0` the OS
+        // picks an ephemeral port, so opts.port (0) would point cloudflared at
+        // localhost:0 and never reach the server.
+        tunnelHandle = startCloudflareTunnel(server.port)
       } catch {
         // startCloudflareTunnel already logged a friendly message
       }
