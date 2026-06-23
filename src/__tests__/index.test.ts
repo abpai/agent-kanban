@@ -91,6 +91,24 @@ describe('parseServeArgs', () => {
     }
   })
 
+  test('D7: --sync-interval-ms rejects non-digit notation (hex/scientific/garbage/empty)', () => {
+    for (const bad of ['0x1000', '1e3', '1_000', '3.5', 'abc', '-1000']) {
+      expect(() => parseServeArgs(['serve', `--sync-interval-ms=${bad}`])).toThrow(KanbanError)
+      try {
+        parseServeArgs(['serve', `--sync-interval-ms=${bad}`])
+      } catch (err) {
+        expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+      }
+    }
+    // explicit empty is rejected rather than silently falling back to the default
+    expect(() => parseServeArgs(['serve', '--sync-interval-ms='])).toThrow(KanbanError)
+  })
+
+  test('D7: --sync-interval-ms accepts a plain integer >= 1000', () => {
+    expect(parseServeArgs(['serve', '--sync-interval-ms=1000']).syncIntervalMs).toBe(1000)
+    expect(parseServeArgs(['serve', '--sync-interval-ms=600000']).syncIntervalMs).toBe(600000)
+  })
+
   test('--token / --allowed-origin flags and env are parsed; flags win over env', () => {
     const prevToken = process.env['KANBAN_API_TOKEN']
     const prevOrigin = process.env['KANBAN_ALLOWED_ORIGIN']

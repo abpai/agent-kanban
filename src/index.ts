@@ -15,7 +15,7 @@ import { unsupportedOperation } from './providers/errors'
 import { openKanbanRuntime } from './provider-runtime'
 import { trackerConfigFromEnv } from './tracker-config'
 import type { KanbanProvider } from './providers/types'
-import { resolvePollingSyncIntervalMs } from './sync-config'
+import { MIN_POLLING_SYNC_INTERVAL_MS, resolvePollingSyncIntervalMs } from './sync-config'
 import { normalizeCreateTaskInput } from './use-cases'
 
 interface ParsedArgs {
@@ -502,7 +502,7 @@ export function parseServeArgs(argv: string[]): ServeOptions {
   return {
     db: values.db as string | undefined,
     port,
-    ...(values['sync-interval-ms']
+    ...(values['sync-interval-ms'] !== undefined
       ? { syncIntervalMs: parseSyncIntervalMs(values['sync-interval-ms'] as string) }
       : {}),
     tunnel: Boolean(values.tunnel),
@@ -512,7 +512,18 @@ export function parseServeArgs(argv: string[]): ServeOptions {
 }
 
 function parseSyncIntervalMs(raw: string): number {
-  return resolvePollingSyncIntervalMs(raw, { label: '--sync-interval-ms' })
+  // resolvePollingSyncIntervalMs parses with Number(), which tolerates hex /
+  // scientific notation (`0x1000`, `1e3`) and treats empty as the default.
+  // Enforce a strict digits-only CLI contract here (matching --port) before
+  // delegating to the shared >= 1000 range check.
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      `--sync-interval-ms must be an integer >= ${MIN_POLLING_SYNC_INTERVAL_MS}`,
+    )
+  }
+  return resolvePollingSyncIntervalMs(trimmed, { label: '--sync-interval-ms' })
 }
 
 // `parseInt` silently accepts `123abc` (→123) and `-1`, and yields NaN for
