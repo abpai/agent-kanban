@@ -9,11 +9,11 @@ import { boardInit, boardReset } from './commands/board'
 import { columnAdd, columnDelete, columnList, columnRename, columnReorder } from './commands/column'
 import { bulkClearDoneCmd, bulkMoveAllCmd } from './commands/bulk'
 import { getConfigPath, loadConfig, saveConfig } from './config'
-import { parsePositiveInt } from './transport-input'
+import { parseBoundedInt, parsePositiveInt } from './transport-input'
 import type { CliOutput, Priority, ProviderCapabilities } from './types'
 import { unsupportedOperation } from './providers/errors'
 import { openKanbanRuntime } from './provider-runtime'
-import { trackerConfigFromEnv } from './tracker-config'
+import { WEBHOOK_SECRET_ENV, trackerConfigFromEnv, trackerProviderFromEnv } from './tracker-config'
 import type { KanbanProvider } from './providers/types'
 import { MIN_POLLING_SYNC_INTERVAL_MS } from './sync-config'
 import { normalizeCreateTaskInput } from './use-cases'
@@ -511,44 +511,22 @@ export function parseServeArgs(argv: string[]): ServeOptions {
   }
 }
 
+// Strict digits-only CLI contract via the shared parseBoundedInt (rejects
+// hex/scientific, the Number() overflow/precision-loss of an over-long digit
+// string, and values below the minimum — all as INVALID_ARGUMENT). The shared
+// resolvePollingSyncIntervalMs (sync-config.ts) is the env-path parser; this
+// flag is validated strictly here.
 function parseSyncIntervalMs(raw: string): number {
-  // Strict digits-only CLI contract (matching --port): reject non-digit input,
-  // the Number() overflow/precision-loss of an over-long digit string
-  // (isSafeInteger also excludes Infinity and values past MAX_SAFE_INTEGER), and
-  // values below the minimum — all as INVALID_ARGUMENT. The shared
-  // resolvePollingSyncIntervalMs (sync-config.ts) is intentionally more lenient
-  // (Number() accepts hex/scientific; isInteger accepts past MAX_SAFE_INTEGER)
-  // and reports INVALID_CONFIG, so validate here and return the parsed value
-  // directly rather than re-parsing the same string through it.
-  const trimmed = raw.trim()
-  const parsed = Number(trimmed)
-  if (
-    !/^\d+$/.test(trimmed) ||
-    !Number.isSafeInteger(parsed) ||
-    parsed < MIN_POLLING_SYNC_INTERVAL_MS
-  ) {
-    throw new KanbanError(
-      ErrorCode.INVALID_ARGUMENT,
-      `--sync-interval-ms must be an integer >= ${MIN_POLLING_SYNC_INTERVAL_MS}`,
-    )
-  }
-  return parsed
+  return parseBoundedInt(raw, { min: MIN_POLLING_SYNC_INTERVAL_MS, field: '--sync-interval-ms' })
 }
 
 // `parseInt` silently accepts `123abc` (→123) and `-1`, and yields NaN for
-// non-numeric input, so validate the port explicitly: digits only, 0–65535
-// (0 lets the OS pick an ephemeral port). Throws so a bad value surfaces as the
-// structured INVALID_ARGUMENT envelope rather than booting on a garbage port.
+// non-numeric input, so validate the port explicitly via parseBoundedInt: digits
+// only, 0–65535 (0 lets the OS pick an ephemeral port). Throws so a bad value
+// surfaces as the structured INVALID_ARGUMENT envelope rather than booting on a
+// garbage port.
 function parsePort(raw: string, label: string): number {
-  const trimmed = raw.trim()
-  const port = Number(trimmed)
-  if (!/^\d+$/.test(trimmed) || port > 65535) {
-    throw new KanbanError(
-      ErrorCode.INVALID_ARGUMENT,
-      `${label} must be an integer between 0 and 65535`,
-    )
-  }
-  return port
+  return parseBoundedInt(raw, { min: 0, max: 65535, field: label })
 }
 
 /**
@@ -573,13 +551,12 @@ export function assertTunnelSecurity(
         'Set KANBAN_API_TOKEN or pass --token <token>.',
     )
   }
-  const providerType = (env['KANBAN_PROVIDER'] ?? 'local').trim().toLowerCase()
-  const webhookSecretEnv =
-    providerType === 'jira'
-      ? 'JIRA_WEBHOOK_SECRET'
-      : providerType === 'linear'
-        ? 'LINEAR_WEBHOOK_SECRET'
-        : null
+  const providerType = trackerProviderFromEnv(env)
+  // Single source of truth (WEBHOOK_SECRET_ENV is Record<TrackerProvider,…>), so
+  // a new webhook-capable provider can't be added without declaring its secret
+  // here — closing the fail-open hole where an unmapped provider would start a
+  // public tunnel with no signature secret enforced.
+  const webhookSecretEnv = WEBHOOK_SECRET_ENV[providerType]
   if (webhookSecretEnv && !env[webhookSecretEnv]) {
     throw new KanbanError(
       ErrorCode.INVALID_ARGUMENT,

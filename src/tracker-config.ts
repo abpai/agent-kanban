@@ -4,6 +4,56 @@ import { resolvePollingSyncIntervalMs } from './sync-config'
 
 export type TrackerProvider = 'local' | 'linear' | 'jira'
 
+/**
+ * Single source of truth for which env var holds each provider's webhook signing
+ * secret (`null` = the provider has no webhook ingestion). Typed as
+ * `Record<TrackerProvider, …>`, so adding a new provider to the union is a
+ * compile error here until its secret env is declared — preventing a new
+ * webhook-capable provider from silently slipping past the tunnel-security gate
+ * (assertTunnelSecurity) with no secret enforced.
+ */
+export const WEBHOOK_SECRET_ENV: Record<TrackerProvider, string | null> = {
+  local: null,
+  linear: 'LINEAR_WEBHOOK_SECRET',
+  jira: 'JIRA_WEBHOOK_SECRET',
+}
+
+/**
+ * Normalize the raw `KANBAN_PROVIDER` env value to a known `TrackerProvider`,
+ * falling back to `'local'` for anything unset/unrecognized — matching how
+ * trackerConfigFromEnv resolves the provider. Centralized so the security gate
+ * and the config loader agree on a single derivation.
+ */
+export function trackerProviderFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): TrackerProvider {
+  const raw = (env['KANBAN_PROVIDER'] ?? 'local').trim().toLowerCase()
+  // Recognize exactly the providers declared in WEBHOOK_SECRET_ENV — own keys
+  // only, so inherited names like "constructor"/"toString" don't match — and
+  // fall back to local otherwise. Deriving from the map keeps this normalizer in
+  // lockstep with it, so a newly-added provider is picked up here automatically.
+  return Object.prototype.hasOwnProperty.call(WEBHOOK_SECRET_ENV, raw)
+    ? (raw as TrackerProvider)
+    : 'local'
+}
+
+/**
+ * Resolve a provider's webhook signing secret from `env` via WEBHOOK_SECRET_ENV
+ * (the single source of truth), returning `undefined` when the provider declares
+ * no secret env or the env var is unset — the case where the webhook handler
+ * falls back to open dev mode. The runtime signature enforcement (the provider
+ * webhook handlers) and the assertTunnelSecurity tunnel gate both resolve the
+ * secret env name through this same map, so the gate cannot require one env name
+ * while enforcement reads another (a fail-open if they drifted).
+ */
+export function webhookSecretFromEnv(
+  provider: TrackerProvider,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const envName = WEBHOOK_SECRET_ENV[provider]
+  return envName ? env[envName] : undefined
+}
+
 export interface LocalTrackerConfig {
   provider: 'local'
   defaultColumns?: string[]
@@ -34,7 +84,7 @@ export type TrackerConfig = LocalTrackerConfig | LinearTrackerConfig | JiraTrack
 export function trackerConfigFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): TrackerConfig {
-  const provider = (env['KANBAN_PROVIDER'] ?? 'local').trim().toLowerCase()
+  const provider = trackerProviderFromEnv(env)
 
   if (provider === 'linear') {
     const apiKey = env['LINEAR_API_KEY']

@@ -17,7 +17,20 @@ describe('sync config', () => {
   })
 
   test('rejects invalid or too-aggressive intervals', () => {
-    for (const raw of ['999', '5s', '1000.5', '0']) {
+    // OBS-1: digits-only — hex/scientific notation (which Number() would accept)
+    // and over-long digit strings (precision loss / Infinity) are now rejected
+    // for the env var too, matching the strict --sync-interval-ms CLI flag.
+    for (const raw of [
+      '999',
+      '5s',
+      '1000.5',
+      '0',
+      '0x3e8',
+      '1e3',
+      '1_000',
+      '9007199254740993',
+      '9'.repeat(309),
+    ]) {
       let err: unknown
       try {
         resolvePollingSyncIntervalMs(raw)
