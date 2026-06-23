@@ -57,10 +57,21 @@ export function startCloudflareTunnel(port: number, opts: TunnelOptions = {}): T
   ): Promise<void> => {
     if (!stream) return
     const decoder = new TextDecoder()
+    // Accumulate across chunks: cloudflared may split the URL across read
+    // boundaries, so matching each chunk in isolation can miss it.
+    let buffer = ''
     for await (const chunk of stream) {
-      const text = decoder.decode(chunk as Uint8Array, { stream: true })
-      const match = text.match(TRYCLOUDFLARE_URL)
-      if (match) announce(match[0])
+      // Once announced, keep draining the pipe (so the child doesn't block on a
+      // full stdout buffer) but stop scanning.
+      if (announced) continue
+      buffer += decoder.decode(chunk as Uint8Array, { stream: true })
+      const match = buffer.match(TRYCLOUDFLARE_URL)
+      if (match) {
+        announce(match[0])
+      } else if (buffer.length > 4096) {
+        // Bound memory while keeping a tail long enough to span a split URL.
+        buffer = buffer.slice(-256)
+      }
     }
   }
 

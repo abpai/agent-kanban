@@ -57,6 +57,26 @@ describe('startCloudflareTunnel (F42/F51/F52/F53)', () => {
     expect(urls).toEqual([url])
   })
 
+  test('D4: detects a URL split across separate stream chunks', async () => {
+    // The URL is printed in two writes separated by a sleep so they land in
+    // distinct read chunks. Per-chunk matching (pre-fix) misses it; the buffered
+    // scanner reassembles it. parts: "https://abc" + "def-1234.trycloudflare.com"
+    const url = 'https://abcdef-1234.trycloudflare.com'
+    const got = deferred<string>()
+    const handle = startCloudflareTunnel(3000, {
+      command: [
+        'bash',
+        '-c',
+        `printf 'INF | https://abc'; sleep 0.15; printf 'def-1234.trycloudflare.com |\n'; sleep 1`,
+      ],
+      onUrl: (u) => got.resolve(u),
+      log: () => {},
+      warn: () => {},
+    })
+    expect(await got.promise).toBe(url)
+    handle.stop()
+  })
+
   test('F52: warns with an actionable message and rethrows when the binary is missing', () => {
     let warned = ''
     expect(() =>

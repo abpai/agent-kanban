@@ -52,8 +52,23 @@ function statusForCode(code: string): number {
   if (code === ErrorCode.PROVIDER_RATE_LIMITED) return 429
   if (code === ErrorCode.CONFLICT) return 409
   if (code === ErrorCode.UNSUPPORTED_OPERATION) return 400
-  if (code === ErrorCode.PROVIDER_NOT_CONFIGURED) return 500
+  // Server-side / upstream failures must surface as 5xx, not as the default 400.
+  // (The MCP layer likewise treats these as `provider_unavailable`.)
+  if (code === ErrorCode.PROVIDER_UPSTREAM_ERROR) return 502
+  if (code === ErrorCode.PROVIDER_SYNC_REQUIRED) return 503
+  if (code === ErrorCode.PROVIDER_NOT_CONFIGURED || code === ErrorCode.INTERNAL_ERROR) return 500
   return 400
+}
+
+// decodeURIComponent throws URIError on malformed percent-encoding (e.g. a lone
+// `%`). Path params flow straight into it, so a bad URL must surface as a 400
+// envelope rather than escaping handleRequest as an unhandled rejection.
+function decodePathParam(raw: string): string {
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    throw new KanbanError(ErrorCode.INVALID_ARGUMENT, 'Malformed percent-encoding in URL path')
+  }
 }
 
 function toResponse(result: CliOutput): Response {
@@ -110,7 +125,33 @@ async function mutationResult<T>(
   }
 }
 
+// Top-level guard: handleRequest must NEVER throw. The webhook branch returns a
+// raw ApiResult (not via wrapHandler), and path-param decoding / body reads can
+// throw before any handler runs. Any escape would reach Bun.serve's fetch (which
+// has no try/catch) and surface as a bare, non-enveloped 500. This wrapper keeps
+// every failure inside the { ok:false, error } contract, never marking mutated.
 export async function handleRequest(provider: KanbanProvider, req: Request): Promise<ApiResult> {
+  try {
+    return await dispatchApiRequest(provider, req)
+  } catch (err) {
+    if (err instanceof KanbanError) {
+      return {
+        response: json(
+          { ok: false, error: { code: err.code, message: err.message } },
+          statusForCode(err.code),
+        ),
+        mutated: false,
+      }
+    }
+    const msg = err instanceof Error ? err.message : String(err)
+    return {
+      response: json({ ok: false, error: { code: 'INTERNAL_ERROR', message: msg } }, 500),
+      mutated: false,
+    }
+  }
+}
+
+async function dispatchApiRequest(provider: KanbanProvider, req: Request): Promise<ApiResult> {
   const url = new URL(req.url)
   const path = url.pathname
   const method = req.method
@@ -164,7 +205,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
   const taskMatch = path.match(/^\/api\/tasks\/([^/]+)$/)
   if (taskMatch) {
-    const id = decodeURIComponent(taskMatch[1]!)
+    const id = decodePathParam(taskMatch[1]!)
 
     if (method === 'GET') {
       return readResult(() => provider.getTask(id))
@@ -187,7 +228,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
   const moveMatch = path.match(/^\/api\/tasks\/([^/]+)\/move$/)
   if (moveMatch && method === 'PATCH') {
-    const id = decodeURIComponent(moveMatch[1]!)
+    const id = decodePathParam(moveMatch[1]!)
     return mutationResult(async () => {
       const body = await parseJsonBody<MoveTaskBody>(req)
       requireArgument(body.column, 'column')
@@ -197,7 +238,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
   const commentsMatch = path.match(/^\/api\/tasks\/([^/]+)\/comments$/)
   if (commentsMatch) {
-    const id = decodeURIComponent(commentsMatch[1]!)
+    const id = decodePathParam(commentsMatch[1]!)
     if (method === 'GET') {
       return readResult(() => provider.listComments(id))
     }
@@ -213,8 +254,8 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
   const commentMatch = path.match(/^\/api\/tasks\/([^/]+)\/comments\/([^/]+)$/)
   if (commentMatch) {
-    const id = decodeURIComponent(commentMatch[1]!)
-    const commentId = decodeURIComponent(commentMatch[2]!)
+    const id = decodePathParam(commentMatch[1]!)
+    const commentId = decodePathParam(commentMatch[2]!)
 
     if (method === 'PATCH') {
       return mutationResult(async () => {
@@ -250,7 +291,7 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
 
   const webhookMatch = path.match(/^\/api\/webhooks\/([^/]+)$/)
   if (webhookMatch && method === 'POST') {
-    const target = decodeURIComponent(webhookMatch[1]!)
+    const target = decodePathParam(webhookMatch[1]!)
     if (target !== provider.type) {
       return {
         response: json(
@@ -286,47 +327,28 @@ export async function handleRequest(provider: KanbanProvider, req: Request): Pro
     req.headers.forEach((value, key) => {
       headers[key] = value
     })
-    // The webhook branch returns a raw ApiResult (not via wrapHandler), so a
-    // throwing provider.handleWebhook would otherwise escape handleRequest as an
-    // unhandled rejection and surface as a bare, non-enveloped 500. Catch here so
-    // every failure stays inside the { ok:false, error } contract like the rest of
-    // the API, and never marks the request as mutated.
-    try {
-      const result = await provider.handleWebhook({ headers, rawBody })
-      if (result.unauthorized) {
-        return {
-          response: json(
-            {
-              ok: false,
-              error: { code: 'PROVIDER_AUTH_FAILED', message: result.message ?? 'Unauthorized' },
-            },
-            401,
-          ),
-          mutated: false,
-        }
-      }
+    // A throwing provider.handleWebhook is contained by the top-level guard in
+    // handleRequest, which envelopes it as a 500 (or KanbanError status) and
+    // leaves mutated:false.
+    const result = await provider.handleWebhook({ headers, rawBody })
+    if (result.unauthorized) {
       return {
-        response: json({
-          ok: true,
-          data: { handled: result.handled, message: result.message ?? null },
-        }),
-        mutated: result.handled,
-      }
-    } catch (err) {
-      if (err instanceof KanbanError) {
-        return {
-          response: json(
-            { ok: false, error: { code: err.code, message: err.message } },
-            statusForCode(err.code),
-          ),
-          mutated: false,
-        }
-      }
-      const msg = err instanceof Error ? err.message : String(err)
-      return {
-        response: json({ ok: false, error: { code: 'INTERNAL_ERROR', message: msg } }, 500),
+        response: json(
+          {
+            ok: false,
+            error: { code: 'PROVIDER_AUTH_FAILED', message: result.message ?? 'Unauthorized' },
+          },
+          401,
+        ),
         mutated: false,
       }
+    }
+    return {
+      response: json({
+        ok: true,
+        data: { handled: result.handled, message: result.message ?? null },
+      }),
+      mutated: result.handled,
     }
   }
 

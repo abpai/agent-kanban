@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ErrorCode, KanbanError, type ErrorCodeValue } from '../errors'
 import type { Task, TaskComment } from '../types'
-import { parseMcpArgs, parseServeArgs, run } from '../index'
+import { assertTunnelSecurity, parseMcpArgs, parseServeArgs, run } from '../index'
 
 async function withTempDb(runTest: (dbPath: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'kanban-run-'))
@@ -127,6 +127,56 @@ describe('parseServeArgs', () => {
       parseServeArgs(['serve', '--bogus'])
     } catch (err) {
       expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+    }
+  })
+})
+
+describe('assertTunnelSecurity (F44 + D5)', () => {
+  test('no tunnel: always allowed regardless of token/secret', () => {
+    expect(() => assertTunnelSecurity({ tunnel: false }, {})).not.toThrow()
+  })
+
+  test('F44: tunnel without an API token is refused', () => {
+    expect(() => assertTunnelSecurity({ tunnel: true }, {})).toThrow(KanbanError)
+    try {
+      assertTunnelSecurity({ tunnel: true }, {})
+    } catch (err) {
+      expect((err as KanbanError).message).toContain('without an API token')
+    }
+  })
+
+  test('tunnel + token on the local provider is allowed (local has no webhooks)', () => {
+    expect(() =>
+      assertTunnelSecurity({ tunnel: true, authToken: 't' }, { KANBAN_PROVIDER: 'local' }),
+    ).not.toThrow()
+    // default provider is local when KANBAN_PROVIDER is unset
+    expect(() => assertTunnelSecurity({ tunnel: true, authToken: 't' }, {})).not.toThrow()
+  })
+
+  test('D5: tunnel + token on jira without JIRA_WEBHOOK_SECRET is refused', () => {
+    try {
+      assertTunnelSecurity({ tunnel: true, authToken: 't' }, { KANBAN_PROVIDER: 'jira' })
+      throw new Error('expected refusal')
+    } catch (err) {
+      expect((err as KanbanError).message).toContain('JIRA_WEBHOOK_SECRET')
+    }
+  })
+
+  test('D5: tunnel + token on jira WITH the secret is allowed', () => {
+    expect(() =>
+      assertTunnelSecurity(
+        { tunnel: true, authToken: 't' },
+        { KANBAN_PROVIDER: 'jira', JIRA_WEBHOOK_SECRET: 's' },
+      ),
+    ).not.toThrow()
+  })
+
+  test('D5: tunnel + token on linear without LINEAR_WEBHOOK_SECRET is refused', () => {
+    try {
+      assertTunnelSecurity({ tunnel: true, authToken: 't' }, { KANBAN_PROVIDER: 'Linear' })
+      throw new Error('expected refusal')
+    } catch (err) {
+      expect((err as KanbanError).message).toContain('LINEAR_WEBHOOK_SECRET')
     }
   })
 })

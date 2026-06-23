@@ -379,3 +379,44 @@ describe('handleRequest webhook route error containment (F55 regression)', () =>
     expect(body.error.code).toBe('CONFLICT')
   })
 })
+
+describe('handleRequest malformed path encoding (D2 regression)', () => {
+  test('malformed %-encoding in a task id → 400 INVALID_ARGUMENT, never thrown', async () => {
+    const req = new Request('http://localhost/api/tasks/%E0%A4%A', { method: 'GET' })
+    // Must not reject — before the fix decodeURIComponent threw a URIError that
+    // escaped handleRequest.
+    const result = await handleRequest(provider, req)
+    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    expect(result.response.status).toBe(400)
+    expect(result.mutated).toBe(false)
+    expect(body.error.code).toBe('INVALID_ARGUMENT')
+  })
+
+  test('malformed %-encoding in a webhook target → 400 INVALID_ARGUMENT', async () => {
+    const result = await handleRequest(webhookProvider('local'), webhookRequest('%E0%A4%A'))
+    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    expect(result.response.status).toBe(400)
+    expect(result.mutated).toBe(false)
+    expect(body.error.code).toBe('INVALID_ARGUMENT')
+  })
+})
+
+describe('statusForCode server-side mapping (D3 regression)', () => {
+  const cases: { code: keyof typeof ErrorCode; status: number }[] = [
+    { code: 'PROVIDER_UPSTREAM_ERROR', status: 502 },
+    { code: 'PROVIDER_SYNC_REQUIRED', status: 503 },
+    { code: 'INTERNAL_ERROR', status: 500 },
+  ]
+  for (const { code, status } of cases) {
+    test(`${code} → ${status} (not the default 400)`, async () => {
+      const provider = webhookProvider('local', async () => {
+        throw new KanbanError(ErrorCode[code], `${code} from provider`)
+      })
+      const result = await handleRequest(provider, webhookRequest('local'))
+      const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+      expect(result.response.status).toBe(status)
+      expect(body.error.code).toBe(code)
+      expect(result.mutated).toBe(false)
+    })
+  }
+})

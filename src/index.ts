@@ -512,6 +512,45 @@ function parseSyncIntervalMs(raw: string): number {
   return resolvePollingSyncIntervalMs(raw, { label: '--sync-interval-ms' })
 }
 
+/**
+ * Guards public-tunnel startup. A `--tunnel` exposes the server to the internet,
+ * so it must require both:
+ *   1. an API token (KANBAN_API_TOKEN / --token) for the `/api/*` + `/ws` surface, and
+ *   2. a provider webhook signing secret, because `/api/webhooks/*` is exempt from
+ *      the API token and falls back to "open dev mode" (accept unsigned payloads)
+ *      when the secret is unset — which over a public tunnel means unauthenticated
+ *      writes to the cache.
+ * Throws KanbanError on violation; the caller prints the message and exits non-zero.
+ */
+export function assertTunnelSecurity(
+  opts: { tunnel: boolean; authToken?: string },
+  env: Record<string, string | undefined>,
+): void {
+  if (!opts.tunnel) return
+  if (!opts.authToken) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      'Refusing to start a public tunnel without an API token. ' +
+        'Set KANBAN_API_TOKEN or pass --token <token>.',
+    )
+  }
+  const providerType = (env['KANBAN_PROVIDER'] ?? 'local').trim().toLowerCase()
+  const webhookSecretEnv =
+    providerType === 'jira'
+      ? 'JIRA_WEBHOOK_SECRET'
+      : providerType === 'linear'
+        ? 'LINEAR_WEBHOOK_SECRET'
+        : null
+  if (webhookSecretEnv && !env[webhookSecretEnv]) {
+    throw new KanbanError(
+      ErrorCode.INVALID_ARGUMENT,
+      `Refusing to start a public tunnel: ${providerType} webhooks accept unsigned payloads ` +
+        `(open dev mode) without ${webhookSecretEnv}, which would expose unauthenticated writes ` +
+        `over the public URL. Set ${webhookSecretEnv}.`,
+    )
+  }
+}
+
 export interface McpOptions {
   db?: string
 }
@@ -563,13 +602,14 @@ if (import.meta.main) {
   } else if (argv[0] === 'serve') {
     const opts = parseEntryArgs(() => parseServeArgs(argv))
 
-    // A tunnel exposes the dashboard publicly, so refuse to start one without a
-    // token. Plain localhost serve stays open for backward compatibility.
-    if (opts.tunnel && !opts.authToken) {
-      console.error(
-        'Refusing to start a public tunnel without an API token. ' +
-          'Set KANBAN_API_TOKEN or pass --token <token>.',
-      )
+    // A tunnel exposes the dashboard publicly, so refuse to start one unless it is
+    // safe: an API token for /api + /ws, and a provider webhook secret so the
+    // auth-exempt /api/webhooks/* surface can't accept unsigned writes. Plain
+    // localhost serve stays open for backward compatibility.
+    try {
+      assertTunnelSecurity(opts, process.env)
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err))
       process.exit(1)
     }
 
