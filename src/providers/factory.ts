@@ -68,7 +68,7 @@ export function createSqliteProvider(
         seedDefaultColumns(db, config.defaultColumns)
       }
       return {
-        provider: new LocalProvider(db, options.dbPath),
+        provider: new LocalProvider(db, options.dbPath, config.defaultTaskColumn),
         capabilities: LOCAL_CAPABILITIES,
       }
   }
