@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- [#81](https://github.com/abpai/agent-kanban/pull/81) [`a4beede`](https://github.com/abpai/agent-kanban/commit/a4beede3591719b8cd95a2173d1eba9143916fa0) Thanks [@abpai](https://github.com/abpai)! - Strict `JIRA_BOARD_ID` parsing ([#79](https://github.com/abpai/agent-kanban/issues/79)). A non-empty malformed `JIRA_BOARD_ID` now fails config loading with `INVALID_CONFIG` instead of being silently coerced into a plausible-but-wrong board id (`'12abc'` → 12, `'-5'` → -5, `'1e3'` → 1) or dropped. An unset or blank value still means "no board pinned", and a valid positive integer is used as before. This matches how a malformed `KANBAN_SYNC_INTERVAL_MS` is already rejected.
+
+  **Behavior change:** if `JIRA_BOARD_ID` is set to a non-numeric or non-positive value, config loading now errors instead of silently ignoring it. Set a valid board id or unset the variable.
+
+### Patch Changes
+
+- [#81](https://github.com/abpai/agent-kanban/pull/81) [`a4beede`](https://github.com/abpai/agent-kanban/commit/a4beede3591719b8cd95a2173d1eba9143916fa0) Thanks [@abpai](https://github.com/abpai)! - Honor the configured default task column when creating tasks through the local/SQLite CLI path ([#78](https://github.com/abpai/agent-kanban/issues/78)). `SqliteLocalStore.createTask` now applies `config.defaultTaskColumn` (falling back to the system default when unset), bringing it to parity with the Postgres store. Passing an explicit `--column` still overrides the default.
+
+- [#81](https://github.com/abpai/agent-kanban/pull/81) [`a4beede`](https://github.com/abpai/agent-kanban/commit/a4beede3591719b8cd95a2173d1eba9143916fa0) Thanks [@abpai](https://github.com/abpai)! - Harden the `serve` HTTP API and webhook ingestion ([#76](https://github.com/abpai/agent-kanban/issues/76)). Webhook-route errors are now wrapped in the standard `{ ok: false, error }` envelope instead of leaking a raw, non-enveloped 500, alongside fixes across tunnel security, Postgres receipt handling, SSE broadcast, and base-path handling — 10 defects in total, with +66 regression tests.
+
+- [#81](https://github.com/abpai/agent-kanban/pull/81) [`a4beede`](https://github.com/abpai/agent-kanban/commit/a4beede3591719b8cd95a2173d1eba9143916fa0) Thanks [@abpai](https://github.com/abpai)! - Close a webhook-secret fail-open and tighten config parsing ([#77](https://github.com/abpai/agent-kanban/issues/77)). `assertTunnelSecurity` now resolves each provider's webhook signing-secret env through a single `WEBHOOK_SECRET_ENV` source of truth, so a future webhook-capable provider can no longer start a public tunnel with no signing secret enforced. `KANBAN_SYNC_INTERVAL_MS` env parsing is also tightened to digits-only + safe-integer (rejecting hex/scientific notation), matching the strict `--sync-interval-ms` flag.
+
 ## 0.7.0
 
 ### Minor Changes
