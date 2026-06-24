@@ -430,6 +430,19 @@ describe('Phase 3 CLI task lifecycle execution matrix', () => {
     )
   })
 
+  test('TC-002-09 create falls back to first Column when KANBAN_DEFAULT_COLUMNS omits backlog', async () => {
+    // Parity with the Postgres store: when no `backlog` column is seeded and
+    // KANBAN_DEFAULT_TASK_COLUMN is unset, an un-flagged create lands in the
+    // first configured column instead of failing with COLUMN_NOT_FOUND.
+    await withTempDb(
+      async (dbPath) => {
+        const task = await addTask(dbPath, 'No backlog fallback')
+        expect(task.column_name).toBe('Todo')
+      },
+      { KANBAN_DEFAULT_COLUMNS: 'Todo,Doing,Done' },
+    )
+  })
+
   test('TC-003-01 task list returns all Tasks in position order', async () => {
     await withTempDb(async (dbPath) => {
       await addTask(dbPath, 'A', ['-c', 'backlog'])
