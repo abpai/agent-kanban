@@ -94,6 +94,9 @@ export async function withWebhookRecording(
     provider,
     ...meta,
     status: webhookEventStatus(result),
+    ...(result.signatureStatus === undefined
+      ? {}
+      : { detail: { signatureStatus: result.signatureStatus } }),
   })
   return result
 }

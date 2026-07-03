@@ -6,6 +6,7 @@ import {
   headerLower,
   verifyHmacSha256,
   verifySha256HmacSignatureHeader,
+  webhookSignatureStatus,
 } from '../webhooks'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
 import { JiraClient } from '../providers/jira-client'
@@ -98,7 +99,12 @@ describe('authorizeWebhook (F32)', () => {
       signature: 'deadbeef',
       verify,
     })
-    expect(result).toEqual({ handled: false, unauthorized: true, message: 'Invalid signature' })
+    expect(result).toEqual({
+      handled: false,
+      unauthorized: true,
+      message: 'Invalid signature',
+      signatureStatus: 'invalid',
+    })
   })
 })
 
@@ -790,5 +796,48 @@ describe('webhook open dev mode when secret is unset', () => {
       if (prev === undefined) delete process.env['LINEAR_WEBHOOK_SECRET']
       else process.env['LINEAR_WEBHOOK_SECRET'] = prev
     }
+  })
+})
+
+describe('webhookSignatureStatus', () => {
+  const verify = verifySha256HmacSignatureHeader
+  const body = '{"hello":"world"}'
+
+  test('no secret configured -> not_configured', () => {
+    expect(
+      webhookSignatureStatus({ secret: undefined, rawBody: body, signature: null, verify }),
+    ).toBe('not_configured')
+  })
+
+  test('secret configured, no signature header -> missing', () => {
+    expect(webhookSignatureStatus({ secret: 's3', rawBody: body, signature: null, verify })).toBe(
+      'missing',
+    )
+  })
+
+  test('bad signature -> invalid; good signature -> valid', () => {
+    expect(
+      webhookSignatureStatus({ secret: 's3', rawBody: body, signature: 'sha256=nope', verify }),
+    ).toBe('invalid')
+    expect(
+      webhookSignatureStatus({
+        secret: 's3',
+        rawBody: body,
+        signature: `sha256=${hmac('s3', body)}`,
+        verify,
+      }),
+    ).toBe('valid')
+  })
+
+  test('authorizeWebhook rejections carry the verdict', () => {
+    const rejected = authorizeWebhook({
+      secret: 's3',
+      rawBody: body,
+      signature: 'sha256=nope',
+      verify,
+    })
+    expect(rejected?.signatureStatus).toBe('invalid')
+    const noHeader = authorizeWebhook({ secret: 's3', rawBody: body, signature: null, verify })
+    expect(noHeader?.signatureStatus).toBe('missing')
   })
 })
