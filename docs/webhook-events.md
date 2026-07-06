@@ -5,9 +5,9 @@ Jira and Linear providers append a small receipt to a `webhook_events` table
 every time a webhook hits the sidecar's `POST /api/webhooks/:provider` route.
 
 agent-kanban does not read this table itself. It exists so an external consumer
-— specifically Garage Band's Studio "Webhooks" panel — can answer "did the
-sidecar receive and process a tracker webhook, and when". agent-kanban owns and
-creates the table; consumers read it read-only.
+— for example a software factory's dashboard "Webhooks" panel — can answer "did
+the sidecar receive and process a tracker webhook, and when". agent-kanban owns
+and creates the table; consumers read it read-only.
 
 ## Schema
 

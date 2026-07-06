@@ -33,6 +33,9 @@ you to the right code and validation path.
   `cd ui && bun install`.
 - SQLite auto-resolves `.kanban/board.db` before `~/.kanban/board.db`; use
   `KANBAN_DB_PATH` for hermetic local smokes.
+- Postgres is available for shared deployments where an external consumer, such
+  as a software factory, reads the same cache. Use `KANBAN_STORAGE=postgres` and
+  `KANBAN_DATABASE_URL`.
 - `bun run serve` requires `ui/dist/`; run `bun run ui:build` first.
 
 ## Done means

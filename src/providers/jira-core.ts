@@ -369,8 +369,8 @@ export class JiraProviderCore implements KanbanProvider {
         }
       }
 
-      // Fetch changelog per changed issue so the poll-based
-      // `moved` trigger in @garage/dispatch works. Server-side dedupe
+      // Fetch changelog per changed issue so a downstream consumer's
+      // poll-based `moved` trigger works. Server-side dedupe
       // keyed on (issue_id, history_id, item_field) keeps this cheap
       // even if the same issue is updated repeatedly.
       await forEachWithConcurrency(page.issues, 5, async (issue) => {
