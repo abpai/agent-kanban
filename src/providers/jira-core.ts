@@ -13,6 +13,7 @@ import type {
 } from '../types'
 import {
   authorizeWebhook,
+  webhookSignatureStatus,
   headerLower,
   verifySha256HmacSignatureHeader,
   type WebhookRequest,
@@ -884,36 +885,47 @@ export class JiraProviderCore implements KanbanProvider {
         `[jira] ${WEBHOOK_SECRET_ENV['jira']} is not set — accepting webhook without signature verification (open dev mode)`,
       )
     }
+    const signature = headerLower(payload.headers, 'x-hub-signature')
+    const signatureStatus = webhookSignatureStatus({
+      secret,
+      rawBody: payload.rawBody,
+      signature,
+      verify: verifySha256HmacSignatureHeader,
+    })
     const auth = authorizeWebhook({
       secret,
       rawBody: payload.rawBody,
-      signature: headerLower(payload.headers, 'x-hub-signature'),
+      signature,
       verify: verifySha256HmacSignatureHeader,
     })
-    if (auth) return auth
+    if (auth) return { ...auth, signatureStatus }
+    const attachVerdict = (result: WebhookResult): WebhookResult => ({
+      ...result,
+      signatureStatus,
+    })
     let body: { webhookEvent?: string; issue?: JiraIssue } = {}
     try {
       body = JSON.parse(payload.rawBody) as typeof body
     } catch {
-      return { handled: false, message: 'Invalid JSON body' }
+      return attachVerdict({ handled: false, message: 'Invalid JSON body' })
     }
     const event = body.webhookEvent ?? ''
     const issue = body.issue
-    if (!issue) return { handled: false, message: `No issue in payload (${event})` }
+    if (!issue) return attachVerdict({ handled: false, message: `No issue in payload (${event})` })
 
     if (event === 'jira:issue_deleted') {
       await this.cache.deleteIssue(issue.id)
       await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
-      return { handled: true }
+      return attachVerdict({ handled: true })
     }
 
     if (event === 'jira:issue_created' || event === 'jira:issue_updated') {
       const projectKey = issue.fields.project?.key
       if (projectKey !== this.config.projectKey) {
-        return {
+        return attachVerdict({
           handled: false,
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
-        }
+        })
       }
       await this.cache.upsertIssues([
         toCacheIssue(issue, this.config.baseUrl, this.config.projectKey),
@@ -924,9 +936,9 @@ export class JiraProviderCore implements KanbanProvider {
         })
       }
       await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
-      return { handled: true }
+      return attachVerdict({ handled: true })
     }
 
-    return { handled: false, message: `Unsupported event: ${event}` }
+    return attachVerdict({ handled: false, message: `Unsupported event: ${event}` })
   }
 }
