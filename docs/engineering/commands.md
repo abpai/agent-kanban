@@ -63,10 +63,11 @@ bun run pg:down    # tear down the container and drop its volume
 `docker-compose.postgres.yml` mirrors the `postgres` service in
 `.github/workflows/ci.yml` (image, credentials, database, port), so a green
 `bun run test:pg` reproduces exactly what CI proves. If host port `5432` is
-already taken, set `KANBAN_PG_PORT` (e.g. `5433`) for `pg:up`/`pg:down` and point
-`DATABASE_URL` at the same port. CI runs the equivalent `bun test` with
-`DATABASE_URL` set through its Postgres service; publishing that database is
-CI-owned.
+already taken, set `KANBAN_PG_PORT` (e.g. `5433`) — `pg:up`, `pg:down`, and
+`test:pg` all honor it, so `KANBAN_PG_PORT=5433 bun run pg:up && KANBAN_PG_PORT=5433 bun run test:pg`
+stays consistent (an explicit `DATABASE_URL` still overrides the port entirely).
+CI runs the equivalent `bun test` with `DATABASE_URL` set through its Postgres
+service; publishing that database is CI-owned.
 
 ## Health smokes
 

@@ -58,7 +58,7 @@
     "check": "bun run lint && bun run typecheck && bun run ui:typecheck",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "test:pg": "DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@localhost:5432/kanban_test} bun test",
+    "test:pg": "DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@localhost:${KANBAN_PG_PORT:-5432}/kanban_test} bun test",
     "pg:up": "docker compose -f docker-compose.postgres.yml up -d --wait",
     "pg:down": "docker compose -f docker-compose.postgres.yml down -v",
     "seed:test": "bun --env-file=.env.test scripts/seed-test-db.ts",
