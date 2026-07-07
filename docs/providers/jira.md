@@ -168,17 +168,17 @@ still be repaired.
 Supported events: `jira:issue_created`, `jira:issue_updated`,
 `jira:issue_deleted`.
 
-### HMAC verification (required)
+### HMAC verification
 
 Jira Cloud admin webhooks sign payloads with a shared secret. Set
 `JIRA_WEBHOOK_SECRET` to that secret; the signature is verified from Jira's
 `X-Hub-Signature` header (`sha256=<hex>`). Requests with a missing or mismatched
 signature return HTTP 401.
 
-The webhook endpoint is **fail-closed**: if `JIRA_WEBHOOK_SECRET` is unset, all
-webhook requests are rejected (HTTP 401) rather than processed, so an
-unauthenticated caller can't inject cache writes. Configure the secret to enable
-webhook delivery.
+If `JIRA_WEBHOOK_SECRET` is unset, the endpoint accepts unsigned payloads in
+local open dev mode and logs a warning. Do not expose that mode publicly:
+`kanban serve --tunnel` refuses to start in Jira mode unless
+`JIRA_WEBHOOK_SECRET` is set.
 
 ### Public URL
 

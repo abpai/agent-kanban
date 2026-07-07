@@ -5,6 +5,8 @@ This directory holds the longer-form project guides that support the main
 
 ## Start here
 
+- [`INDEX.md`](./INDEX.md): the harness-ready documentation index, including the
+  spec contract, architecture map, commands, and testing proof map
 - [`workflow.md`](./workflow.md): a common day-to-day workflow for running the
   board locally or against Linear/Jira and moving work through it
 - [`mcp.md`](./mcp.md): the reusable tracker MCP module, the bundled
@@ -18,6 +20,7 @@ This directory holds the longer-form project guides that support the main
 
 - Keep the root [`README.md`](../README.md) focused on install, core commands,
   and quick navigation.
+- Keep the harness-ready table of contents in [`INDEX.md`](./INDEX.md).
 - Keep contributor policy docs at the repo root:
   [`CONTRIBUTING.md`](../CONTRIBUTING.md),
   [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md), and
