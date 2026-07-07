@@ -1,6 +1,6 @@
 import type { BoardView, Task } from '../types'
 
-export const COLUMN_COLORS: Record<string, string> = {
+const COLUMN_COLORS: Record<string, string> = {
   recurring: 'var(--col-recurring)',
   backlog: 'var(--col-backlog)',
   'in-progress': 'var(--col-in-progress)',

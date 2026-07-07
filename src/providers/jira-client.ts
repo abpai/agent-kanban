@@ -168,7 +168,7 @@ export interface JiraIssueType {
   name: string
 }
 
-export interface JiraChangelogItem {
+interface JiraChangelogItem {
   field: string
   fieldtype?: string
   fromString?: string | null
@@ -177,7 +177,7 @@ export interface JiraChangelogItem {
   to?: string | null
 }
 
-export interface JiraChangelogEntry {
+interface JiraChangelogEntry {
   id: string
   author?: { accountId?: string; displayName?: string }
   created: string

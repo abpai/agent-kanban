@@ -118,8 +118,9 @@ prior branch lands or is used as the base.
 14. Some SQLite Jira cache SQL lives in the adapter.
     Status: confirmed. Several lookup queries remain inline in
     `src/providers/jira.ts`.
-    Action: later. Move lookup SQL into `jira-cache.ts` after the mapper
-    extraction lands.
+    Action: extracted to its own active spec —
+    [`2026-07-06-jira-cache-lookup-sql.md`](./2026-07-06-jira-cache-lookup-sql.md).
+    This is the only item from this triage not yet shipped.
 
 15. `TaskDetail` repeats editable select UI and UI defaults capabilities to
     true.

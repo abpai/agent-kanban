@@ -45,6 +45,9 @@ jobs:
       - name: Lint and typecheck
         run: bun run check
 
+      - name: Dead-code / unused-export scan
+        run: bun run knip
+
       - name: Run tests
         run: bun test
         env:

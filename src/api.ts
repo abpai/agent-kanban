@@ -5,7 +5,7 @@ import { parsePositiveInt } from './transport-input'
 import { success } from './output'
 import { normalizeCreateTaskInput } from './use-cases'
 
-export type WsEvent =
+type WsEvent =
   | { type: 'task:upsert'; task: Task; columnId: string }
   | { type: 'task:delete'; id: string }
   // Fallback when a mutation has no precise event; the UI does a full refresh.

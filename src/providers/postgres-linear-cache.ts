@@ -15,7 +15,7 @@ import { parseProviderTeamInfo } from './team-info'
 
 export type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear-cache'
 
-export type LinearIssueRow = LinearTaskRow
+type LinearIssueRow = LinearTaskRow
 
 /**
  * Postgres-backed cache/repository for the Linear provider. Mirrors the role of

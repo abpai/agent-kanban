@@ -26,7 +26,7 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
 }
 
-export interface PendingConflict {
+interface PendingConflict {
   taskId: string
   attemptedUpdates: {
     title?: string

@@ -3,9 +3,6 @@ import { createBoardSlice, type BoardSlice } from './store/board-slice'
 import { createTransportSlice, type TransportSlice } from './store/transport-slice'
 import { createUiSlice, type UiSlice } from './store/ui-slice'
 
-export type { PendingConflict } from './store/board-slice'
-export type { ActivityWindowDays } from './store/ui-slice'
-
 /**
  * The app store is composed from three independent slices (Zustand's slices
  * pattern) so each concern lives in its own module while sharing one store and

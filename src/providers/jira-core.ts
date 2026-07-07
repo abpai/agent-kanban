@@ -51,9 +51,9 @@ import { WEBHOOK_SECRET_ENV, webhookSecretFromEnv } from '../tracker-config'
 import { warnOnce } from './warn-once'
 import { applyTaskFilters, forEachWithConcurrency, SyncGate, syncStatusFromMeta } from './sync-core'
 
-export const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
+const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
-export function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boolean {
+function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boolean {
   if (!lastFullSyncAt) return true
   const lastFullSyncAtMs = Date.parse(lastFullSyncAt)
   if (!Number.isFinite(lastFullSyncAtMs)) return true
@@ -64,7 +64,7 @@ export function shouldRunFullReconcile(lastFullSyncAt: string | null, now: numbe
 // priorities; the write path looks up the resolved name (case-insensitive)
 // in the cached `jira_priorities` table, so renames that preserve the default
 // casing still resolve.
-export const CANONICAL_TO_JIRA_DEFAULT: Record<Priority, string> = {
+const CANONICAL_TO_JIRA_DEFAULT: Record<Priority, string> = {
   urgent: 'Highest',
   high: 'High',
   medium: 'Medium',

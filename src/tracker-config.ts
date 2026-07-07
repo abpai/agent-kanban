@@ -62,14 +62,14 @@ export interface LocalTrackerConfig {
   syncIntervalMs?: number
 }
 
-export interface LinearTrackerConfig {
+interface LinearTrackerConfig {
   provider: 'linear'
   apiKey: string
   teamId: string
   syncIntervalMs?: number
 }
 
-export interface JiraTrackerConfig {
+interface JiraTrackerConfig {
   provider: 'jira'
   baseUrl: string
   email: string
