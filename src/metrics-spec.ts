@@ -14,7 +14,7 @@ import {
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 }
 
 /** A column plus how many tasks currently sit in it. */
-export interface MetricsColumnCount extends ClassifiableColumn {
+interface MetricsColumnCount extends ClassifiableColumn {
   count: number
 }
 

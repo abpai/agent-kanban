@@ -36,6 +36,19 @@ bun run check
 
 This expands to lint, root TypeScript, and UI TypeScript checks.
 
+## Dead-code / unused-export scan
+
+```bash
+bun run knip
+```
+
+`knip` (config in `knip.json`) reports unused files, dependencies, and exports
+across both the root package and the `ui` workspace. It treats the published
+`exports`-map subpaths and `bin` as the public API surface, so it flags only
+genuinely internal dead code — prefer un-exporting a flagged symbol (making it
+module-private) over deleting it when it is still used within its own file. CI
+runs this as a gate, so keep it green.
+
 ## Full lane
 
 Done means the full lane is green, or every skipped/blocked command is explained.

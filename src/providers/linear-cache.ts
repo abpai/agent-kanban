@@ -316,10 +316,10 @@ export function upsertProjects(
 }
 
 // Bound per-value storage so repeated edits to a long description can't balloon the cache.
-// Exported and shared with the Postgres cache (postgres-linear-cache.ts) so both
-// backends clamp identically and the truncation marker can't drift between them.
-export const ACTIVITY_VALUE_MAX_CHARS = 4096
-export const ACTIVITY_TRUNCATION_SUFFIX = '…[truncated]'
+// clampActivityValue is shared with the Postgres cache (postgres-linear-cache.ts)
+// so both backends clamp identically and the truncation marker can't drift.
+const ACTIVITY_VALUE_MAX_CHARS = 4096
+const ACTIVITY_TRUNCATION_SUFFIX = '…[truncated]'
 const ACTIVITY_VALUE_BUDGET = ACTIVITY_VALUE_MAX_CHARS - ACTIVITY_TRUNCATION_SUFFIX.length
 
 export function clampActivityValue(value: string): string {

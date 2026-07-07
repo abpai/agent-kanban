@@ -40,7 +40,7 @@ function captureTokenFromUrl(): string | null {
 
 let cachedToken: string | null | undefined
 
-export function getApiToken(): string | null {
+function getApiToken(): string | null {
   if (cachedToken !== undefined) return cachedToken
   const captured = captureTokenFromUrl()
   if (captured) {
