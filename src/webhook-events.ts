@@ -1,8 +1,9 @@
 /**
  * `webhook_events` — a small, generically-named receipts table that the Postgres
  * providers append to on every received webhook. It is *not* used by agent-kanban
- * itself; it exists so an external consumer (Garage Band's Studio "Webhooks"
- * panel) can show "did the sidecar receive/process a tracker webhook, and when".
+ * itself; it exists so an external consumer (for example a software factory's
+ * dashboard "Webhooks" panel) can show "did the sidecar receive/process a
+ * tracker webhook, and when".
  *
  * Ownership: agent-kanban owns and creates this table; consumers read it
  * read-only. Columns a consumer can rely on:

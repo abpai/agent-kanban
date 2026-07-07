@@ -5,7 +5,7 @@ this file before introducing a new public term.
 
 | Term               | Definition                                                                                                                | Aliases to avoid                                      |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| **Agent Kanban**   | Tracker provider and board cache used by agents and Garage Band.                                                          | garage-band, dispatch                                 |
+| **Agent Kanban**   | Tracker provider and board cache used by agents and external consumers (e.g. a software factory).                         | garage-band, dispatch                                 |
 | **Provider**       | Concrete tracker implementation: local, Linear, or Jira.                                                                  | adapter, backend                                      |
 | **Task**           | Provider-normalized work item returned through the public API.                                                            | issue, ticket, card, unless translating provider APIs |
 | **Column**         | Provider-normalized workflow state a task can move to.                                                                    | status, state, lane, unless translating provider APIs |
