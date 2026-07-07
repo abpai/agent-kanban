@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- [#83](https://github.com/abpai/agent-kanban/pull/83) [`06b76cc`](https://github.com/abpai/agent-kanban/commit/06b76cc17c8239dd77dd878a0d39c263969bca42) Thanks [@abpai](https://github.com/abpai)! - Persist the Jira webhook signature verdict on receipts. `WebhookResult` gains
+  an optional `signatureStatus` (`valid | invalid | missing | not_configured`),
+  the Jira provider attaches it to every webhook outcome (verification itself is
+  unchanged), and `withWebhookRecording` persists it into the `webhook_events`
+  `detail` JSON — so audit consumers can render a true verdict instead of
+  guessing from configuration.
+
 ## 0.8.1
 
 ### Patch Changes
