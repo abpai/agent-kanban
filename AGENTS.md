@@ -1,51 +1,44 @@
-# AGENTS.md
+# Agent guide
 
-## Cursor Cloud specific instructions
+Agent Kanban is a Bun-first tracker with a CLI, optional dashboard, and reusable
+MCP layer. Code, tests, and runtime behavior are the source of truth; docs route
+you to the right code and validation path.
 
-### Overview
+## Operating model
 
-agent-kanban is a CLI-first kanban board tool with an optional web dashboard,
-built on **Bun** (not Node.js). SQLite via `bun:sqlite` remains the default
-local storage mode; Postgres is available for shared Garage Band deployments
-through `KANBAN_STORAGE=postgres` and `KANBAN_DATABASE_URL`.
+- Specs come from intake against `docs/SPEC_CONTRACT.md`; you own implementation
+  through end-to-end proof.
+- Identify the validation command before editing. Escalate per the spec
+  contract; otherwise execute the change end to end.
+- Use Bun, not Node.js. CI pins Bun 1.3.11 and `package.json` requires
+  Bun >=1.1.0.
 
-### Shared vocabulary
+## Where to look
 
-Before planning or implementing provider/API work, read `UBIQUITOUS_LANGUAGE.md`.
-Use its canonical terms in public types, CLI output, API responses, tests, and docs.
+- Spec contract: `docs/SPEC_CONTRACT.md`
+- Documentation index: `docs/INDEX.md`
+- Architecture map: `docs/ARCHITECTURE.md`
+- Commands: `docs/engineering/commands.md`
+- Testing and proof map: `docs/engineering/testing.md`
+- Product workflow: `docs/workflow.md`
+- MCP guide: `docs/mcp.md`
+- Provider guides: `docs/providers/linear.md`, `docs/providers/jira.md`
+- Canonical terms: `UBIQUITOUS_LANGUAGE.md`
 
-### Runtime
+## Repo-specific rules
 
-- **Bun ≥1.1.0** is the sole runtime. CI pins `1.3.11`. Install via `curl -fsSL https://bun.sh/install | bash`.
-- Bun must be on `$PATH` (typically `~/.bun/bin`).
+- Before provider/API work, read `UBIQUITOUS_LANGUAGE.md` and use its terms in
+  public types, CLI output, API responses, tests, and docs.
+- Root and UI dependencies are installed separately: `bun install`, then
+  `cd ui && bun install`.
+- SQLite auto-resolves `.kanban/board.db` before `~/.kanban/board.db`; use
+  `KANBAN_DB_PATH` for hermetic local smokes.
+- `bun run serve` requires `ui/dist/`; run `bun run ui:build` first.
 
-### Dependencies
+## Done means
 
-Two separate install steps are required — root and UI are independent workspaces:
-
-```bash
-bun install              # root
-cd ui && bun install     # UI (React/Vite)
-```
-
-### Commands reference
-
-All scripts are in `package.json`. Key commands:
-
-| Task             | Command                     |
-| ---------------- | --------------------------- |
-| Lint + typecheck | `bun run check`             |
-| Tests            | `bun test`                  |
-| Build CLI        | `bun run build`             |
-| Build UI         | `bun run ui:build`          |
-| Dev (watch mode) | `bun run dev`               |
-| Dev (API + UI)   | `bun run dev:ui`            |
-| Serve dashboard  | `bun run serve` (port 3000) |
-
-### Gotchas
-
-- The SQLite DB auto-resolves: local `.kanban/board.db` first, then `~/.kanban/board.db`. Running tests creates a DB in the cwd. Use `KANBAN_DB_PATH` env var to override.
-- `bun link` makes the `kanban` CLI available globally from the source checkout.
-- The web dashboard (`bun run serve`) requires `ui/dist/` to exist — run `bun run ui:build` first.
-- Pre-commit hook runs `lint-staged` via Husky — ensure `bun install` has been run so Husky is set up.
-- `bun run build` must use `--target bun` (already configured in `package.json`).
+- The full validation lane in `docs/engineering/commands.md` passed, or every
+  skipped/blocked command is explained.
+- Proof is attached per `docs/SPEC_CONTRACT.md`.
+- Durable knowledge landed on the smallest relevant surface; deferred work goes
+  in `docs/todos` only when it is still real and actionable.

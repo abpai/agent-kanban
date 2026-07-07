@@ -115,16 +115,16 @@ Supported events: `Issue.create`, `Issue.update`, `Issue.remove`.
 
 Issue webhooks that do not belong to the configured team are ignored.
 
-### Signature verification (required)
+### Signature verification
 
 Set `LINEAR_WEBHOOK_SECRET` to the webhook signing secret; the handler verifies
 HMAC-SHA256 of the raw body against the `Linear-Signature` header (hex digest).
 Requests with a missing or mismatched signature return HTTP 401.
 
-The endpoint is **fail-closed**: if `LINEAR_WEBHOOK_SECRET` is unset, all webhook
-requests are rejected (HTTP 401) rather than processed, so an unauthenticated
-caller can't inject cache writes. Configure the secret to enable webhook
-delivery.
+If `LINEAR_WEBHOOK_SECRET` is unset, the endpoint accepts unsigned payloads in
+local open dev mode and logs a warning. Do not expose that mode publicly:
+`kanban serve --tunnel` refuses to start in Linear mode unless
+`LINEAR_WEBHOOK_SECRET` is set.
 
 ### Public URL
 

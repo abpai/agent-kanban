@@ -20,7 +20,8 @@ That buys you a few things that are easy to miss at first:
 
 ## Documentation
 
-- [`docs/readme.md`](https://github.com/abpai/agent-kanban/blob/main/docs/readme.md) for the documentation index
+- [`docs/INDEX.md`](https://github.com/abpai/agent-kanban/blob/main/docs/INDEX.md) for the documentation index
+- [`docs/SPEC_CONTRACT.md`](https://github.com/abpai/agent-kanban/blob/main/docs/SPEC_CONTRACT.md) for the repo proof menu and spec contract
 - [`docs/workflow.md`](https://github.com/abpai/agent-kanban/blob/main/docs/workflow.md) for a common day-to-day workflow
 - [`docs/mcp.md`](https://github.com/abpai/agent-kanban/blob/main/docs/mcp.md) for the reusable tracker MCP module
 - [`docs/providers/linear.md`](https://github.com/abpai/agent-kanban/blob/main/docs/providers/linear.md) for Linear provider details
@@ -271,14 +272,18 @@ compatibility. To require authentication, set a token via `--token` or the
   accepts `?token=<token>` instead.
 - `/api/health` stays public (liveness probe).
 - `/api/webhooks/*` are **not** covered by this token — they authenticate with
-  the provider webhook secret (e.g. `JIRA_WEBHOOK_SECRET`).
+  the provider webhook secret when one is configured. Without that secret,
+  Linear/Jira webhooks run in local open dev mode and accept unsigned payloads.
 - The bundled UI picks the token up once from `?token=` / `#token=` and stores
   it in `localStorage`, so you can open `https://<host>/?token=<token>`.
 
 `--tunnel` exposes the dashboard publicly, so it **refuses to start without a
-token**. CORS is off by default (same-origin); set `KANBAN_ALLOWED_ORIGIN` (or
-`--allowed-origin`) to allow a specific cross-origin browser client. CORS is
-origin hygiene, not an auth control — the token is the security boundary.
+token**. In Linear or Jira mode it also refuses to start unless the matching
+webhook secret is set, so auth-exempt webhook routes cannot accept unsigned
+public writes. CORS is off by default (same-origin); set
+`KANBAN_ALLOWED_ORIGIN` (or `--allowed-origin`) to allow a specific cross-origin
+browser client. CORS is origin hygiene, not an auth control — the token is the
+security boundary.
 
 ### mcp
 
