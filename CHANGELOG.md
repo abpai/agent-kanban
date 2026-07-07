@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.1
+
+### Patch Changes
+
+- [#86](https://github.com/abpai/agent-kanban/pull/86) [`f174bad`](https://github.com/abpai/agent-kanban/commit/f174bad86c4311f91ce5718b0aa8ac7764e80d31) Thanks [@abpai](https://github.com/abpai)! - Add autonomous-readiness tooling: a one-command `bootstrap` (root + UI install)
+  and `smoke` script, and a local Postgres parity harness (`pg:up` / `pg:down` /
+  `test:pg` + `docker-compose.postgres.yml` mirroring the CI Postgres service) so
+  the `postgres-*` provider suites can be proven locally, not just in CI.
+
+  Also adds a `knip` config + CI gate and trims the internal export surface:
+  `KanbanStorageMode` and ~40 other symbols that were exported but never imported
+  across modules are now module-private (or removed where fully dead). None were
+  part of the public `exports`-map surface (`.`, `./types`, `./providers/types`,
+  `./provider-runtime`), so consumers are unaffected.
+
 ## 0.8.0
 
 ### Minor Changes
