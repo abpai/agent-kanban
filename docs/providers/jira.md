@@ -67,6 +67,7 @@ base64 encoded in the `Authorization` header on every request.
 | column CRUD                | yes   | no     | no   |
 | bulk operations            | yes   | no     | no   |
 | config edit                | yes   | no     | no   |
+| label replacement (update) | yes   | yes    | yes  |
 | webhooks                   | no    | yes    | yes  |
 | comment read/create/update | yes   | yes    | yes  |
 | labels (read)              | no    | yes    | yes  |

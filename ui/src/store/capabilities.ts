@@ -14,4 +14,5 @@ export const defaultCapabilities: ProviderCapabilities = Object.freeze({
   columnCrud: false,
   bulk: false,
   configEdit: false,
+  labelReplacement: false,
 })

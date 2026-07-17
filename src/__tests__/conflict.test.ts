@@ -96,3 +96,40 @@ describe('local provider conflict detection', () => {
     expect(moved.column_id).toBe(resolveColumn(db, 'in-progress').id)
   })
 })
+
+describe('local provider label replacement', () => {
+  test('advertises labelReplacement capability', async () => {
+    const ctx = await provider.getContext()
+    expect(ctx.capabilities.labelReplacement).toBe(true)
+  })
+
+  test('updateTask replaces labels exactly when labels is provided', async () => {
+    const created = await provider.createTask({
+      title: 'Labeled',
+      labels: ['keep-me', 'retire-me'],
+    })
+    const updated = await provider.updateTask(created.id, {
+      labels: ['garage-smoke', 'kept'],
+    })
+    expect(updated.labels).toEqual(['garage-smoke', 'kept'])
+  })
+
+  test('updateTask clears labels when labels is []', async () => {
+    const created = await provider.createTask({
+      title: 'Clear me',
+      labels: ['intake-blocked'],
+    })
+    const updated = await provider.updateTask(created.id, { labels: [] })
+    expect(updated.labels).toEqual([])
+  })
+
+  test('updateTask leaves labels untouched when labels is absent', async () => {
+    const created = await provider.createTask({
+      title: 'Untouched',
+      labels: ['alpha', 'beta'],
+    })
+    const updated = await provider.updateTask(created.id, { title: 'Renamed' })
+    expect(updated.title).toBe('Renamed')
+    expect(updated.labels).toEqual(['alpha', 'beta'])
+  })
+})

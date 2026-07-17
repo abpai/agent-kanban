@@ -21,6 +21,7 @@ import { LINEAR_CAPABILITIES } from './capabilities'
 import {
   LinearClient,
   resolveLabelIdsForCreate,
+  resolveLabelIdsForUpdate,
   type LinearComment,
   type LinearIssue,
 } from './linear-client'
@@ -488,6 +489,10 @@ export class LinearProviderCore implements KanbanProvider {
         : null
     if (input.project !== undefined)
       updateInput['projectId'] = input.project ? await this.resolveProjectId(input.project) : null
+    if (input.labels !== undefined) {
+      // Exact replacement: `[]` clears all labels; omit means untouched.
+      updateInput['labelIds'] = await resolveLabelIdsForUpdate(this.client, input.labels)
+    }
     if (input.metadata !== undefined) {
       unsupportedOperation('Linear mode does not support metadata updates')
     }

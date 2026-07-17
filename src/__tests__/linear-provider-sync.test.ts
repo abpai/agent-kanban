@@ -492,6 +492,419 @@ describe('LinearProvider sync', () => {
     expect(updateInputs[0]).toHaveProperty('assigneeId', null)
   })
 
+  test('updateTask replaces labels exactly when labels is provided', async () => {
+    replaceStates(db, [{ id: 'state-1', name: 'Todo', position: 0 }])
+    upsertIssues(db, [
+      {
+        id: 'issue-1',
+        identifier: 'R2P-1',
+        title: 'Linear task',
+        stateId: 'state-1',
+        stateName: 'Todo',
+        statePosition: 0,
+        labels: ['old-label'],
+        commentCount: 0,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ])
+    saveSyncMeta(db, {
+      team: { id: 'team-1', key: 'R2P', name: 'R2pi' },
+      lastSyncAt: new Date().toISOString(),
+      lastFullSyncAt: new Date().toISOString(),
+      lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
+    })
+
+    const updateInputs: Array<Record<string, unknown>> = []
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string
+        variables: { input?: Record<string, unknown> }
+      }
+
+      if (body.query.includes('query IssueLabels')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issueLabels: {
+                nodes: [
+                  { id: 'label-smoke', name: 'garage-smoke' },
+                  { id: 'label-owner', name: 'garage-owner-local' },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('mutation UpdateIssue')) {
+        updateInputs.push(body.variables.input ?? {})
+        return new Response(JSON.stringify({ data: { issueUpdate: { success: true } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (body.query.includes('query TeamSnapshot')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              team: {
+                id: 'team-1',
+                key: 'R2P',
+                name: 'R2pi',
+                states: { nodes: [{ id: 'state-1', name: 'Todo', position: 0 }] },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Users')) {
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Projects')) {
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Issues')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issues: {
+                nodes: [linearIssue()],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query IssueById')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: linearIssue({
+                labels: {
+                  nodes: [
+                    { id: 'label-smoke', name: 'garage-smoke' },
+                    { id: 'label-owner', name: 'garage-owner-local' },
+                  ],
+                },
+              }),
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query IssueHistory')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: { history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
+    const updated = await provider.updateTask('R2P-1', {
+      labels: ['garage-smoke', 'garage-owner-local'],
+    })
+
+    expect(updateInputs).toHaveLength(1)
+    expect(updateInputs[0]).toHaveProperty('labelIds', ['label-smoke', 'label-owner'])
+    expect(updated.labels).toEqual(['garage-smoke', 'garage-owner-local'])
+  })
+
+  test('updateTask clears labels when labels is []', async () => {
+    replaceStates(db, [{ id: 'state-1', name: 'Todo', position: 0 }])
+    upsertIssues(db, [
+      {
+        id: 'issue-1',
+        identifier: 'R2P-1',
+        title: 'Linear task',
+        stateId: 'state-1',
+        stateName: 'Todo',
+        statePosition: 0,
+        labels: ['intake-blocked'],
+        commentCount: 0,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ])
+    saveSyncMeta(db, {
+      team: { id: 'team-1', key: 'R2P', name: 'R2pi' },
+      lastSyncAt: new Date().toISOString(),
+      lastFullSyncAt: new Date().toISOString(),
+      lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
+    })
+
+    const updateInputs: Array<Record<string, unknown>> = []
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string
+        variables: { input?: Record<string, unknown> }
+      }
+
+      if (body.query.includes('mutation UpdateIssue')) {
+        updateInputs.push(body.variables.input ?? {})
+        return new Response(JSON.stringify({ data: { issueUpdate: { success: true } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (body.query.includes('query TeamSnapshot')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              team: {
+                id: 'team-1',
+                key: 'R2P',
+                name: 'R2pi',
+                states: { nodes: [{ id: 'state-1', name: 'Todo', position: 0 }] },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Users')) {
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Projects')) {
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Issues')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issues: {
+                nodes: [linearIssue()],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query IssueById')) {
+        return new Response(
+          JSON.stringify({
+            data: { issue: linearIssue({ labels: { nodes: [] } }) },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query IssueHistory')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: { history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
+    const updated = await provider.updateTask('R2P-1', { labels: [] })
+
+    expect(updateInputs).toHaveLength(1)
+    expect(updateInputs[0]).toHaveProperty('labelIds', [])
+    expect(updated.labels).toEqual([])
+  })
+
+  test('updateTask leaves labels untouched when labels is absent', async () => {
+    replaceStates(db, [{ id: 'state-1', name: 'Todo', position: 0 }])
+    upsertIssues(db, [
+      {
+        id: 'issue-1',
+        identifier: 'R2P-1',
+        title: 'Linear task',
+        stateId: 'state-1',
+        stateName: 'Todo',
+        statePosition: 0,
+        labels: ['keep-me'],
+        commentCount: 0,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ])
+    saveSyncMeta(db, {
+      team: { id: 'team-1', key: 'R2P', name: 'R2pi' },
+      lastSyncAt: new Date().toISOString(),
+      lastFullSyncAt: new Date().toISOString(),
+      lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
+    })
+
+    const updateInputs: Array<Record<string, unknown>> = []
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        query: string
+        variables: { input?: Record<string, unknown> }
+      }
+
+      if (body.query.includes('mutation UpdateIssue')) {
+        updateInputs.push(body.variables.input ?? {})
+        return new Response(JSON.stringify({ data: { issueUpdate: { success: true } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (body.query.includes('query TeamSnapshot')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              team: {
+                id: 'team-1',
+                key: 'R2P',
+                name: 'R2pi',
+                states: { nodes: [{ id: 'state-1', name: 'Todo', position: 0 }] },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Users')) {
+        return new Response(
+          JSON.stringify({
+            data: { users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Projects')) {
+        return new Response(
+          JSON.stringify({
+            data: { projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Issues')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issues: {
+                nodes: [linearIssue()],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query IssueById')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: linearIssue({
+                title: 'Renamed only',
+                labels: { nodes: [{ id: 'label-keep', name: 'keep-me' }] },
+              }),
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query IssueHistory')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: { history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
+    await provider.updateTask('R2P-1', { title: 'Renamed only' })
+
+    expect(updateInputs).toHaveLength(1)
+    expect(Object.hasOwn(updateInputs[0]!, 'labelIds')).toBe(false)
+    expect(updateInputs[0]).toHaveProperty('title', 'Renamed only')
+  })
+
+  test('advertises labelReplacement capability', async () => {
+    replaceStates(db, [{ id: 'state-1', name: 'Todo', position: 0 }])
+    saveSyncMeta(db, {
+      team: { id: 'team-1', key: 'R2P', name: 'R2pi' },
+      lastSyncAt: new Date().toISOString(),
+      lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
+    })
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { query: string }
+      if (body.query.includes('query TeamSnapshot')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              team: {
+                id: 'team-1',
+                key: 'R2P',
+                name: 'R2pi',
+                states: { nodes: [{ id: 'state-1', name: 'Todo', position: 0 }] },
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Users') || body.query.includes('query Projects')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (body.query.includes('query Issues')) {
+        return new Response(
+          JSON.stringify({
+            data: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
+    }) as unknown as typeof fetch
+
+    const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
+    const ctx = await provider.getContext()
+    expect(ctx.capabilities.labelReplacement).toBe(true)
+  })
+
   test('updateTask drops the cached row when the hydrated issue left the team', async () => {
     replaceStates(db, [{ id: 'state-1', name: 'Todo', position: 0 }])
     upsertIssues(db, [

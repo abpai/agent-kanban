@@ -12,6 +12,7 @@ function capabilities(overrides: Partial<ProviderCapabilities> = {}): ProviderCa
     columnCrud: false,
     bulk: false,
     configEdit: false,
+    labelReplacement: true,
     ...overrides,
   }
 }

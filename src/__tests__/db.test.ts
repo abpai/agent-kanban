@@ -299,6 +299,17 @@ describe('tasks', () => {
     expect(updated.assignee).toBe('bob')
   })
 
+  test('updateTask replaces labels exactly and clears with []', () => {
+    const task = addTask(db, 'Labeled', { labels: ['a', 'b'] })
+    const replaced = updateTask(db, task.id, { labels: ['x'] })
+    expect(replaced.labels).toEqual(['x'])
+    const cleared = updateTask(db, task.id, { labels: [] })
+    expect(cleared.labels).toEqual([])
+    const untouched = updateTask(db, task.id, { title: 'Still cleared' })
+    expect(untouched.title).toBe('Still cleared')
+    expect(untouched.labels).toEqual([])
+  })
+
   test('deleteTask removes task', () => {
     const task = addTask(db, 'Doomed')
     deleteTask(db, task.id)

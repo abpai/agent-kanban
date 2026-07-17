@@ -64,6 +64,7 @@ function makeProvider(overrides: Partial<KanbanProvider> = {}): KanbanProvider {
           columnCrud: true,
           bulk: true,
           configEdit: true,
+          labelReplacement: true,
         },
         team: null,
       }
@@ -185,6 +186,7 @@ describe('startServer', () => {
               columnCrud: true,
               bulk: true,
               configEdit: true,
+              labelReplacement: true,
             },
             team: null,
           }

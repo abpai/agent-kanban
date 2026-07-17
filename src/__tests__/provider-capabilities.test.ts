@@ -20,6 +20,7 @@ describe('provider capabilities', () => {
       columnCrud: false,
       bulk: false,
       configEdit: false,
+      labelReplacement: true,
     })
   })
 
@@ -35,6 +36,13 @@ describe('provider capabilities', () => {
       columnCrud: true,
       bulk: true,
       configEdit: true,
+      labelReplacement: true,
     })
+  })
+
+  test('every provider advertises labelReplacement for UpdateTaskInput.labels', () => {
+    expect(LOCAL_CAPABILITIES.labelReplacement).toBe(true)
+    expect(LINEAR_CAPABILITIES.labelReplacement).toBe(true)
+    expect(JIRA_CAPABILITIES.labelReplacement).toBe(true)
   })
 })
