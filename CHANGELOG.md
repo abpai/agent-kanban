@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- [#83](https://github.com/abpai/agent-kanban/pull/83) [`06b76cc`](https://github.com/abpai/agent-kanban/commit/06b76cc17c8239dd77dd878a0d39c263969bca42) Thanks [@abpai](https://github.com/abpai)! - Persist the Jira webhook signature verdict on receipts. `WebhookResult` gains
+  an optional `signatureStatus` (`valid | invalid | missing | not_configured`),
+  the Jira provider attaches it to every webhook outcome (verification itself is
+  unchanged), and `withWebhookRecording` persists it into the `webhook_events`
+  `detail` JSON — so audit consumers can render a true verdict instead of
+  guessing from configuration.
+
+## 0.8.1
+
+### Patch Changes
+
+- [#86](https://github.com/abpai/agent-kanban/pull/86) [`f174bad`](https://github.com/abpai/agent-kanban/commit/f174bad86c4311f91ce5718b0aa8ac7764e80d31) Thanks [@abpai](https://github.com/abpai)! - Add autonomous-readiness tooling: a one-command `bootstrap` (root + UI install)
+  and `smoke` script, and a local Postgres parity harness (`pg:up` / `pg:down` /
+  `test:pg` + `docker-compose.postgres.yml` mirroring the CI Postgres service) so
+  the `postgres-*` provider suites can be proven locally, not just in CI.
+
+  Also adds a `knip` config + CI gate and trims the internal export surface:
+  `KanbanStorageMode` and ~40 other symbols that were exported but never imported
+  across modules are now module-private (or removed where fully dead). None were
+  part of the public `exports`-map surface (`.`, `./types`, `./providers/types`,
+  `./provider-runtime`), so consumers are unaffected.
+
+## 0.8.0
+
+### Minor Changes
+
+- [#81](https://github.com/abpai/agent-kanban/pull/81) [`a4beede`](https://github.com/abpai/agent-kanban/commit/a4beede3591719b8cd95a2173d1eba9143916fa0) Thanks [@abpai](https://github.com/abpai)! - Strict `JIRA_BOARD_ID` parsing ([#79](https://github.com/abpai/agent-kanban/issues/79)). A non-empty malformed `JIRA_BOARD_ID` now fails config loading with `INVALID_CONFIG` instead of being silently coerced into a plausible-but-wrong board id (`'12abc'` → 12, `'-5'` → -5, `'1e3'` → 1) or dropped. An unset or blank value still means "no board pinned", and a valid positive integer is used as before. This matches how a malformed `KANBAN_SYNC_INTERVAL_MS` is already rejected.
+
+  **Behavior change:** if `JIRA_BOARD_ID` is set to a non-numeric or non-positive value, config loading now errors instead of silently ignoring it. Set a valid board id or unset the variable.
+
+### Patch Changes
+
+- [#81](https://github.com/abpai/agent-kanban/pull/81) [`a4beede`](https://github.com/abpai/agent-kanban/commit/a4beede3591719b8cd95a2173d1eba9143916fa0) Thanks [@abpai](https://github.com/abpai)! - Honor the configured default task column when creating tasks through the local/SQLite CLI path ([#78](https://github.com/abpai/agent-kanban/issues/78)). `SqliteLocalStore.createTask` now applies `config.defaultTaskColumn` (falling back to the system default when unset), bringing it to parity with the Postgres store. Passing an explicit `--column` still overrides the default.
+
+- [#81](https://github.com/abpai/agent-kanban/pull/81) [`a4beede`](https://github.com/abpai/agent-kanban/commit/a4beede3591719b8cd95a2173d1eba9143916fa0) Thanks [@abpai](https://github.com/abpai)! - Harden the `serve` HTTP API and webhook ingestion ([#76](https://github.com/abpai/agent-kanban/issues/76)). Webhook-route errors are now wrapped in the standard `{ ok: false, error }` envelope instead of leaking a raw, non-enveloped 500, alongside fixes across tunnel security, Postgres receipt handling, SSE broadcast, and base-path handling — 10 defects in total, with +66 regression tests.
+
+- [#81](https://github.com/abpai/agent-kanban/pull/81) [`a4beede`](https://github.com/abpai/agent-kanban/commit/a4beede3591719b8cd95a2173d1eba9143916fa0) Thanks [@abpai](https://github.com/abpai)! - Close a webhook-secret fail-open and tighten config parsing ([#77](https://github.com/abpai/agent-kanban/issues/77)). `assertTunnelSecurity` now resolves each provider's webhook signing-secret env through a single `WEBHOOK_SECRET_ENV` source of truth, so a future webhook-capable provider can no longer start a public tunnel with no signing secret enforced. `KANBAN_SYNC_INTERVAL_MS` env parsing is also tightened to digits-only + safe-integer (rejecting hex/scientific notation), matching the strict `--sync-interval-ms` flag.
+
 ## 0.7.0
 
 ### Minor Changes

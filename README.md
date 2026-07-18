@@ -177,6 +177,8 @@ Default columns: `recurring`, `backlog`, `in-progress`, `review`, `done`.
 | `-p <level>`       | Priority: `low`, `medium`, `high`, `urgent` (default: `medium`) |
 | `-a <user>`        | Assignee                                                        |
 | `--project <name>` | Project tag                                                     |
+| `--label <name>`   | Label; repeatable and comma-separated values are accepted       |
+| `--labels <names>` | Label alias; repeatable and comma-separated values are accepted |
 | `-m <json>`        | Arbitrary metadata (must be valid JSON)                         |
 
 **Flags for `task list`:**

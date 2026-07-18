@@ -6,7 +6,9 @@ There are really two shipped entry points now:
 - `kanban mcp`, which runs a local stdio MCP server
 - the reusable helpers under `src/mcp/`, for sibling workspaces or in-repo
   consumers that want to host their own tracker-backed MCP server without
-  reimplementing the policy and transport layers
+  reimplementing the policy and transport layers — see
+  [`mcp-host-integration.md`](./mcp-host-integration.md) for the full embedding
+  recipe
 
 ## What is shipped
 

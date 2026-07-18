@@ -61,7 +61,7 @@ export interface TrackerMcpHooks<TScope> {
   }): Promise<void> | void
 }
 
-export interface TrackerMcpToolHandlerContext<TScope, TArgs = Record<string, unknown>> {
+interface TrackerMcpToolHandlerContext<TScope, TArgs = Record<string, unknown>> {
   scope: TScope
   args: TArgs
   request?: Request

@@ -41,6 +41,7 @@ import type {
   UpdateTaskInput,
 } from './types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
+import { WEBHOOK_SECRET_ENV, webhookSecretFromEnv } from '../tracker-config'
 import { warnOnce } from './warn-once'
 import {
   applyTaskFilters,
@@ -601,14 +602,19 @@ export class LinearProviderCore implements KanbanProvider {
   // Shared webhook dispatch. Postgres wraps this with webhook-event auditing;
   // SQLite calls it directly via the default handleWebhook above.
   protected async handleWebhookCore(payload: WebhookRequest): Promise<WebhookResult> {
-    if (!process.env['LINEAR_WEBHOOK_SECRET']) {
+    // Resolve the signing secret through WEBHOOK_SECRET_ENV so the runtime
+    // enforcement here and the assertTunnelSecurity tunnel gate read the same env
+    // name — they can't drift into a fail-open where the gate requires one env and
+    // verification reads another (unset) one.
+    const secret = webhookSecretFromEnv('linear')
+    if (!secret) {
       warnOnce(
         'linear-webhook-open-dev-mode',
-        '[linear] LINEAR_WEBHOOK_SECRET is not set — accepting webhook without signature verification (open dev mode)',
+        `[linear] ${WEBHOOK_SECRET_ENV['linear']} is not set — accepting webhook without signature verification (open dev mode)`,
       )
     }
     const auth = authorizeWebhook({
-      secret: process.env['LINEAR_WEBHOOK_SECRET'],
+      secret,
       rawBody: payload.rawBody,
       signature: headerLower(payload.headers, 'linear-signature'),
       verify: verifyHmacSha256,

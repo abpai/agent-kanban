@@ -1,13 +1,11 @@
 import { getDbPath } from './db'
 
-export type KanbanStorageMode = 'sqlite' | 'postgres'
-
-export interface SqliteKanbanStorageConfig {
+interface SqliteKanbanStorageConfig {
   mode: 'sqlite'
   sqlitePath: string
 }
 
-export interface PostgresKanbanStorageConfig {
+interface PostgresKanbanStorageConfig {
   mode: 'postgres'
   databaseUrl: string
 }

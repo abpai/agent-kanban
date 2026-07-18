@@ -6,10 +6,14 @@ export interface WebhookRequest {
   rawBody: string
 }
 
+export type WebhookSignatureStatus = 'valid' | 'invalid' | 'missing' | 'not_configured'
+
 export interface WebhookResult {
   handled: boolean
   unauthorized?: boolean
   message?: string
+  /** Persisted signature verdict for this delivery (never a guess). */
+  signatureStatus?: WebhookSignatureStatus
 }
 
 /**
@@ -26,9 +30,31 @@ export function authorizeWebhook(opts: {
   const { secret, rawBody, signature, verify } = opts
   if (!secret) return null
   if (!verify(secret, rawBody, signature)) {
-    return { handled: false, unauthorized: true, message: 'Invalid signature' }
+    return {
+      handled: false,
+      unauthorized: true,
+      message: 'Invalid signature',
+      signatureStatus: signature ? 'invalid' : 'missing',
+    }
   }
   return null
+}
+
+/**
+ * Signature verdict for a delivery, computed the same way authorizeWebhook
+ * decides authorization. Providers attach this to every WebhookResult so the
+ * receipts table persists a true verdict instead of leaving consumers to guess.
+ */
+export function webhookSignatureStatus(opts: {
+  secret: string | undefined
+  rawBody: string
+  signature: string | undefined | null
+  verify: (secret: string, rawBody: string, signature: string | undefined | null) => boolean
+}): WebhookSignatureStatus {
+  const { secret, rawBody, signature, verify } = opts
+  if (!secret) return 'not_configured'
+  if (!signature) return 'missing'
+  return verify(secret, rawBody, signature) ? 'valid' : 'invalid'
 }
 
 export function verifyHmacSha256(

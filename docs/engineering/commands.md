@@ -5,14 +5,26 @@ the local package manager field currently names Bun 1.3.3.
 
 ## Bootstrap
 
+One command brings a fresh checkout up — it installs the root and UI packages:
+
+```bash
+bun run bootstrap
+```
+
+Then confirm the CLI dispatches:
+
+```bash
+bun run smoke   # prints usage and exits 0
+```
+
+The individual steps `bun run bootstrap` wraps, if you need to run them on their
+own:
+
 | Task                           | Command                | Notes                                                                        |
 | ------------------------------ | ---------------------- | ---------------------------------------------------------------------------- |
 | Install root dependencies      | `bun install`          | Run from the repo root.                                                      |
 | Install dashboard dependencies | `cd ui && bun install` | The UI is an independent Vite package.                                       |
 | Link the local CLI             | `bun link`             | Optional; use `bun src/index.ts ...` when you do not need a global `kanban`. |
-
-There is no single bootstrap script yet. A fresh checkout needs the root and UI
-install commands above.
 
 ## Fast lane
 
@@ -23,6 +35,19 @@ bun run check
 ```
 
 This expands to lint, root TypeScript, and UI TypeScript checks.
+
+## Dead-code / unused-export scan
+
+```bash
+bun run knip
+```
+
+`knip` (config in `knip.json`) reports unused files, dependencies, and exports
+across both the root package and the `ui` workspace. It treats the published
+`exports`-map subpaths and `bin` as the public API surface, so it flags only
+genuinely internal dead code — prefer un-exporting a flagged symbol (making it
+module-private) over deleting it when it is still used within its own file. CI
+runs this as a gate, so keep it green.
 
 ## Full lane
 
@@ -35,14 +60,27 @@ bun run build
 bun run ui:build
 ```
 
-For Postgres provider coverage, run `bun test` with a reachable test database:
+### Postgres parity proof
+
+The `postgres-*` provider suites `test.skip` themselves unless a reachable test
+database is supplied via `DATABASE_URL` (or `KANBAN_PG_TEST_URL`). Run them
+against a real Postgres to prove parity for provider, storage, sync, or cache
+changes:
 
 ```bash
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/kanban_test bun test
+bun run pg:up      # start disposable Postgres 17 (docker-compose.postgres.yml)
+bun run test:pg    # run the suite with DATABASE_URL pointed at it
+bun run pg:down    # tear down the container and drop its volume
 ```
 
-CI provides that database through the Postgres service in
-`.github/workflows/ci.yml`.
+`docker-compose.postgres.yml` mirrors the `postgres` service in
+`.github/workflows/ci.yml` (image, credentials, database, port), so a green
+`bun run test:pg` reproduces exactly what CI proves. If host port `5432` is
+already taken, set `KANBAN_PG_PORT` (e.g. `5433`) — `pg:up`, `pg:down`, and
+`test:pg` all honor it, so `KANBAN_PG_PORT=5433 bun run pg:up && KANBAN_PG_PORT=5433 bun run test:pg`
+stays consistent (an explicit `DATABASE_URL` still overrides the port entirely).
+CI runs the equivalent `bun test` with `DATABASE_URL` set through its Postgres
+service; publishing that database is CI-owned.
 
 ## Health smokes
 

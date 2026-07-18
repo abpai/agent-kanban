@@ -30,16 +30,16 @@ below; `Lane` is only `fast` or `full`; `Validation command` contains only
 backtick-wrapped command IDs from `package.json` scripts. Run them through Bun as
 shown in [`engineering/commands.md`](./engineering/commands.md).
 
-| Change type                                             | Lane | Validation command                | Proof artifact                                                                                   | Sufficiency |
-| ------------------------------------------------------- | ---- | --------------------------------- | ------------------------------------------------------------------------------------------------ | ----------- |
-| Cross-cutting lint, TypeScript, or public type changes  | fast | `check`                           | passing lint, root typecheck, and UI typecheck output                                            | auto        |
-| CLI command behavior                                    | full | `test` `build`                    | passing command tests plus CLI bundle build                                                      | auto        |
-| Provider, storage, sync, or cache behavior              | full | `test`                            | passing provider/storage tests; Postgres-sensitive changes include a run with `DATABASE_URL` set | auto        |
-| HTTP API, server lifecycle, tunnel, or webhook behavior | full | `test`                            | passing API/server/webhook/tunnel tests with relevant test names                                 | auto        |
-| MCP behavior                                            | full | `test`                            | passing MCP core/server tests                                                                    | auto        |
-| Dashboard UI behavior                                   | full | `check` `ui:build`                | passing UI typecheck/build plus human review for visual or interaction claims                    | human-gate  |
-| Package build or release-surface behavior               | full | `build` `ui:build`                | CLI bundle and dashboard artifact build; publishing remains CI-owned                             | auto        |
-| Whole-repo handoff                                      | full | `check` `test` `build` `ui:build` | local CI-equivalent lane, with Postgres caveat called out when relevant                          | auto        |
+| Change type                                             | Lane | Validation command                | Proof artifact                                                                                                                                                    | Sufficiency |
+| ------------------------------------------------------- | ---- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Cross-cutting lint, TypeScript, or public type changes  | fast | `check`                           | passing lint, root typecheck, and UI typecheck output                                                                                                             | auto        |
+| CLI command behavior                                    | full | `test` `build`                    | passing command tests plus CLI bundle build                                                                                                                       | auto        |
+| Provider, storage, sync, or cache behavior              | full | `test`                            | passing provider/storage tests; Postgres-sensitive changes add a `test:pg` run (see [`engineering/commands.md`](./engineering/commands.md#postgres-parity-proof)) | auto        |
+| HTTP API, server lifecycle, tunnel, or webhook behavior | full | `test`                            | passing API/server/webhook/tunnel tests with relevant test names                                                                                                  | auto        |
+| MCP behavior                                            | full | `test`                            | passing MCP core/server tests                                                                                                                                     | auto        |
+| Dashboard UI behavior                                   | full | `check` `ui:build`                | passing UI typecheck/build plus human review for visual or interaction claims                                                                                     | human-gate  |
+| Package build or release-surface behavior               | full | `build` `ui:build`                | CLI bundle and dashboard artifact build; publishing remains CI-owned                                                                                              | auto        |
+| Whole-repo handoff                                      | full | `check` `test` `build` `ui:build` | local CI-equivalent lane, with Postgres caveat called out when relevant                                                                                           | auto        |
 
 ## Escalation boundaries
 

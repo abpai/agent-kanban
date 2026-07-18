@@ -13,6 +13,7 @@ import type {
 } from '../types'
 import {
   authorizeWebhook,
+  webhookSignatureStatus,
   headerLower,
   verifySha256HmacSignatureHeader,
   type WebhookRequest,
@@ -47,12 +48,13 @@ import type {
   UpdateTaskInput,
 } from './types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
+import { WEBHOOK_SECRET_ENV, webhookSecretFromEnv } from '../tracker-config'
 import { warnOnce } from './warn-once'
 import { applyTaskFilters, forEachWithConcurrency, SyncGate, syncStatusFromMeta } from './sync-core'
 
-export const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
+const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
-export function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boolean {
+function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boolean {
   if (!lastFullSyncAt) return true
   const lastFullSyncAtMs = Date.parse(lastFullSyncAt)
   if (!Number.isFinite(lastFullSyncAtMs)) return true
@@ -63,7 +65,7 @@ export function shouldRunFullReconcile(lastFullSyncAt: string | null, now: numbe
 // priorities; the write path looks up the resolved name (case-insensitive)
 // in the cached `jira_priorities` table, so renames that preserve the default
 // casing still resolve.
-export const CANONICAL_TO_JIRA_DEFAULT: Record<Priority, string> = {
+const CANONICAL_TO_JIRA_DEFAULT: Record<Priority, string> = {
   urgent: 'Highest',
   high: 'High',
   medium: 'Medium',
@@ -367,8 +369,8 @@ export class JiraProviderCore implements KanbanProvider {
         }
       }
 
-      // Fetch changelog per changed issue so the poll-based
-      // `moved` trigger in @garage/dispatch works. Server-side dedupe
+      // Fetch changelog per changed issue so a downstream consumer's
+      // poll-based `moved` trigger works. Server-side dedupe
       // keyed on (issue_id, history_id, item_field) keeps this cheap
       // even if the same issue is updated repeatedly.
       await forEachWithConcurrency(page.issues, 5, async (issue) => {
@@ -877,42 +879,58 @@ export class JiraProviderCore implements KanbanProvider {
   // Shared webhook dispatch. Postgres wraps this with webhook-event auditing;
   // SQLite calls it directly via the default handleWebhook above.
   protected async handleWebhookCore(payload: WebhookRequest): Promise<WebhookResult> {
-    if (!process.env['JIRA_WEBHOOK_SECRET']) {
+    // Resolve the signing secret through WEBHOOK_SECRET_ENV so the runtime
+    // enforcement here and the assertTunnelSecurity tunnel gate read the same env
+    // name — they can't drift into a fail-open where the gate requires one env and
+    // verification reads another (unset) one.
+    const secret = webhookSecretFromEnv('jira')
+    if (!secret) {
       warnOnce(
         'jira-webhook-open-dev-mode',
-        '[jira] JIRA_WEBHOOK_SECRET is not set — accepting webhook without signature verification (open dev mode)',
+        `[jira] ${WEBHOOK_SECRET_ENV['jira']} is not set — accepting webhook without signature verification (open dev mode)`,
       )
     }
-    const auth = authorizeWebhook({
-      secret: process.env['JIRA_WEBHOOK_SECRET'],
+    const signature = headerLower(payload.headers, 'x-hub-signature')
+    const signatureStatus = webhookSignatureStatus({
+      secret,
       rawBody: payload.rawBody,
-      signature: headerLower(payload.headers, 'x-hub-signature'),
+      signature,
       verify: verifySha256HmacSignatureHeader,
     })
-    if (auth) return auth
+    const auth = authorizeWebhook({
+      secret,
+      rawBody: payload.rawBody,
+      signature,
+      verify: verifySha256HmacSignatureHeader,
+    })
+    if (auth) return { ...auth, signatureStatus }
+    const attachVerdict = (result: WebhookResult): WebhookResult => ({
+      ...result,
+      signatureStatus,
+    })
     let body: { webhookEvent?: string; issue?: JiraIssue } = {}
     try {
       body = JSON.parse(payload.rawBody) as typeof body
     } catch {
-      return { handled: false, message: 'Invalid JSON body' }
+      return attachVerdict({ handled: false, message: 'Invalid JSON body' })
     }
     const event = body.webhookEvent ?? ''
     const issue = body.issue
-    if (!issue) return { handled: false, message: `No issue in payload (${event})` }
+    if (!issue) return attachVerdict({ handled: false, message: `No issue in payload (${event})` })
 
     if (event === 'jira:issue_deleted') {
       await this.cache.deleteIssue(issue.id)
       await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
-      return { handled: true }
+      return attachVerdict({ handled: true })
     }
 
     if (event === 'jira:issue_created' || event === 'jira:issue_updated') {
       const projectKey = issue.fields.project?.key
       if (projectKey !== this.config.projectKey) {
-        return {
+        return attachVerdict({
           handled: false,
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
-        }
+        })
       }
       await this.cache.upsertIssues([
         toCacheIssue(issue, this.config.baseUrl, this.config.projectKey),
@@ -923,9 +941,9 @@ export class JiraProviderCore implements KanbanProvider {
         })
       }
       await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
-      return { handled: true }
+      return attachVerdict({ handled: true })
     }
 
-    return { handled: false, message: `Unsupported event: ${event}` }
+    return attachVerdict({ handled: false, message: `Unsupported event: ${event}` })
   }
 }

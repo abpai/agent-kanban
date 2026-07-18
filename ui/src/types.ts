@@ -3,8 +3,6 @@ export type {
   Column,
   Task,
   BoardView,
-  ActivityAction,
-  ActivityEntry,
   BoardMetrics,
   BoardConfig,
   ProviderCapabilities,

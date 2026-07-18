@@ -708,7 +708,7 @@ export async function resolveLabelIdsForUpdate(
   return (await resolveLabelIdsForCreate(client, inputLabels)) ?? []
 }
 
-export function resolveLinearLabelIds(
+function resolveLinearLabelIds(
   inputLabels: string[] | undefined,
   availableLabels: LinearIssueLabel[],
 ): string[] | undefined {

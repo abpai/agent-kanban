@@ -2,15 +2,15 @@ import type { StateCreator } from 'zustand'
 import { safeLocalStorageGet, safeLocalStorageSet } from '../utils'
 import type { AppState } from '../store'
 
-export type ActivityWindowDays = 1 | 7 | 14 | 28 | 70 | null
+type ActivityWindowDays = 1 | 7 | 14 | 28 | 70 | null
 
-export const STORAGE_KEYS = {
+const STORAGE_KEYS = {
   assignee: 'agent-kanban:filter:assignee',
   project: 'agent-kanban:filter:project',
   activityDays: 'agent-kanban:filter:activity-days',
 } as const
 
-export function loadStoredActivityDays(): ActivityWindowDays {
+function loadStoredActivityDays(): ActivityWindowDays {
   const value = safeLocalStorageGet(STORAGE_KEYS.activityDays)
   if (value === '1' || value === '7' || value === '14' || value === '28' || value === '70') {
     return Number(value) as 1 | 7 | 14 | 28 | 70

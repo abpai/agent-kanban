@@ -178,6 +178,23 @@ export function resolveColumn(db: Database, idOrName: string): Column {
   throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No column matching '${idOrName}'`)
 }
 
+// Resolve the column a task lands in when the caller gives no explicit column.
+// Mirrors the Postgres local provider's resolveDefaultTaskColumn fallback so the
+// SQLite store stays at parity: prefer a column named "backlog", otherwise the
+// first column by position. (A configured KANBAN_DEFAULT_TASK_COLUMN is handled
+// upstream by being passed in as the explicit column.)
+function resolveDefaultColumn(db: Database): Column {
+  const backlog = db
+    .query("SELECT * FROM columns WHERE LOWER(name) = 'backlog' ORDER BY position LIMIT 1")
+    .get() as Column | null
+  if (backlog) return backlog
+  const first = db
+    .query('SELECT * FROM columns ORDER BY position, name LIMIT 1')
+    .get() as Column | null
+  if (first) return first
+  throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, 'No columns are configured')
+}
+
 export function listColumns(db: Database): Column[] {
   return db.query('SELECT * FROM columns ORDER BY position').all() as Column[]
 }
@@ -295,7 +312,7 @@ export function addTask(
     metadata?: string
   } = {},
 ): TaskWithColumn {
-  const column = opts.column ? resolveColumn(db, opts.column) : resolveColumn(db, 'backlog')
+  const column = opts.column ? resolveColumn(db, opts.column) : resolveDefaultColumn(db)
 
   if (opts.priority && !['low', 'medium', 'high', 'urgent'].includes(opts.priority)) {
     throw new KanbanError(

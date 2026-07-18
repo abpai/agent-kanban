@@ -17,18 +17,18 @@ export interface AdfDocument {
   content: AdfBlockNode[]
 }
 
-export interface AdfMark {
+interface AdfMark {
   type: string
   attrs?: Record<string, unknown>
 }
 
-export interface AdfTextNode {
+interface AdfTextNode {
   type: 'text'
   text: string
   marks?: AdfMark[]
 }
 
-export interface AdfUnknownInlineNode {
+interface AdfUnknownInlineNode {
   type: string
   [key: string]: unknown
 }
@@ -40,7 +40,7 @@ export interface AdfParagraphNode {
   content?: AdfInlineNode[]
 }
 
-export interface AdfListItemNode {
+interface AdfListItemNode {
   type: 'listItem'
   content: AdfBlockNode[]
 }
@@ -50,7 +50,7 @@ export interface AdfBulletListNode {
   content: AdfListItemNode[]
 }
 
-export interface AdfOrderedListNode {
+interface AdfOrderedListNode {
   type: 'orderedList'
   content: AdfListItemNode[]
   attrs?: { order?: number }
@@ -62,7 +62,7 @@ export interface AdfCodeBlockNode {
   content?: AdfInlineNode[]
 }
 
-export interface AdfHeadingNode {
+interface AdfHeadingNode {
   type: 'heading'
   attrs: { level: number }
   content?: AdfInlineNode[]
@@ -74,12 +74,12 @@ export interface AdfExpandNode {
   content: AdfBlockNode[]
 }
 
-export interface AdfUnknownBlockNode {
+interface AdfUnknownBlockNode {
   type: string
   [key: string]: unknown
 }
 
-export type AdfBlockNode =
+type AdfBlockNode =
   | AdfParagraphNode
   | AdfBulletListNode
   | AdfOrderedListNode
@@ -87,9 +87,6 @@ export type AdfBlockNode =
   | AdfHeadingNode
   | AdfExpandNode
   | AdfUnknownBlockNode
-
-// Public AdfNode union covers every node shape this module recognizes.
-export type AdfNode = AdfDocument | AdfBlockNode | AdfListItemNode | AdfInlineNode
 
 const BULLET_MARKER = /^[-*] (.*)$/
 const ORDERED_MARKER = /^(\d+)\. (.*)$/
