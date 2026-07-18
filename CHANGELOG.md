@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.0
+
+### Minor Changes
+
+- [#89](https://github.com/abpai/agent-kanban/pull/89) [`4efb1d1`](https://github.com/abpai/agent-kanban/commit/4efb1d1dff4b3c6ebae4a9396ad05c40e5411c6d) Thanks [@abpai](https://github.com/abpai)! - Add exact-replacement `labels?: string[]` on `UpdateTaskInput`. When present,
+  providers set the task's labels to exactly that array (including clearing with
+  `[]`); when absent, labels are left untouched.
+  - **Local (SQLite + Postgres)** — persist and activity-log label replacements.
+  - **Linear** — resolve names to ids and send `labelIds` (empty array clears).
+  - **Jira** — write `fields.labels` whenever `labels` is defined, including `[]`
+    (create still skips empty labels; update must clear).
+  - New `ProviderCapabilities.labelReplacement` flag is `true` for all three
+    providers so consumers can preflight before retiring intake labels.
+
 ## 0.9.0
 
 ### Minor Changes
