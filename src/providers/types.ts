@@ -39,6 +39,11 @@ export interface UpdateTaskInput {
   priority?: Priority
   assignee?: string
   project?: string
+  /**
+   * Exact-replacement labels. When present, the task's labels become exactly
+   * this array (including clearing to `[]`). When absent, labels are untouched.
+   */
+  labels?: string[]
   metadata?: string
   expectedVersion?: string
 }

@@ -197,10 +197,36 @@ describe('postgres local provider', () => {
       // Board administration has no Postgres provider path.
       expect(context.capabilities.columnCrud).toBe(false)
       expect(context.capabilities.bulk).toBe(false)
+      expect(context.capabilities.labelReplacement).toBe(true)
 
       await expect(runtime.provider.patchConfig({ projects: ['Anything'] })).rejects.toMatchObject({
         code: 'UNSUPPORTED_OPERATION',
       })
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  pgTest('updateTask replaces, clears, and leaves labels untouched', async () => {
+    const runtime = await openKanbanRuntime()
+    try {
+      const created = await runtime.provider.createTask({
+        title: 'Label swap',
+        labels: ['old-a', 'old-b'],
+      })
+      const replaced = await runtime.provider.updateTask(created.id, {
+        labels: ['garage-smoke'],
+      })
+      expect(replaced.labels).toEqual(['garage-smoke'])
+
+      const cleared = await runtime.provider.updateTask(created.id, { labels: [] })
+      expect(cleared.labels).toEqual([])
+
+      const untouched = await runtime.provider.updateTask(created.id, {
+        title: 'Still cleared',
+      })
+      expect(untouched.title).toBe('Still cleared')
+      expect(untouched.labels).toEqual([])
     } finally {
       await runtime.close()
     }

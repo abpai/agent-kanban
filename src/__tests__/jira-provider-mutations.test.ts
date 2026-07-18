@@ -431,6 +431,77 @@ describe('JiraProvider mutations', () => {
     expect(body.fields.assignee).toBeNull()
   })
 
+  test('updateTask replaces labels exactly when labels is provided', async () => {
+    fullSeed(db)
+    const syncRoutes = fullSyncRoutes()
+    const mutationRoute: StubRoute = {
+      match: (u, init) =>
+        u.endsWith('/rest/api/3/issue/ENG-1') && (init?.method ?? 'GET') === 'PUT',
+      handler: () => emptyResponse(204),
+    }
+    const { provider, calls } = makeProvider(db, [mutationRoute, ...syncRoutes])
+    await provider.updateTask('ENG-1', {
+      labels: ['garage-smoke', 'garage-owner-local'],
+    })
+    const putCall = calls.find(
+      (c) => c.method === 'PUT' && c.url.endsWith('/rest/api/3/issue/ENG-1'),
+    )
+    expect(putCall).toBeDefined()
+    const body = JSON.parse(putCall!.body ?? '{}') as {
+      fields: Record<string, unknown>
+    }
+    expect(body.fields.labels).toEqual(['garage-smoke', 'garage-owner-local'])
+  })
+
+  test('updateTask clears labels when labels is []', async () => {
+    fullSeed(db)
+    const syncRoutes = fullSyncRoutes()
+    const mutationRoute: StubRoute = {
+      match: (u, init) =>
+        u.endsWith('/rest/api/3/issue/ENG-1') && (init?.method ?? 'GET') === 'PUT',
+      handler: () => emptyResponse(204),
+    }
+    const { provider, calls } = makeProvider(db, [mutationRoute, ...syncRoutes])
+    await provider.updateTask('ENG-1', { labels: [] })
+    const putCall = calls.find(
+      (c) => c.method === 'PUT' && c.url.endsWith('/rest/api/3/issue/ENG-1'),
+    )
+    expect(putCall).toBeDefined()
+    const body = JSON.parse(putCall!.body ?? '{}') as {
+      fields: Record<string, unknown>
+    }
+    expect('labels' in body.fields).toBe(true)
+    expect(body.fields.labels).toEqual([])
+  })
+
+  test('updateTask leaves labels untouched when labels is absent', async () => {
+    fullSeed(db)
+    const syncRoutes = fullSyncRoutes()
+    const mutationRoute: StubRoute = {
+      match: (u, init) =>
+        u.endsWith('/rest/api/3/issue/ENG-1') && (init?.method ?? 'GET') === 'PUT',
+      handler: () => emptyResponse(204),
+    }
+    const { provider, calls } = makeProvider(db, [mutationRoute, ...syncRoutes])
+    await provider.updateTask('ENG-1', { title: 'Renamed only' })
+    const putCall = calls.find(
+      (c) => c.method === 'PUT' && c.url.endsWith('/rest/api/3/issue/ENG-1'),
+    )
+    expect(putCall).toBeDefined()
+    const body = JSON.parse(putCall!.body ?? '{}') as {
+      fields: Record<string, unknown>
+    }
+    expect('labels' in body.fields).toBe(false)
+    expect(body.fields.summary).toBe('Renamed only')
+  })
+
+  test('advertises labelReplacement capability', async () => {
+    fullSeed(db)
+    const { provider } = makeProvider(db, fullSyncRoutes())
+    const ctx = await provider.getContext()
+    expect(ctx.capabilities.labelReplacement).toBe(true)
+  })
+
   test('moveTask happy path: matching transition is used with GET before POST', async () => {
     seedCache(db, {
       priorities: seedPriorities,

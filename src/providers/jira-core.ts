@@ -701,6 +701,11 @@ export class JiraProviderCore implements KanbanProvider {
         ? { accountId: await this.resolveAssigneeAccountId(input.assignee) }
         : null
     }
+    // Exact replacement: write labels whenever present, including `[]` to clear.
+    // (Create skips empty labels; update must not — clearing is the point.)
+    if (input.labels !== undefined) {
+      fields['labels'] = normalizeJiraLabels(input.labels)
+    }
     if (Object.keys(fields).length > 0) {
       await this.client.updateIssue(issueKey, { fields })
     }

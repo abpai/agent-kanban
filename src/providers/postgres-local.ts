@@ -403,12 +403,17 @@ class PostgresLocalStore implements LocalStorePort {
 
     if (input.priority !== undefined) assertPriority(input.priority)
     const metadata = input.metadata === undefined ? undefined : parseMetadata(input.metadata)
+    const nextLabels = input.labels !== undefined ? normalizeLabels(input.labels) : undefined
+    // current is a raw row: labels is the stored JSON string; parse before reuse
+    // or an unrelated update double-encodes it (e.g. '[]' -> '"[]"' -> ['[]']).
+    const currentLabels = parseStoredLabels(current.labels)
     const next = {
       title: input.title ?? current.title,
       description: input.description ?? current.description,
       priority: input.priority ?? current.priority,
       assignee: input.assignee ?? current.assignee,
       project: input.project ?? current.project,
+      labels: nextLabels ?? currentLabels,
       metadata: metadata ?? current.metadata,
     }
     await this.sql.begin(async (tx) => {
@@ -419,6 +424,7 @@ class PostgresLocalStore implements LocalStorePort {
             priority = ${next.priority},
             assignee = ${next.assignee},
             project = ${next.project},
+            labels = ${JSON.stringify(next.labels)},
             metadata = ${next.metadata},
             revision = revision + 1,
             updated_at = ${nowIso()}
@@ -464,6 +470,19 @@ class PostgresLocalStore implements LocalStorePort {
           'description',
           current.description,
           input.description,
+          tx,
+        )
+      }
+      if (
+        nextLabels !== undefined &&
+        JSON.stringify(nextLabels) !== JSON.stringify(currentLabels)
+      ) {
+        await this.insertActivity(
+          current.id,
+          'updated',
+          'labels',
+          JSON.stringify(currentLabels),
+          JSON.stringify(nextLabels),
           tx,
         )
       }

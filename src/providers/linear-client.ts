@@ -694,6 +694,20 @@ export async function resolveLabelIdsForCreate(
   return resolveLinearLabelIds(inputLabels, await client.listIssueLabels())
 }
 
+/**
+ * Exact-replacement label resolution for updates. Unlike create (which omits
+ * empty labels), update must send `[]` to clear. Returns `undefined` only when
+ * `inputLabels` is absent so the caller can leave labels untouched.
+ */
+export async function resolveLabelIdsForUpdate(
+  client: LinearClient,
+  inputLabels: string[] | undefined,
+): Promise<string[] | undefined> {
+  if (inputLabels === undefined) return undefined
+  if (!inputLabels.some((label) => label.trim())) return []
+  return (await resolveLabelIdsForCreate(client, inputLabels)) ?? []
+}
+
 function resolveLinearLabelIds(
   inputLabels: string[] | undefined,
   availableLabels: LinearIssueLabel[],

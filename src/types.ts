@@ -121,6 +121,11 @@ export interface ProviderCapabilities {
   columnCrud: boolean
   bulk: boolean
   configEdit: boolean
+  /**
+   * True when `UpdateTaskInput.labels` is honored as exact replacement
+   * (present → set to that array including `[]`; absent → untouched).
+   */
+  labelReplacement: boolean
 }
 
 export interface ProviderTeamInfo {

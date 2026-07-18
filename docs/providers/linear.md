@@ -55,6 +55,7 @@ Provider support lives in `src/providers/`:
 | column CRUD                | yes   | no     |
 | bulk operations            | yes   | no     |
 | config edit                | yes   | no     |
+| label replacement (update) | yes   | yes    |
 | webhooks                   | no    | yes    |
 | comment read/create/update | yes   | yes    |
 | comment count (read)       | no    | yes    |

@@ -719,6 +719,7 @@ describe('JiraProvider read path', () => {
     expect(ctx.capabilities.columnCrud).toBe(false)
     expect(ctx.capabilities.bulk).toBe(false)
     expect(ctx.capabilities.configEdit).toBe(false)
+    expect(ctx.capabilities.labelReplacement).toBe(true)
     expect(ctx.team).not.toBeNull()
     expect(ctx.team?.name).toBe('Engineering')
   })

@@ -434,6 +434,7 @@ export function updateTask(
     priority?: Priority
     assignee?: string
     project?: string
+    labels?: string[]
     metadata?: string
   },
 ): TaskWithColumn {
@@ -455,6 +456,7 @@ export function updateTask(
 
   const sets: string[] = ["updated_at = datetime('now')", 'revision = revision + 1']
   const params: Record<string, string> = { $id: id }
+  const nextLabels = updates.labels !== undefined ? normalizeLabels(updates.labels) : undefined
 
   if (updates.title !== undefined) {
     sets.push('title = $title')
@@ -475,6 +477,10 @@ export function updateTask(
   if (updates.project !== undefined) {
     sets.push('project = $project')
     params['$project'] = updates.project
+  }
+  if (nextLabels !== undefined) {
+    sets.push('labels = $labels')
+    params['$labels'] = JSON.stringify(nextLabels)
   }
   if (updates.metadata !== undefined) {
     sets.push('metadata = $meta')
@@ -503,6 +509,16 @@ export function updateTask(
         field: 'project',
         old_value: existing.project || null,
         new_value: updates.project,
+      })
+    }
+    if (
+      nextLabels !== undefined &&
+      JSON.stringify(nextLabels) !== JSON.stringify(existing.labels)
+    ) {
+      logActivity(db, id, 'updated', {
+        field: 'labels',
+        old_value: JSON.stringify(existing.labels),
+        new_value: JSON.stringify(nextLabels),
       })
     }
     const fieldsToLog: Array<{ key: keyof typeof updates; field: string }> = [
