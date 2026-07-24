@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1
+
+### Patch Changes
+
+- [#91](https://github.com/abpai/agent-kanban/pull/91) [`a807bc3`](https://github.com/abpai/agent-kanban/commit/a807bc3c31307a7cd45e83db3f820c9c0ec1ee39) Thanks [@abpai](https://github.com/abpai)! - Fix Jira board-scoped column resolution for canonical `status:<id>` selectors.
+
 ## 0.10.0
 
 ### Minor Changes
