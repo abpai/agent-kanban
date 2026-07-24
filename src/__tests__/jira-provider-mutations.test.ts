@@ -502,7 +502,7 @@ describe('JiraProvider mutations', () => {
     expect(ctx.capabilities.labelReplacement).toBe(true)
   })
 
-  test('moveTask happy path: matching transition is used with GET before POST', async () => {
+  test('moveTask resolves a canonical status selector against a board column', async () => {
     seedCache(db, {
       priorities: seedPriorities,
       users: seedUsers,
@@ -510,6 +510,7 @@ describe('JiraProvider mutations', () => {
       columns: seedColumns,
       issues: [{ id: '501', key: 'ENG-1', statusId: '20000' }],
       projectKey: 'ENG',
+      boardId: 3,
     })
     const syncRoutes = fullSyncRoutes()
     const transitionsRoute: StubRoute = {
@@ -528,12 +529,12 @@ describe('JiraProvider mutations', () => {
         u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'POST',
       handler: () => emptyResponse(204),
     }
-    const { provider, calls } = makeProvider(db, [
-      transitionsRoute,
-      postTransitionRoute,
-      ...syncRoutes,
-    ])
-    await provider.moveTask('ENG-1', 'Done')
+    const { provider, calls } = makeProvider(
+      db,
+      [transitionsRoute, postTransitionRoute, ...syncRoutes],
+      { ...baseConfig, boardId: 3 },
+    )
+    await provider.moveTask('ENG-1', 'status:10001')
 
     const getIdx = calls.findIndex(
       (c) => c.method === 'GET' && c.url.endsWith('/rest/api/3/issue/ENG-1/transitions'),

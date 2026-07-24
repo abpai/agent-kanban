@@ -231,6 +231,25 @@ describe('JiraProvider read path', () => {
     expect(decodeColumnStatusIds(cols[0]!)).toEqual(['10001', '10002'])
   })
 
+  test('listTasks resolves a canonical status selector against a board column', async () => {
+    const { provider } = makeProviderWithBoard(
+      standardRoutes({
+        searchHandler: () =>
+          jsonResponse({
+            startAt: 0,
+            maxResults: 100,
+            total: 1,
+            issues: [makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' })],
+          }),
+      }),
+      3,
+    )
+
+    const tasks = await provider.listTasks({ column: 'status:10001' })
+
+    expect(tasks.map((task) => task.externalRef)).toEqual(['ENG-1'])
+  })
+
   test('sync keeps duplicate Jira board column names as distinct cached columns', async () => {
     const { provider } = makeProviderWithBoard(
       standardRoutes({

@@ -404,6 +404,14 @@ describe('resolveJiraColumnId', () => {
     expect(resolveJiraColumnId(columns, '10002')).toBe('board:1:Backlog')
   })
 
+  test('resolves a canonical status selector to a board-scoped column', () => {
+    const columns = [col('board:940:To Do', 'To Do', ['12034'])]
+    expect(resolveJiraColumnId(columns, 'status:12034')).toBe('board:940:To Do')
+    expect(() => resolveJiraColumnId(columns, 'status:99999')).toThrow(
+      /No Jira column matching 'status:99999'/,
+    )
+  })
+
   test('raw status id wins over a column whose name normalizes to that id', () => {
     // A numeric status-id reference must resolve by containment, not be hijacked
     // by a column whose name only matches after the fuzzy normalized pass

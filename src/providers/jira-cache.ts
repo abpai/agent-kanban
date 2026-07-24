@@ -83,9 +83,9 @@ function ambiguousColumnError(input: string, matches: JiraColumnRow[]): KanbanEr
 }
 
 // Resolves a user-supplied column reference to a cached column id, trying
-// (1) exact id, (2) case-insensitive name, (3) raw status id containment,
-// (4) separator-insensitive name ('Todo' → 'To Do'). Exact passes (id, name,
-// status id) run before the fuzzy normalized pass so a precise reference is
+// (1) exact id, (2) case-insensitive name, (3) raw or canonical status-id
+// containment, (4) separator-insensitive name ('Todo' → 'To Do'). Exact
+// passes (id, name, status id) run before the fuzzy normalized pass so a precise reference is
 // never overridden by a normalized-name collision. Name lookups that match
 // multiple distinct columns (possible when Jira returns duplicate board column
 // names, or when two columns collapse to the same normalized token) are
@@ -98,9 +98,10 @@ export function resolveJiraColumnId(columns: JiraColumnRow[], input: string): st
   if (byName.length === 1) return byName[0]!.id
   if (byName.length > 1) throw ambiguousColumnError(input, byName)
   // Exact status-id containment takes precedence over the fuzzy name pass: a raw
-  // status id is an unambiguous reference and must not be shadowed by a column
-  // whose name happens to normalize to the same token.
-  const byStatus = columns.find((column) => decodeColumnStatusIds(column).includes(input))
+  // or canonical status id is an unambiguous reference and must not be shadowed
+  // by a column whose name happens to normalize to the same token.
+  const statusId = /^status:(\d+)$/.exec(input)?.[1] ?? input
+  const byStatus = columns.find((column) => decodeColumnStatusIds(column).includes(statusId))
   if (byStatus) return byStatus.id
   // Status-fallback columns are named after Jira statuses ('To Do', 'In
   // Progress'), but dispatch triggers pass collapsed strings like 'Todo'. Match
