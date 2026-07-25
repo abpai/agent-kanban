@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.2
+
+### Patch Changes
+
+- [#93](https://github.com/abpai/agent-kanban/pull/93) [`1e3e304`](https://github.com/abpai/agent-kanban/commit/1e3e30431f3700a6b7819f5be898e39797818054) Thanks [@abpai](https://github.com/abpai)! - Normalize Jira polling cursors to JQL minute precision so delta syncs continue
+  to see tasks after Jira returns an ISO timestamp.
+
 ## 0.10.1
 
 ### Patch Changes
