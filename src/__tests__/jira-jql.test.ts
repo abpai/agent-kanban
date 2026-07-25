@@ -9,16 +9,20 @@ describe('buildDeltaJql', () => {
     )
   })
 
-  test('interpolates a valid ISO timestamp unchanged', () => {
+  test('normalizes a UTC ISO cursor to Jira JQL minute precision', () => {
     expect(buildDeltaJql('ENG', '2026-01-05T00:00:00Z')).toBe(
-      'project = ENG AND updated >= "2026-01-05T00:00:00Z" ORDER BY updated ASC',
+      'project = ENG AND updated >= "2026-01-05 00:00" ORDER BY updated ASC',
     )
   })
 
-  test('accepts the ISO offset form Jira returns in issue.fields.updated', () => {
-    expect(buildDeltaJql('ENG', '2026-06-08T12:34:56.789+0000')).toContain(
-      'updated >= "2026-06-08T12:34:56.789+0000"',
+  test('preserves Jira response wall time while removing seconds and offset', () => {
+    expect(buildDeltaJql('ENG', '2026-06-08T12:34:56.789+0300')).toContain(
+      'updated >= "2026-06-08 12:34"',
     )
+  })
+
+  test('keeps an accepted JQL cursor in minute precision', () => {
+    expect(buildDeltaJql('ENG', '2026-06-08 12:34')).toContain('updated >= "2026-06-08 12:34"')
   })
 
   test('rejects an injection attempt in the since cursor and falls back to a full scan', () => {
@@ -47,5 +51,10 @@ describe('safeDeltaSince', () => {
     // `issue.fields.updated > newestUpdatedAt` comparison and re-persist itself,
     // trapping every future sync into a full scan.
     expect(safeDeltaSince('9999" OR project = OTHER')).toBeNull()
+  })
+
+  test('nulls out safe-looking but invalid JQL timestamps that would match no tasks', () => {
+    expect(safeDeltaSince('9999')).toBeNull()
+    expect(safeDeltaSince('2026-06-08T12:34:56+03')).toBeNull()
   })
 })

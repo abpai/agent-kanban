@@ -312,7 +312,7 @@ describe('JiraProvider read path', () => {
     expect(calls.some((call) => call.url.includes('/rest/api/3/search/jql'))).toBe(true)
   })
 
-  test('sync delta JQL is exactly project = KEY AND updated >= "<ts>" ORDER BY updated ASC', async () => {
+  test('sync delta JQL normalizes Jira ISO cursors to an overlapping JQL minute', async () => {
     const capturedJql: string[] = []
     // First sync: one issue returned so lastIssueUpdatedAt is set.
     const searchHandler: StubHandler = (url) => {
@@ -330,7 +330,7 @@ describe('JiraProvider read path', () => {
               id: '99',
               key: 'ENG-99',
               statusId: '10001',
-              updated: '2026-01-05T00:00:00Z',
+              updated: '2026-01-05T03:04:05.678+0300',
             }),
           ],
         })
@@ -348,7 +348,7 @@ describe('JiraProvider read path', () => {
     Date.now = () => origNow() + 31_000
     await provider.getBoard()
     expect(capturedJql[1]).toBe(
-      'project = ENG AND updated >= "2026-01-05T00:00:00Z" ORDER BY updated ASC',
+      'project = ENG AND updated >= "2026-01-05 03:04" ORDER BY updated ASC',
     )
   })
 
@@ -494,7 +494,7 @@ describe('JiraProvider read path', () => {
     expect(searchCalls).toBe(3)
     expect(capturedJql).toEqual([
       'project = ENG AND updated >= "1970-01-01 00:00" ORDER BY updated ASC',
-      'project = ENG AND updated >= "2026-01-03T00:00:00Z" ORDER BY updated ASC',
+      'project = ENG AND updated >= "2026-01-03 00:00" ORDER BY updated ASC',
       'project = ENG AND updated >= "1970-01-01 00:00" ORDER BY updated ASC',
     ])
     expect(getCachedTasks(db).map((task) => task.externalRef)).toEqual(['ENG-1'])
