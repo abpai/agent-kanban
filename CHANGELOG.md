@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.0
+
+### Minor Changes
+
+- [#95](https://github.com/abpai/agent-kanban/pull/95) [`49503fc`](https://github.com/abpai/agent-kanban/commit/49503fc1ecfc6dfe8d46845649d6cc668cbbe44e) Thanks [@abpai](https://github.com/abpai)! - Add optional forwarding for accepted provider webhooks. The server sends the raw trusted delivery to a configured HTTP consumer and records the forward result in Postgres receipts.
+
 ## 0.10.2
 
 ### Patch Changes
