@@ -31,6 +31,22 @@ CREATE INDEX IF NOT EXISTS webhook_events_received_at_idx
 unhandled → `skipped`, `unauthorized` or a thrown error → `error`. On `error`
 rows, `detail` carries `{ "error": "<message>" }`; otherwise `detail` is `{}`.
 
+## Optional forwarding
+
+Set both `KANBAN_WEBHOOK_FORWARD_URL` and `KANBAN_WEBHOOK_FORWARD_TOKEN` to
+forward each accepted provider webhook to another HTTP service. The server
+sends the original body with `Content-Type: application/json` and the configured
+bearer token. A slow or failed forward does not delay or fail the provider
+response.
+
+Postgres mode adds one separate receipt for the forward result:
+
+- `status = accepted`, `detail.forward = succeeded` for a successful response.
+- `status = error`, `detail.forward = failed` for an HTTP, network, or timeout failure.
+
+The forward is disabled when either value is absent. SQLite mode can forward,
+but it does not store a forward receipt.
+
 ## Guarantees
 
 - **Best-effort.** The receipt `INSERT` is wrapped — a logging failure is logged

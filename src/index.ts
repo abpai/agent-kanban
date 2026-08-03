@@ -17,6 +17,19 @@ import { WEBHOOK_SECRET_ENV, trackerConfigFromEnv, trackerProviderFromEnv } from
 import type { KanbanProvider } from './providers/types'
 import { MIN_POLLING_SYNC_INTERVAL_MS } from './sync-config'
 import { normalizeCreateTaskInput } from './use-cases'
+import {
+  buildWebhookForwardHook,
+  resolveWebhookForwardConfig,
+  type WebhookForwardConfig,
+  type WebhookForwardFetch,
+} from './webhook-forward'
+
+export {
+  buildWebhookForwardHook,
+  resolveWebhookForwardConfig,
+  type WebhookForwardConfig,
+  type WebhookForwardFetch,
+}
 
 interface ParsedArgs {
   values: Record<string, unknown>
@@ -641,10 +654,14 @@ if (import.meta.main) {
         : {}),
     })
     const { startServer } = await import('./server')
+    const forwardConfig = resolveWebhookForwardConfig(process.env)
     const server = startServer(runtime.provider, opts.port, {
       syncIntervalMs: runtime.syncIntervalMs,
       ...(opts.authToken ? { authToken: opts.authToken } : {}),
       ...(opts.allowedOrigin ? { allowedOrigin: opts.allowedOrigin } : {}),
+      ...(forwardConfig
+        ? { onWebhookAccepted: buildWebhookForwardHook(forwardConfig, runtime.sql) }
+        : {}),
     })
 
     let tunnelHandle: { stop: () => void } | null = null

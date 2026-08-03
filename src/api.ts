@@ -108,6 +108,23 @@ export interface ApiResult {
   event?: WsEvent
 }
 
+/**
+ * A webhook delivery that the provider accepted under its configured trust mode.
+ */
+export interface WebhookAcceptedEvent {
+  provider: KanbanProvider['type']
+  rawBody: string
+  headers: Record<string, string>
+}
+
+export interface DispatchApiRequestOptions {
+  /**
+   * Runs without waiting after the provider accepts and handles a webhook.
+   * A failure in this hook does not change the webhook response.
+   */
+  onWebhookAccepted?: (event: WebhookAcceptedEvent) => void
+}
+
 function upsertEvent(task: Task): WsEvent {
   return { type: 'task:upsert', task, columnId: task.column_id }
 }
@@ -137,15 +154,23 @@ async function mutationResult<T>(
 // throw before any handler runs. Any escape would reach Bun.serve's fetch (which
 // has no try/catch) and surface as a bare, non-enveloped 500. This wrapper keeps
 // every failure inside the { ok:false, error } contract, never marking mutated.
-export async function handleRequest(provider: KanbanProvider, req: Request): Promise<ApiResult> {
+export async function handleRequest(
+  provider: KanbanProvider,
+  req: Request,
+  opts: DispatchApiRequestOptions = {},
+): Promise<ApiResult> {
   try {
-    return await dispatchApiRequest(provider, req)
+    return await dispatchApiRequest(provider, req, opts)
   } catch (err) {
     return { response: errorResponse(err), mutated: false }
   }
 }
 
-async function dispatchApiRequest(provider: KanbanProvider, req: Request): Promise<ApiResult> {
+async function dispatchApiRequest(
+  provider: KanbanProvider,
+  req: Request,
+  opts: DispatchApiRequestOptions,
+): Promise<ApiResult> {
   const url = new URL(req.url)
   const path = url.pathname
   const method = req.method
@@ -335,6 +360,13 @@ async function dispatchApiRequest(provider: KanbanProvider, req: Request): Promi
           401,
         ),
         mutated: false,
+      }
+    }
+    if (result.handled && opts.onWebhookAccepted) {
+      try {
+        opts.onWebhookAccepted({ provider: target, rawBody, headers })
+      } catch {
+        // A consumer hook cannot make an accepted provider webhook fail.
       }
     }
     return {
