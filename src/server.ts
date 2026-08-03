@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { Buffer } from 'node:buffer'
 import { timingSafeEqual } from 'node:crypto'
-import { handleRequest } from './api'
+import { handleRequest, type WebhookAcceptedEvent } from './api'
 import type { ServerWebSocket } from 'bun'
 import type { KanbanProvider } from './providers/types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from './sync-config'
@@ -47,6 +47,8 @@ export interface StartServerOptions {
   authToken?: string
   /** Allowed CORS origin; when unset, no CORS headers are emitted (same-origin). */
   allowedOrigin?: string
+  /** Runs after the active provider accepts and handles a webhook. */
+  onWebhookAccepted?: (event: WebhookAcceptedEvent) => void
 }
 
 export interface StartedServer {
@@ -264,7 +266,9 @@ export function startServer(
         const forwardedUrl = new URL(req.url)
         forwardedUrl.pathname = pathname
         const forwardedReq = new Request(forwardedUrl.toString(), req)
-        const result = await handleRequest(provider, forwardedReq)
+        const result = await handleRequest(provider, forwardedReq, {
+          ...(opts.onWebhookAccepted ? { onWebhookAccepted: opts.onWebhookAccepted } : {}),
+        })
         applyCorsHeaders(result.response, corsHeaders)
         if (result.mutated && result.response.ok) {
           broadcast(result.event ?? { type: 'refresh' })

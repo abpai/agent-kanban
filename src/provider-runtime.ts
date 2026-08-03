@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import postgres from 'postgres'
+import postgres, { type Sql } from 'postgres'
 
 import { getDbPath, migrateSchema, openDb } from './db'
 import { createPostgresProvider, createSqliteProvider } from './providers/factory'
@@ -15,6 +15,8 @@ export interface KanbanRuntime {
   dbPath: string
   trackerConfig: TrackerConfig
   sqliteDb?: Database
+  /** The shared Postgres client. It is absent in SQLite mode. */
+  sql?: Sql
   syncIntervalMs?: number
   close(): Promise<void>
 }
@@ -42,6 +44,7 @@ export async function openKanbanRuntime(
         capabilities,
         dbPath,
         trackerConfig,
+        sql,
         syncIntervalMs: trackerConfig.syncIntervalMs,
         async close() {
           await sql.end({ timeout: 1 })

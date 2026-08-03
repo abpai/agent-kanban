@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { initSchema, seedDefaultColumns, addTask } from '../db'
 import { KanbanError, ErrorCode } from '../errors'
-import { handleRequest } from '../api'
+import { handleRequest, type WebhookAcceptedEvent } from '../api'
 import { createProvider } from '../providers/index'
 import type { KanbanProvider } from '../providers/types'
 
@@ -362,6 +362,59 @@ describe('handleRequest webhook route (F25)', () => {
     expect(result.response.status).toBe(200)
     expect(result.mutated).toBe(true)
     expect(body.data.handled).toBe(true)
+  })
+
+  test('handled result calls the accepted hook with the trusted delivery', async () => {
+    const accepted: WebhookAcceptedEvent[] = []
+    const result = await handleRequest(
+      webhookProvider('local', async () => ({ handled: true })),
+      new Request('http://localhost/api/webhooks/local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Delivery': 'delivery-1' },
+        body: '{"task":"TASK-1"}',
+      }),
+      { onWebhookAccepted: (event) => void accepted.push(event) },
+    )
+
+    expect(result.response.status).toBe(200)
+    expect(accepted).toHaveLength(1)
+    expect(accepted[0]).toMatchObject({
+      provider: 'local',
+      rawBody: '{"task":"TASK-1"}',
+      headers: { 'x-delivery': 'delivery-1' },
+    })
+  })
+
+  test('skipped and unauthorized results do not call the accepted hook', async () => {
+    const accepted: WebhookAcceptedEvent[] = []
+
+    await handleRequest(
+      webhookProvider('local', async () => ({ handled: false })),
+      webhookRequest('local'),
+      { onWebhookAccepted: (event) => void accepted.push(event) },
+    )
+    await handleRequest(
+      webhookProvider('local', async () => ({ handled: false, unauthorized: true })),
+      webhookRequest('local'),
+      { onWebhookAccepted: (event) => void accepted.push(event) },
+    )
+
+    expect(accepted).toHaveLength(0)
+  })
+
+  test('a throwing accepted hook does not change the provider response', async () => {
+    const result = await handleRequest(
+      webhookProvider('local', async () => ({ handled: true })),
+      webhookRequest('local'),
+      {
+        onWebhookAccepted: () => {
+          throw new Error('consumer failed')
+        },
+      },
+    )
+
+    expect(result.response.status).toBe(200)
+    expect(result.mutated).toBe(true)
   })
 
   test('skipped (handled:false) result → 200, NOT mutated (no broadcast)', async () => {
