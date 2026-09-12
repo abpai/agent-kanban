@@ -137,7 +137,7 @@ describe('jira-cache', () => {
     const { users } = getCachedConfig(db)
     expect(users).toHaveLength(2)
     expect(users.map((u) => u.displayName).sort()).toEqual(['Alice', 'Bob'])
-    expect(users.every((u) => typeof u.accountId === 'string')).toBe(true)
+    expect(users.map((u) => u.accountId).sort()).toEqual(['a1', 'a2'])
   })
 
   test('upsertJiraIssues round-trip with full Task shape', () => {
@@ -300,7 +300,7 @@ describe('jira-cache', () => {
     for (const s of samples) {
       const task = getCachedTask(db, s.key)
       expect(task).not.toBeNull()
-      expect(task?.priority as string).toBe(s.expected)
+      expect(task).toHaveProperty('priority', s.expected)
     }
   })
 

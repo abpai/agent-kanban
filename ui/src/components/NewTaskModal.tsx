@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { Dialog } from './Dialog'
 import { useStore } from '../store'
+import { getTaskOptions, parsePriority } from '../utils'
 import type { Priority } from '../types'
 
 export function NewTaskModal() {
@@ -28,12 +29,7 @@ export function NewTaskModal() {
   const [error, setError] = useState<string | null>(null)
 
   const columns = board?.columns ?? []
-  const allAssignees = [
-    ...new Set([...(metrics?.assignees ?? []), ...(config?.members?.map((m) => m.name) ?? [])]),
-  ].sort()
-  const allProjects = [
-    ...new Set([...(metrics?.projects ?? []), ...(config?.projects ?? [])]),
-  ].sort()
+  const { assignees, projects } = getTaskOptions(metrics, config)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -127,7 +123,7 @@ export function NewTaskModal() {
               className="formInput"
               id="new-priority"
               value={priority}
-              onChange={(e) => setPriority(e.target.value as Priority)}
+              onChange={(e) => setPriority(parsePriority(e.target.value))}
             >
               <option value="low">Low</option>
               <option value="medium">Medium</option>
@@ -149,7 +145,7 @@ export function NewTaskModal() {
               onChange={(e) => setAssignee(e.target.value)}
             >
               <option value="">Unassigned</option>
-              {allAssignees.map((a) => (
+              {assignees.map((a) => (
                 <option key={a} value={a}>
                   {a}
                 </option>
@@ -168,7 +164,7 @@ export function NewTaskModal() {
               onChange={(e) => setProject(e.target.value)}
             >
               <option value="">No project</option>
-              {allProjects.map((p) => (
+              {projects.map((p) => (
                 <option key={p} value={p}>
                   {p}
                 </option>

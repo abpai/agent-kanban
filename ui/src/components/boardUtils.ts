@@ -1,12 +1,12 @@
 import type { BoardView, Task } from '../types'
 
-const COLUMN_COLORS: Record<string, string> = {
-  recurring: 'var(--col-recurring)',
-  backlog: 'var(--col-backlog)',
-  'in-progress': 'var(--col-in-progress)',
-  review: 'var(--col-review)',
-  done: 'var(--col-done)',
-}
+const COLUMN_COLORS = new Map([
+  ['recurring', 'var(--col-recurring)'],
+  ['backlog', 'var(--col-backlog)'],
+  ['in-progress', 'var(--col-in-progress)'],
+  ['review', 'var(--col-review)'],
+  ['done', 'var(--col-done)'],
+])
 
 export function filterVisibleTasks(
   tasks: Task[],
@@ -45,13 +45,16 @@ export function filterVisibleTasks(
 }
 
 export function getColumnColor(name: string): string {
-  return COLUMN_COLORS[name.toLowerCase()] ?? 'var(--text-secondary)'
+  return COLUMN_COLORS.get(name.toLowerCase()) ?? 'var(--text-secondary)'
 }
 
-export function findTask(board: BoardView, id: string): { task: Task; columnId: string } | null {
+export function findTask(
+  board: BoardView,
+  id: string,
+): { task: Task; columnId: string; columnName: string } | null {
   for (const column of board.columns) {
     const task = column.tasks.find((t) => t.id === id)
-    if (task) return { task, columnId: column.id }
+    if (task) return { task, columnId: column.id, columnName: column.name }
   }
   return null
 }

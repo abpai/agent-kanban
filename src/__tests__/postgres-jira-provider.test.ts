@@ -5,6 +5,8 @@ import { run } from '../index'
 import type { Task } from '../types'
 import { PostgresJiraProvider } from '../providers/postgres-jira'
 import { PostgresJiraCache } from '../providers/postgres-jira-cache'
+import type { JiraBoardConfiguration } from '../providers/jira-client'
+import type { AdfDocument } from '../providers/jira-adf'
 
 const databaseUrl = process.env['KANBAN_PG_TEST_URL'] ?? process.env['DATABASE_URL']
 const pgTest = databaseUrl ? test : test.skip
@@ -13,29 +15,34 @@ type FetchInit = RequestInit | undefined
 type StubCall = { url: string; init?: FetchInit }
 type StubHandler = (url: string, init?: FetchInit) => Response | Promise<Response>
 type StubRoute = { match: (url: string) => boolean; handler: StubHandler }
+type StubCreatePayload = { fields?: { labels?: string[]; summary?: string } }
+type StubCommentPayload = { body: AdfDocument }
+type StubComment = { id: string; body: AdfDocument; created: string; updated: string }
 
-function jiraFetchStub(routes: StubRoute[]): {
-  fn: typeof fetch
-  calls: StubCall[]
-} {
-  const calls: StubCall[] = []
-  const fn = (async (input: string | URL | Request, init?: FetchInit) => {
-    const url =
-      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-    calls.push({ url, init })
-    for (const route of routes) {
-      if (route.match(url)) return route.handler(url, init)
-    }
-    return new Response('route not stubbed: ' + url, { status: 500 })
-  }) as unknown as typeof fetch
-  return { fn, calls }
+interface TestEnvironment {
+  KANBAN_STORAGE: string | undefined
+  KANBAN_DATABASE_URL: string | undefined
+  KANBAN_PROVIDER: string | undefined
+  JIRA_BASE_URL: string | undefined
+  JIRA_EMAIL: string | undefined
+  JIRA_API_TOKEN: string | undefined
+  JIRA_PROJECT_KEY: string | undefined
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  })
+function jiraFetchStub(routes: StubRoute[]) {
+  const calls: StubCall[] = []
+  const fn: typeof fetch = Object.assign(
+    async (input: string | URL | Request, init?: FetchInit) => {
+      const url = input instanceof Request ? input.url : String(input)
+      calls.push({ url, init })
+      for (const route of routes) {
+        if (route.match(url)) return route.handler(url, init)
+      }
+      return new Response('route not stubbed: ' + url, { status: 500 })
+    },
+    { preconnect() {} },
+  )
+  return { fn, calls }
 }
 
 const projectFixture = { id: '10000', key: 'ENG', name: 'Engineering' }
@@ -48,7 +55,7 @@ function makeIssue(
     labels: string[]
     updated: string
   }> = {},
-): Record<string, unknown> {
+) {
   return {
     id: overrides.id ?? '10001',
     key: overrides.key ?? 'ENG-1',
@@ -68,17 +75,12 @@ function makeIssue(
   }
 }
 
-function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
+function standardRoutes(opts: { boardCfg?: JiraBoardConfiguration } = {}): StubRoute[] {
   const issues = [makeIssue()]
-  const comments: Record<
-    string,
-    Array<{ id: string; body: unknown; created: string; updated: string }>
-  > = {}
+  const comments: Record<string, StubComment[]> = {}
   const setIssueStatus = (issueKey: string, statusId: string, name: string): void => {
-    const issue = issues.find((candidate) => String(candidate.key) === issueKey) as
-      | { fields?: { status?: { id: string; name: string }; updated?: string } }
-      | undefined
-    if (!issue?.fields?.status) return
+    const issue = issues.find((candidate) => candidate.key === issueKey)
+    if (!issue) return
     issue.fields.status = { id: statusId, name }
     issue.fields.updated = '2026-01-06T00:00:00Z'
   }
@@ -86,7 +88,7 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
     {
       match: (url) => url.includes('/rest/api/3/project/ENG/statuses'),
       handler: () =>
-        jsonResponse([
+        Response.json([
           {
             id: 'cat-1',
             name: 'To Do',
@@ -99,12 +101,12 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
     },
     {
       match: (url) => url.includes('/rest/api/3/project/ENG'),
-      handler: () => jsonResponse(projectFixture),
+      handler: () => Response.json(projectFixture),
     },
     {
       match: (url) => url.includes('/rest/agile/1.0/board/'),
       handler: () =>
-        jsonResponse(
+        Response.json(
           opts.boardCfg ?? {
             id: 1006,
             name: 'ENG Board',
@@ -116,22 +118,21 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
     },
     {
       match: (url) => url.includes('/rest/api/3/user/assignable/search'),
-      handler: () => jsonResponse([{ accountId: 'a1', displayName: 'Alice', active: true }]),
+      handler: () => Response.json([{ accountId: 'a1', displayName: 'Alice', active: true }]),
     },
     {
       match: (url) => url.includes('/rest/api/3/priority'),
-      handler: () => jsonResponse([{ id: '2', name: 'High' }]),
+      handler: () => Response.json([{ id: '2', name: 'High' }]),
     },
     {
       match: (url) => url.includes('/rest/api/3/issuetype/project'),
-      handler: () => jsonResponse([{ id: '10000', name: 'Task' }]),
+      handler: () => Response.json([{ id: '10000', name: 'Task' }]),
     },
     {
       match: (url) => url.endsWith('/rest/api/3/issue'),
       handler: async (_url, init) => {
-        const body = JSON.parse(String(init?.body ?? '{}')) as {
-          fields?: { labels?: string[]; summary?: string }
-        }
+        // SAFETY: JiraClient serializes the issue fields; this stub reads only summary and labels.
+        const body = JSON.parse(String(init?.body ?? '{}')) as StubCreatePayload
         const issue = makeIssue({
           id: '10002',
           key: 'ENG-2',
@@ -140,9 +141,9 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
           updated: '2026-01-03T00:00:00Z',
         })
         issues.push(issue)
-        return jsonResponse(
+        return Response.json(
           { id: '10002', key: 'ENG-2', self: 'https://example/rest/api/3/issue/10002' },
-          201,
+          { status: 201 },
         )
       },
     },
@@ -151,9 +152,9 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
       match: (url) => /\/rest\/api\/3\/issue\/ENG-\d+$/.test(new URL(url).pathname),
       handler: (url) => {
         const issueKey = new URL(url).pathname.match(/\/issue\/(ENG-\d+)$/)![1]!
-        const issue = issues.find((candidate) => String(candidate.key) === issueKey)
-        if (!issue) return jsonResponse({ errorMessages: ['missing'] }, 404)
-        return jsonResponse(issue)
+        const issue = issues.find((candidate) => candidate.key === issueKey)
+        if (!issue) return Response.json({ errorMessages: ['missing'] }, { status: 404 })
+        return Response.json(issue)
       },
     },
     {
@@ -161,7 +162,8 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
       handler: async (url, init) => {
         const issueKey = new URL(url).pathname.match(/\/issue\/(ENG-\d+)\/comment/)![1]!
         if (init?.method === 'POST') {
-          const body = JSON.parse(String(init.body ?? '{}')) as { body?: unknown }
+          // SAFETY: The provider serializes plainTextToAdf's document as the comment request body.
+          const body = JSON.parse(String(init.body ?? '{}')) as StubCommentPayload
           const row = {
             id: `comment-${(comments[issueKey]?.length ?? 0) + 1}`,
             body: body.body,
@@ -169,9 +171,9 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
             updated: '2026-01-04T00:00:00Z',
           }
           comments[issueKey] = [...(comments[issueKey] ?? []), row]
-          return jsonResponse(row, 201)
+          return Response.json(row, { status: 201 })
         }
-        return jsonResponse({
+        return Response.json({
           startAt: 0,
           maxResults: 100,
           total: comments[issueKey]?.length ?? 0,
@@ -188,13 +190,14 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
         )!
         const rows = comments[issueKey!] ?? []
         const existing = rows.find((row) => row.id === commentId)
-        if (!existing) return jsonResponse({ errorMessages: ['missing'] }, 404)
+        if (!existing) return Response.json({ errorMessages: ['missing'] }, { status: 404 })
         if (init?.method === 'PUT') {
-          const body = JSON.parse(String(init.body ?? '{}')) as { body?: unknown }
+          // SAFETY: The provider serializes plainTextToAdf's document as the comment request body.
+          const body = JSON.parse(String(init.body ?? '{}')) as StubCommentPayload
           existing.body = body.body
           existing.updated = '2026-01-05T00:00:00Z'
         }
-        return jsonResponse(existing)
+        return Response.json(existing)
       },
     },
     {
@@ -205,7 +208,7 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
           setIssueStatus(issueKey, '20', 'Done')
           return new Response(null, { status: 204 })
         }
-        return jsonResponse({
+        return Response.json({
           transitions: [{ id: 'move-done', name: 'Done', to: { id: '20', name: 'Done' } }],
         })
       },
@@ -213,7 +216,7 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
     {
       match: (url) => /\/rest\/api\/3\/issue\/[^/]+\/changelog/.test(url),
       handler: () =>
-        jsonResponse({
+        Response.json({
           startAt: 0,
           maxResults: 100,
           total: 0,
@@ -224,7 +227,7 @@ function standardRoutes(opts: { boardCfg?: unknown } = {}): StubRoute[] {
     {
       match: (url) => url.includes('/rest/api/3/search/jql'),
       handler: () =>
-        jsonResponse({
+        Response.json({
           startAt: 0,
           maxResults: 100,
           total: issues.length,
@@ -238,11 +241,12 @@ function expectOk<T>(result: Awaited<ReturnType<typeof run>>): T {
   expect(result.exitCode).toBe(0)
   expect(result.output.ok).toBe(true)
   if (!result.output.ok) throw new Error('expected successful CLI output')
+  // SAFETY: Callers select T from the command's response contract and assert its task/comment fields.
   return result.output.data as T
 }
 
 describe('postgres jira provider', () => {
-  let previousEnv: Record<string, string | undefined>
+  let previousEnv: TestEnvironment
   let previousFetch: typeof fetch
   let sql: postgres.Sql | null = null
 
@@ -352,9 +356,8 @@ describe('postgres jira provider', () => {
       (call) => call.init?.method === 'POST' && call.url.endsWith('/rest/api/3/issue'),
     )
     expect(postCall).toBeDefined()
-    const body = JSON.parse(String(postCall?.init?.body ?? '{}')) as {
-      fields?: Record<string, unknown>
-    }
+    // SAFETY: This is the captured JiraClient issue-create request; the assertion checks its labels.
+    const body = JSON.parse(String(postCall?.init?.body ?? '{}')) as StubCreatePayload
     expect(body.fields?.labels).toEqual(['garage-smoke', 'garage-owner-local'])
   })
 
@@ -421,7 +424,7 @@ describe('postgres jira provider', () => {
         list: [
           { id: '2', name: 'High' },
           { id: '3', name: 'Medium' },
-        ] as Array<{ id: string; name: string }>,
+        ],
       }
       const routes = standardRoutes()
       const pIdx = routes.findIndex((route) =>
@@ -429,7 +432,7 @@ describe('postgres jira provider', () => {
       )
       routes[pIdx] = {
         match: (url) => url.includes('/rest/api/3/priority'),
-        handler: () => jsonResponse(prioritiesState.list),
+        handler: () => Response.json(prioritiesState.list),
       }
       globalThis.fetch = jiraFetchStub(routes).fn
       // pollingSyncIntervalMs: 0 lets every getBoard run; the first is a full
@@ -480,6 +483,8 @@ describe('postgres jira provider', () => {
       cache.replacePriorities(
         [
           { id: '2', name: 'Highest' },
+          // SAFETY: Deliberately violate NOT NULL to prove the entire priority batch rolls back.
+          // oxlint-disable-next-line anti-slop/no-chained-type-assertions
           { id: 'broken', name: null as unknown as string },
         ],
         true,
@@ -525,9 +530,9 @@ describe('postgres jira provider', () => {
   })
 
   pgTest('concurrent catalog refreshes do not collide on a primary key', async () => {
-    if (!sql) throw new Error('expected postgres test connection')
+    if (!sql || !databaseUrl) throw new Error('expected postgres test connection')
     globalThis.fetch = jiraFetchStub(standardRoutes()).fn
-    const sql2 = postgres(databaseUrl as string, { max: 1, onnotice: () => {} })
+    const sql2 = postgres(databaseUrl, { max: 1, onnotice: () => {} })
     try {
       const config = {
         baseUrl: 'https://example.atlassian.net',
@@ -575,13 +580,13 @@ describe('postgres jira provider', () => {
           ? // Later full reconcile: the cursor stalls after returning only ENG-1,
             // so ENG-2's page is never reached. isLast=false + a repeated token =>
             // incomplete.
-            jsonResponse({
+            Response.json({
               nextPageToken: 'stuck',
               isLast: false,
               issues: [makeIssue({ id: '1', key: 'ENG-1' })],
             })
           : // First full reconcile: a clean single terminal page with both issues.
-            jsonResponse({
+            Response.json({
               isLast: true,
               issues: [makeIssue({ id: '1', key: 'ENG-1' }), makeIssue({ id: '2', key: 'ENG-2' })],
             }),

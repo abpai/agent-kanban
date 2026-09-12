@@ -1,7 +1,5 @@
-import type { Sql } from 'postgres'
-
 import type { WebhookAcceptedEvent } from './api'
-import { extractWebhookMeta, recordWebhookEvent } from './webhook-events'
+import { extractWebhookMeta, recordWebhookEvent, type WebhookEventSql } from './webhook-events'
 
 export interface WebhookForwardConfig {
   readonly url: string
@@ -31,7 +29,7 @@ const FORWARD_TIMEOUT_MS = 10_000
  */
 export function buildWebhookForwardHook(
   config: WebhookForwardConfig,
-  sql: Sql | undefined,
+  sql: WebhookEventSql | undefined,
   fetchImpl: WebhookForwardFetch = fetch,
 ): (event: WebhookAcceptedEvent) => void {
   return (event) => {
@@ -41,7 +39,7 @@ export function buildWebhookForwardHook(
 
 async function forwardWebhookDelivery(
   config: WebhookForwardConfig,
-  sql: Sql | undefined,
+  sql: WebhookEventSql | undefined,
   fetchImpl: WebhookForwardFetch,
   event: WebhookAcceptedEvent,
 ): Promise<void> {
@@ -69,7 +67,7 @@ async function forwardWebhookDelivery(
 }
 
 async function recordForwardOutcome(
-  sql: Sql | undefined,
+  sql: WebhookEventSql | undefined,
   event: WebhookAcceptedEvent,
   detail: { forward: 'succeeded' } | { forward: 'failed'; error: string },
 ): Promise<void> {

@@ -114,7 +114,7 @@ export function migrateSchema(db: Database): void {
     .all()
   if (tables.length === 0) return
 
-  const columns = db.query('PRAGMA table_info(tasks)').all() as { name: string }[]
+  const columns = db.query<{ name: string }, []>('PRAGMA table_info(tasks)').all()
   const hasProject = columns.some((c) => c.name === 'project')
   if (!hasProject) {
     db.run("ALTER TABLE tasks ADD COLUMN project TEXT NOT NULL DEFAULT ''")
@@ -131,9 +131,8 @@ export function migrateSchema(db: Database): void {
 }
 
 export function seedDefaultColumns(db: Database, columnNames?: string[]): void {
-  const existing = db.query('SELECT COUNT(*) as count FROM columns').get() as {
-    count: number
-  }
+  // Aggregate queries without GROUP BY always return one row, including empty tables.
+  const existing = db.query<{ count: number }, []>('SELECT COUNT(*) as count FROM columns').get()!
   if (existing.count > 0) return
   const names = columnNames?.length ? columnNames : DEFAULT_COLUMN_NAMES
   const stmt = db.prepare('INSERT INTO columns (id, name, position) VALUES ($id, $name, $position)')
@@ -144,11 +143,14 @@ export function seedDefaultColumns(db: Database, columnNames?: string[]): void {
 
 export function isInitialized(db: Database): boolean {
   const table = db
-    .query("SELECT COUNT(*) as count FROM sqlite_master WHERE type='table' AND name='columns'")
-    .get() as { count: number }
+    .query<
+      { count: number },
+      []
+    >("SELECT COUNT(*) as count FROM sqlite_master WHERE type='table' AND name='columns'")
+    .get()!
   if (table.count === 0) return false
 
-  const rows = db.query('SELECT COUNT(*) as count FROM columns').get() as { count: number }
+  const rows = db.query<{ count: number }, []>('SELECT COUNT(*) as count FROM columns').get()!
   return rows.count > 0
 }
 
@@ -156,12 +158,12 @@ export function isInitialized(db: Database): boolean {
 
 export function resolveColumn(db: Database, idOrName: string): Column {
   const byId = db
-    .query('SELECT * FROM columns WHERE id = $id')
-    .get({ $id: idOrName }) as Column | null
+    .query<Column, { $id: string }>('SELECT * FROM columns WHERE id = $id')
+    .get({ $id: idOrName })
   if (byId) return byId
   const byName = db
-    .query('SELECT * FROM columns WHERE LOWER(name) = LOWER($name)')
-    .get({ $name: idOrName }) as Column | null
+    .query<Column, { $name: string }>('SELECT * FROM columns WHERE LOWER(name) = LOWER($name)')
+    .get({ $name: idOrName })
   if (byName) return byName
   throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, `No column matching '${idOrName}'`)
 }
@@ -173,18 +175,19 @@ export function resolveColumn(db: Database, idOrName: string): Column {
 // upstream by being passed in as the explicit column.)
 function resolveDefaultColumn(db: Database): Column {
   const backlog = db
-    .query("SELECT * FROM columns WHERE LOWER(name) = 'backlog' ORDER BY position LIMIT 1")
-    .get() as Column | null
+    .query<
+      Column,
+      []
+    >("SELECT * FROM columns WHERE LOWER(name) = 'backlog' ORDER BY position LIMIT 1")
+    .get()
   if (backlog) return backlog
-  const first = db
-    .query('SELECT * FROM columns ORDER BY position, name LIMIT 1')
-    .get() as Column | null
+  const first = db.query<Column, []>('SELECT * FROM columns ORDER BY position, name LIMIT 1').get()
   if (first) return first
   throw new KanbanError(ErrorCode.COLUMN_NOT_FOUND, 'No columns are configured')
 }
 
 export function listColumns(db: Database): Column[] {
-  return db.query('SELECT * FROM columns ORDER BY position').all() as Column[]
+  return db.query<Column, []>('SELECT * FROM columns ORDER BY position').all()
 }
 
 export function addColumn(
@@ -202,11 +205,9 @@ export function addColumn(
   const id = generateId('c')
   const position =
     opts.position ??
-    (
-      db.query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM columns').get() as {
-        next: number
-      }
-    ).next
+    db
+      .query<{ next: number }, []>('SELECT COALESCE(MAX(position), -1) + 1 as next FROM columns')
+      .get()!.next
 
   db.query('UPDATE columns SET position = position + 1 WHERE position >= $pos').run({
     $pos: position,
@@ -265,9 +266,12 @@ export function reorderColumn(db: Database, idOrName: string, newPosition: numbe
 
 export function deleteColumn(db: Database, idOrName: string): Column {
   const col = resolveColumn(db, idOrName)
-  const taskCount = db.query('SELECT COUNT(*) as count FROM tasks WHERE column_id = $id').get({
-    $id: col.id,
-  }) as { count: number }
+  const taskCount = db
+    .query<
+      { count: number },
+      { $id: string }
+    >('SELECT COUNT(*) as count FROM tasks WHERE column_id = $id')
+    .get({ $id: col.id })!
   if (taskCount.count > 0) {
     throw new KanbanError(
       ErrorCode.COLUMN_NOT_EMPTY,
@@ -280,7 +284,7 @@ export function deleteColumn(db: Database, idOrName: string): Column {
 }
 
 function renumberColumns(db: Database): void {
-  const cols = db.query('SELECT id FROM columns ORDER BY position').all() as { id: string }[]
+  const cols = db.query<{ id: string }, []>('SELECT id FROM columns ORDER BY position').all()
   const stmt = db.prepare('UPDATE columns SET position = $pos WHERE id = $id')
   cols.forEach(({ id }, i) => stmt.run({ $pos: i, $id: id }))
 }
@@ -320,8 +324,11 @@ export function addTask(
   const id = generateId('t')
   const labels = normalizeLabels(opts.labels)
   const maxPos = db
-    .query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
-    .get({ $col: column.id }) as { next: number }
+    .query<
+      { next: number },
+      { $col: string }
+    >('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
+    .get({ $col: column.id })!
 
   db.transaction(() => {
     db.query(
@@ -347,11 +354,11 @@ export function addTask(
 
 export function getTask(db: Database, id: string): TaskWithColumn {
   const task = db
-    .query(
+    .query<TaskWithColumn, { $id: string }>(
       `SELECT t.*, c.name as column_name FROM tasks t
        JOIN columns c ON t.column_id = c.id WHERE t.id = $id`,
     )
-    .get({ $id: id }) as TaskWithColumn | null
+    .get({ $id: id })
   if (!task) {
     throw new KanbanError(ErrorCode.TASK_NOT_FOUND, `No task with id '${id}'`)
   }
@@ -370,7 +377,7 @@ export function listTasks(
   } = {},
 ): TaskWithColumn[] {
   const conditions: string[] = []
-  const params: Record<string, string | number> = {}
+  const params: Record<string, string> = {}
 
   if (opts.column) {
     const col = resolveColumn(db, opts.column)
@@ -392,25 +399,38 @@ export function listTasks(
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
-  const sortMap: Record<string, string> = {
-    priority:
+  const sortMap = new Map([
+    [
+      'priority',
       "CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END",
-    created: 't.created_at',
-    updated: 't.updated_at',
-    position: 't.position',
-    title: 't.title',
-  }
-  const orderBy = sortMap[opts.sort ?? 'position'] ?? 't.position'
+    ],
+    ['created', 't.created_at'],
+    ['updated', 't.updated_at'],
+    ['position', 't.position'],
+    ['title', 't.title'],
+  ])
+  const orderBy = sortMap.get(opts.sort ?? 'position') ?? 't.position'
   const limitClause = opts.limit ? `LIMIT ${opts.limit}` : ''
 
   return db
-    .query(
+    .query<TaskWithColumn, typeof params>(
       `SELECT t.*, c.name as column_name FROM tasks t
        JOIN columns c ON t.column_id = c.id
        ${where} ORDER BY ${orderBy} ${limitClause}`,
     )
-    .all(params as Record<string, string>)
-    .map((task) => hydrateTask(task as TaskWithColumn))
+    .all(params)
+    .map(hydrateTask)
+}
+
+type TaskUpdateBindings = {
+  $id: string
+  $title?: string
+  $desc?: string
+  $pri?: Priority
+  $assignee?: string
+  $project?: string
+  $labels?: string
+  $meta?: string
 }
 
 export function updateTask(
@@ -443,7 +463,7 @@ export function updateTask(
   }
 
   const sets: string[] = ["updated_at = datetime('now')", 'revision = revision + 1']
-  const params: Record<string, string> = { $id: id }
+  const params: TaskUpdateBindings = { $id: id }
   const nextLabels = updates.labels !== undefined ? normalizeLabels(updates.labels) : undefined
 
   if (updates.title !== undefined) {
@@ -509,17 +529,13 @@ export function updateTask(
         new_value: JSON.stringify(nextLabels),
       })
     }
-    const fieldsToLog: Array<{ key: keyof typeof updates; field: string }> = [
-      { key: 'title', field: 'title' },
-      { key: 'description', field: 'description' },
-      { key: 'metadata', field: 'metadata' },
-    ]
-    for (const { key, field } of fieldsToLog) {
-      if (updates[key] !== undefined && updates[key] !== existing[key as keyof TaskWithColumn]) {
+    const fieldsToLog = ['title', 'description', 'metadata'] as const
+    for (const field of fieldsToLog) {
+      if (updates[field] !== undefined && updates[field] !== existing[field]) {
         logActivity(db, id, 'updated', {
           field,
-          old_value: String(existing[key as keyof TaskWithColumn] ?? ''),
-          new_value: String(updates[key]),
+          old_value: String(existing[field] ?? ''),
+          new_value: String(updates[field]),
         })
       }
     }
@@ -541,7 +557,7 @@ export function deleteTask(db: Database, id: string): TaskWithColumn {
 
 export function getComment(db: Database, taskId: string, commentId: string): TaskComment {
   const row = db
-    .query(
+    .query<TaskComment, { $id: string; $task_id: string }>(
       `SELECT id, task_id, body, author, created_at, updated_at
          FROM comments
         WHERE id = $id AND task_id = $task_id`,
@@ -549,7 +565,7 @@ export function getComment(db: Database, taskId: string, commentId: string): Tas
     .get({
       $id: commentId,
       $task_id: taskId,
-    }) as TaskComment | null
+    })
   if (!row) {
     throw new KanbanError(
       ErrorCode.COMMENT_NOT_FOUND,
@@ -562,26 +578,32 @@ export function getComment(db: Database, taskId: string, commentId: string): Tas
 export function listComments(db: Database, taskId: string): TaskComment[] {
   getTask(db, taskId)
   return db
-    .query(
+    .query<TaskComment, { $task_id: string }>(
       `SELECT id, task_id, body, author, created_at, updated_at
          FROM comments
         WHERE task_id = $task_id
         ORDER BY created_at ASC, rowid ASC`,
     )
-    .all({ $task_id: taskId }) as TaskComment[]
+    .all({ $task_id: taskId })
 }
 
 export function countComments(db: Database, taskId: string): number {
   const row = db
-    .query('SELECT COUNT(*) as count FROM comments WHERE task_id = $task_id')
-    .get({ $task_id: taskId }) as { count: number }
+    .query<
+      { count: number },
+      { $task_id: string }
+    >('SELECT COUNT(*) as count FROM comments WHERE task_id = $task_id')
+    .get({ $task_id: taskId })!
   return row.count
 }
 
 export function countCommentsByTask(db: Database): Map<string, number> {
   const rows = db
-    .query('SELECT task_id, COUNT(*) as count FROM comments GROUP BY task_id')
-    .all() as Array<{ task_id: string; count: number }>
+    .query<
+      { task_id: string; count: number },
+      []
+    >('SELECT task_id, COUNT(*) as count FROM comments GROUP BY task_id')
+    .all()
   return new Map(rows.map((row) => [row.task_id, row.count]))
 }
 
@@ -647,8 +669,11 @@ export function moveTask(db: Database, id: string, columnIdOrName: string): Task
   if (column.id === task.column_id) return task
 
   const maxPos = db
-    .query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
-    .get({ $col: column.id }) as { next: number }
+    .query<
+      { next: number },
+      { $col: string }
+    >('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
+    .get({ $col: column.id })!
 
   const oldColumnId = task.column_id
   db.transaction(() => {
@@ -671,8 +696,11 @@ export function moveTask(db: Database, id: string, columnIdOrName: string): Task
 
 function renumberTasksInColumn(db: Database, columnId: string): void {
   const tasks = db
-    .query('SELECT id FROM tasks WHERE column_id = $col ORDER BY position')
-    .all({ $col: columnId }) as { id: string }[]
+    .query<
+      { id: string },
+      { $col: string }
+    >('SELECT id FROM tasks WHERE column_id = $col ORDER BY position')
+    .all({ $col: columnId })
   const stmt = db.prepare('UPDATE tasks SET position = $pos WHERE id = $id')
   tasks.forEach(({ id }, i) => stmt.run({ $pos: i, $id: id }))
 }
@@ -685,9 +713,12 @@ export function getBoardView(db: Database): BoardView {
     columns: columns.map((col) => ({
       ...col,
       tasks: db
-        .query('SELECT * FROM tasks WHERE column_id = $col ORDER BY position')
+        .query<
+          Task,
+          { $col: string }
+        >('SELECT * FROM tasks WHERE column_id = $col ORDER BY position')
         .all({ $col: col.id })
-        .map((task) => hydrateTask(task as Task)),
+        .map(hydrateTask),
     })),
   }
 }
@@ -700,22 +731,24 @@ function hydrateTask<T extends { labels?: unknown }>(
 
 // --- Bulk ---
 
-export function bulkMoveAll(
-  db: Database,
-  fromIdOrName: string,
-  toIdOrName: string,
-): { moved: number } {
+export function bulkMoveAll(db: Database, fromIdOrName: string, toIdOrName: string) {
   const fromCol = resolveColumn(db, fromIdOrName)
   const toCol = resolveColumn(db, toIdOrName)
   if (fromCol.id === toCol.id) return { moved: 0 }
 
   const maxPos = db
-    .query('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
-    .get({ $col: toCol.id }) as { next: number }
+    .query<
+      { next: number },
+      { $col: string }
+    >('SELECT COALESCE(MAX(position), -1) + 1 as next FROM tasks WHERE column_id = $col')
+    .get({ $col: toCol.id })!
 
   const tasks = db
-    .query('SELECT id FROM tasks WHERE column_id = $col ORDER BY position')
-    .all({ $col: fromCol.id }) as { id: string }[]
+    .query<
+      { id: string },
+      { $col: string }
+    >('SELECT id FROM tasks WHERE column_id = $col ORDER BY position')
+    .all({ $col: fromCol.id })
 
   const stmt = db.prepare(
     "UPDATE tasks SET column_id = $toCol, position = $pos, updated_at = datetime('now'), revision = revision + 1 WHERE id = $id",
@@ -737,16 +770,21 @@ export function bulkMoveAll(
   return { moved: tasks.length }
 }
 
-export function bulkClearDone(db: Database): { deleted: number } {
-  const doneCol = db.query("SELECT id, name FROM columns WHERE LOWER(name) = 'done'").get() as {
-    id: string
-    name: string
-  } | null
+export function bulkClearDone(db: Database) {
+  const doneCol = db
+    .query<
+      { id: string; name: string },
+      []
+    >("SELECT id, name FROM columns WHERE LOWER(name) = 'done'")
+    .get()
   if (!doneCol) return { deleted: 0 }
 
   const tasks = db
-    .query('SELECT id, title FROM tasks WHERE column_id = $col')
-    .all({ $col: doneCol.id }) as { id: string; title: string }[]
+    .query<
+      { id: string; title: string },
+      { $col: string }
+    >('SELECT id, title FROM tasks WHERE column_id = $col')
+    .all({ $col: doneCol.id })
   db.transaction(() => {
     for (const task of tasks) {
       exitColumn(db, task.id, doneCol.id)

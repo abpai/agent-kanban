@@ -138,20 +138,20 @@ export class PostgresLinearCache implements LinearCachePort {
     await this.sql.begin(async (tx) => {
       for (const key of keys) {
         if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
-        const value = meta[key]
-        if (value === null) {
-          await tx`DELETE FROM linear_sync_meta WHERE key = ${key}`
-          continue
-        }
         if (key === 'team') {
-          await tx`
-            INSERT INTO linear_sync_meta (key, value)
-            VALUES (${key}, ${JSON.stringify(value)})
-            ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
-          `
+          if (meta.team === null) await tx`DELETE FROM linear_sync_meta WHERE key = ${key}`
+          else {
+            await tx`
+              INSERT INTO linear_sync_meta (key, value)
+              VALUES (${key}, ${JSON.stringify(meta.team)})
+              ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+            `
+          }
           continue
         }
-        if (typeof value === 'string') {
+        const value = meta[key]
+        if (value === null) await tx`DELETE FROM linear_sync_meta WHERE key = ${key}`
+        else if (value !== undefined) {
           await tx`
             INSERT INTO linear_sync_meta (key, value)
             VALUES (${key}, ${value})

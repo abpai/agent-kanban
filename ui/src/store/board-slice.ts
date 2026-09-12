@@ -22,10 +22,6 @@ import type {
 import type { AppState } from '../store'
 import { defaultCapabilities } from './capabilities'
 
-function getErrorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback
-}
-
 interface PendingConflict {
   taskId: string
   attemptedUpdates: {
@@ -114,7 +110,7 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
         error: null,
       })
     } catch (err) {
-      set({ error: getErrorMessage(err, 'Failed to fetch board') })
+      set({ error: err instanceof Error ? err.message : 'Failed to fetch board' })
     }
   },
 
@@ -209,7 +205,7 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
       await api.deleteTask(id)
     } catch (err) {
       if (snapshot) set({ board: snapshot, selectedTaskId: found ? id : null })
-      set({ error: getErrorMessage(err, 'Failed to delete task') })
+      set({ error: err instanceof Error ? err.message : 'Failed to delete task' })
       throw err
     }
   },

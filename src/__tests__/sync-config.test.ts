@@ -1,5 +1,6 @@
+import { assertKanbanError } from './helpers/errors'
 import { describe, expect, test } from 'bun:test'
-import { ErrorCode, KanbanError } from '../errors'
+import { ErrorCode } from '../errors'
 import {
   DEFAULT_POLLING_SYNC_INTERVAL_MS,
   MIN_POLLING_SYNC_INTERVAL_MS,
@@ -37,9 +38,9 @@ describe('sync config', () => {
       } catch (caught) {
         err = caught
       }
-      expect(err).toBeInstanceOf(KanbanError)
-      expect((err as KanbanError).code).toBe(ErrorCode.INVALID_CONFIG)
-      expect((err as Error).message).toContain(String(MIN_POLLING_SYNC_INTERVAL_MS))
+      assertKanbanError(err)
+      expect(err.code).toBe(ErrorCode.INVALID_CONFIG)
+      expect(err.message).toContain(String(MIN_POLLING_SYNC_INTERVAL_MS))
     }
   })
 })

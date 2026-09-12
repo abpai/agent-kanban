@@ -12,7 +12,7 @@ There are really two shipped entry points now:
 
 ## What is shipped
 
-The shipped MCP layer has two pieces:
+The shipped MCP layer has three pieces:
 
 - `createTrackerCore(...)`: provider-backed handlers plus host-owned policy and
   observability hooks
@@ -29,6 +29,53 @@ The current default tool set is:
 - `postComment`
 - `updateComment`
 - `moveTicket`
+
+## Protocol revisions
+
+Both entry points support MCP **2026-07-28** through the stable TypeScript SDK
+2.0.0. HTTP uses the SDK's `createMcpHandler`; stdio uses `serveStdio`. These
+serving entries explicitly enable the 2026 protocol and also accept 2025-era
+clients from the same tool definitions.
+
+Modern HTTP requests carry their protocol revision and client metadata on each
+request. They can discover and call tools without an `initialize` handshake,
+and the server does not issue an `Mcp-Session-Id`. Authentication still runs on
+every HTTP request, including discovery. Only the host's auth resolver supplies
+the policy scope; client metadata never grants access.
+
+Older HTTP clients can continue using the 2025 handshake and tools through the
+SDK's stateless compatibility path. HTTP session operations (`GET`/`DELETE`
+with a session id) are no longer supported. Stdio selects a protocol era when
+the connection opens and retains it for that connection.
+
+SDK v2 clients must explicitly opt into modern negotiation. For a known
+2026-capable server:
+
+```ts
+import { Client } from '@modelcontextprotocol/client'
+
+const client = new Client(
+  { name: 'tracker-client', version: '1.0.0' },
+  { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+)
+```
+
+Use `mode: 'auto'` when a client needs to discover support and fall back to the
+2025 protocol. Leaving `versionNegotiation` unset retains the legacy handshake.
+See the SDK's [protocol versions guide](https://ts.sdk.modelcontextprotocol.io/v2/protocol-versions)
+and [2026 migration guide](https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28).
+
+### Major-version migration
+
+- Policy denials now use JSON-RPC code **`-32012`**, replacing `-32002`, which
+  SDK v2 reserves for its legacy resource-not-found handling. The stable
+  `error.data.trackerMcpCode` remains `policy_denied`; policy hooks and public
+  denial messages are unchanged.
+- Hosts should remove assumptions about HTTP session ids. The six tool names,
+  arguments, and `structuredContent.result` envelope are unchanged.
+- `kanban mcp` keeps its provider open until the stdio connection closes and
+  accepted tool calls finish. This also fixes the earlier premature database
+  close after startup.
 
 ## Quick start
 

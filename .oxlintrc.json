@@ -18,7 +18,8 @@
     "ui/dist/**",
     "coverage/**",
     ".npm-cache/**",
-    "legacy/**"
+    "legacy/**",
+    "tools/oxlint/anti-slop/**"
   ],
   "rules": {
     "constructor-super": "error",
@@ -89,6 +90,33 @@
       {
         "allow": ["warn", "error", "info"]
       }
+    ],
+    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-unknown-parameters": "error",
+    "anti-slop/no-unknown-returns": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-widen-then-assert": "error",
+    "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "anti-slop/no-conditional-empty-object-spread": "warn",
+    "anti-slop/no-module-mocking": "warn",
+    "anti-slop/no-shape-in-symbol-names": "warn",
+    "anti-slop/no-runtime-typeof": [
+      "warn",
+      {
+        "allowInTypeGuards": true
+      }
+    ],
+    "eslint/complexity": [
+      "warn",
+      {
+        "max": 22,
+        "variant": "modified"
+      }
     ]
   },
   "overrides": [
@@ -147,5 +175,11 @@
     "KeyboardEvent": "readonly",
     "RequestInit": "readonly",
     "React": "readonly"
-  }
+  },
+  "jsPlugins": [
+    {
+      "name": "anti-slop",
+      "specifier": "./tools/oxlint/anti-slop/index.ts"
+    }
+  ]
 }

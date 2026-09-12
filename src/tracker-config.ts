@@ -15,11 +15,11 @@ export const DEFAULT_COLUMN_NAMES = ['recurring', 'backlog', 'in-progress', 'rev
  * webhook-capable provider from silently slipping past the tunnel-security gate
  * (assertTunnelSecurity) with no secret enforced.
  */
-export const WEBHOOK_SECRET_ENV: Record<TrackerProvider, string | null> = {
+export const WEBHOOK_SECRET_ENV = {
   local: null,
   linear: 'LINEAR_WEBHOOK_SECRET',
   jira: 'JIRA_WEBHOOK_SECRET',
-}
+} satisfies Record<TrackerProvider, string | null>
 
 /**
  * Normalize the raw `KANBAN_PROVIDER` env value to a known `TrackerProvider`,
@@ -35,6 +35,7 @@ export function trackerProviderFromEnv(
   // only, so inherited names like "constructor"/"toString" don't match — and
   // fall back to local otherwise. Deriving from the map keeps this normalizer in
   // lockstep with it, so a newly-added provider is picked up here automatically.
+  // SAFETY: The own-key check below admits exactly the exhaustive TrackerProvider map keys.
   return Object.prototype.hasOwnProperty.call(WEBHOOK_SECRET_ENV, raw)
     ? (raw as TrackerProvider)
     : 'local'

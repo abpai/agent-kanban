@@ -55,10 +55,11 @@ describe('webhookSecretFromEnv', () => {
   // env name through WEBHOOK_SECRET_ENV. These tests pin that they read the SAME env
   // name, so the gate and enforcement can't drift into a fail-open.
   test('reads exactly the env name WEBHOOK_SECRET_ENV declares for each provider', () => {
-    for (const [provider, envName] of Object.entries(WEBHOOK_SECRET_ENV)) {
+    for (const provider of ['local', 'jira', 'linear'] satisfies TrackerProvider[]) {
+      const envName = WEBHOOK_SECRET_ENV[provider]
       if (envName === null) continue
       const secret = `secret-for-${envName}`
-      expect(webhookSecretFromEnv(provider as TrackerProvider, { [envName]: secret })).toBe(secret)
+      expect(webhookSecretFromEnv(provider, { [envName]: secret })).toBe(secret)
     }
   })
 

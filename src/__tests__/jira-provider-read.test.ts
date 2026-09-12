@@ -1,8 +1,19 @@
+import { assertKanbanError } from './helpers/errors'
+import { mockFetch } from './helpers/fetch'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { ErrorCode, KanbanError } from '../errors'
-import { JiraClient } from '../providers/jira-client'
+import { ErrorCode } from '../errors'
+import {
+  JiraClient,
+  type JiraBoardConfiguration,
+  type JiraIssue,
+  type JiraIssueType,
+  type JiraPriority,
+  type JiraProjectStatusCategory,
+  type JiraUser,
+} from '../providers/jira-client'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
+import type { AdfDocument } from '../providers/jira-adf'
 import { resetWarnOnce } from '../providers/warn-once'
 import {
   getCachedColumns,
@@ -19,28 +30,17 @@ type StubCall = { url: string; init?: FetchInit }
 type StubHandler = (url: string, init?: FetchInit) => Response | Promise<Response>
 type StubRoute = { match: (url: string) => boolean; handler: StubHandler }
 
-function jiraFetchStub(routes: StubRoute[]): {
-  fn: typeof fetch
-  calls: StubCall[]
-} {
+function jiraFetchStub(routes: StubRoute[]) {
   const calls: StubCall[] = []
-  const fn = (async (input: string | URL | Request, init?: FetchInit) => {
-    const url =
-      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+  const fn = mockFetch(async (input: string | URL | Request, init?: FetchInit) => {
+    const url = input instanceof Request ? input.url : input.toString()
     calls.push({ url, init })
     for (const r of routes) {
       if (r.match(url)) return r.handler(url, init)
     }
     return new Response('route not stubbed: ' + url, { status: 500 })
-  }) as unknown as typeof fetch
-  return { fn, calls }
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
   })
+  return { fn, calls }
 }
 
 const baseConfig: JiraProviderConfig = {
@@ -68,8 +68,8 @@ function makeIssue(opts: {
   updated?: string
   summary?: string
   assignee?: { accountId: string; displayName: string } | null
-  description?: unknown
-}): Record<string, unknown> {
+  description?: JiraIssue['fields']['description']
+}): JiraIssue {
   return {
     id: opts.id,
     key: opts.key,
@@ -108,45 +108,45 @@ const statusCategoriesFixture = [
 ]
 
 function standardRoutes(opts: {
-  boardCfg?: unknown
-  statuses?: unknown
-  users?: unknown
-  priorities?: unknown
-  issueTypes?: unknown
+  boardCfg?: JiraBoardConfiguration
+  statuses?: JiraProjectStatusCategory[]
+  users?: JiraUser[]
+  priorities?: JiraPriority[]
+  issueTypes?: JiraIssueType[]
   changelogHandler?: StubHandler
   searchHandler?: StubHandler
 }): StubRoute[] {
   return [
     {
       match: (u) => u.includes('/rest/api/3/project/ENG/statuses'),
-      handler: () => jsonResponse(opts.statuses ?? statusCategoriesFixture),
+      handler: () => Response.json(opts.statuses ?? statusCategoriesFixture),
     },
     {
       match: (u) => u.includes('/rest/api/3/project/ENG'),
-      handler: () => jsonResponse(projectFixture),
+      handler: () => Response.json(projectFixture),
     },
     {
       match: (u) => u.includes('/rest/agile/1.0/board/'),
-      handler: () => jsonResponse(opts.boardCfg ?? boardConfigFixture),
+      handler: () => Response.json(opts.boardCfg ?? boardConfigFixture),
     },
     {
       match: (u) => u.includes('/rest/api/3/user/assignable/search'),
-      handler: () => jsonResponse(opts.users ?? usersFixture),
+      handler: () => Response.json(opts.users ?? usersFixture),
     },
     {
       match: (u) => u.includes('/rest/api/3/priority'),
-      handler: () => jsonResponse(opts.priorities ?? prioritiesFixture),
+      handler: () => Response.json(opts.priorities ?? prioritiesFixture),
     },
     {
       match: (u) => u.includes('/rest/api/3/issuetype/project'),
-      handler: () => jsonResponse(opts.issueTypes ?? issueTypesFixture),
+      handler: () => Response.json(opts.issueTypes ?? issueTypesFixture),
     },
     {
       match: (u) => /\/rest\/api\/3\/issue\/[^/]+\/changelog/.test(u),
       handler:
         opts.changelogHandler ??
         (() =>
-          jsonResponse({
+          Response.json({
             startAt: 0,
             maxResults: 100,
             total: 0,
@@ -159,7 +159,7 @@ function standardRoutes(opts: {
       handler:
         opts.searchHandler ??
         (() =>
-          jsonResponse({
+          Response.json({
             startAt: 0,
             maxResults: 100,
             total: 0,
@@ -185,11 +185,7 @@ afterEach(() => {
   Date.now = originalDateNow
 })
 
-function makeProvider(routes: StubRoute[]): {
-  provider: JiraProvider
-  calls: StubCall[]
-  config: JiraProviderConfig
-} {
+function makeProvider(routes: StubRoute[]) {
   const { fn, calls } = jiraFetchStub(routes)
   globalThis.fetch = fn
   const client = new JiraClient({
@@ -201,13 +197,7 @@ function makeProvider(routes: StubRoute[]): {
   return { provider, calls, config: baseConfig }
 }
 
-function makeProviderWithBoard(
-  routes: StubRoute[],
-  boardId: number,
-): {
-  provider: JiraProvider
-  calls: StubCall[]
-} {
+function makeProviderWithBoard(routes: StubRoute[], boardId: number) {
   const { fn, calls } = jiraFetchStub(routes)
   globalThis.fetch = fn
   const cfg = { ...baseConfig, boardId }
@@ -235,7 +225,7 @@ describe('JiraProvider read path', () => {
     const { provider } = makeProviderWithBoard(
       standardRoutes({
         searchHandler: () =>
-          jsonResponse({
+          Response.json({
             startAt: 0,
             maxResults: 100,
             total: 1,
@@ -321,7 +311,7 @@ describe('JiraProvider read path', () => {
       capturedJql.push(jql)
       const startAt = Number(parsed.searchParams.get('startAt') ?? '0')
       if (startAt === 0 && capturedJql.length === 1) {
-        return jsonResponse({
+        return Response.json({
           startAt: 0,
           maxResults: 100,
           total: 1,
@@ -335,7 +325,7 @@ describe('JiraProvider read path', () => {
           ],
         })
       }
-      return jsonResponse({ startAt: 0, maxResults: 100, total: 0, issues: [] })
+      return Response.json({ startAt: 0, maxResults: 100, total: 0, issues: [] })
     }
     const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
     await provider.getBoard()
@@ -362,19 +352,19 @@ describe('JiraProvider read path', () => {
       const token = new URL(url).searchParams.get('nextPageToken')
       requestedTokens.push(token)
       if (token === null) {
-        return jsonResponse({
+        return Response.json({
           nextPageToken: 'page-2',
           isLast: false,
           issues: [makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' })],
         })
       }
       if (token === 'page-2') {
-        return jsonResponse({
+        return Response.json({
           isLast: true,
           issues: [makeIssue({ id: '2', key: 'ENG-2', statusId: '10002' })],
         })
       }
-      return jsonResponse({ isLast: true, issues: [] })
+      return Response.json({ isLast: true, issues: [] })
     }
     const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
     await provider.getBoard()
@@ -395,9 +385,9 @@ describe('JiraProvider read path', () => {
     const searchHandler: StubHandler = (url) => {
       const token = new URL(url).searchParams.get('nextPageToken')
       if (token === null) {
-        return jsonResponse({ nextPageToken: 'page-2', isLast: false, issues: [] })
+        return Response.json({ nextPageToken: 'page-2', isLast: false, issues: [] })
       }
-      return jsonResponse({
+      return Response.json({
         isLast: true,
         issues: [makeIssue({ id: '2', key: 'ENG-2', statusId: '10002' })],
       })
@@ -414,7 +404,7 @@ describe('JiraProvider read path', () => {
     let call = 0
     const searchHandler: StubHandler = () => {
       call += 1
-      return jsonResponse({
+      return Response.json({
         nextPageToken: 'stuck',
         isLast: false,
         issues: [makeIssue({ id: String(call), key: `ENG-${call}`, statusId: '10001' })],
@@ -440,7 +430,7 @@ describe('JiraProvider read path', () => {
       capturedJql.push(jql)
       searchCalls += 1
       if (searchCalls === 1) {
-        return jsonResponse({
+        return Response.json({
           startAt: 0,
           maxResults: 100,
           total: 2,
@@ -461,9 +451,9 @@ describe('JiraProvider read path', () => {
         })
       }
       if (searchCalls === 2) {
-        return jsonResponse({ startAt: 0, maxResults: 100, total: 0, issues: [] })
+        return Response.json({ startAt: 0, maxResults: 100, total: 0, issues: [] })
       }
-      return jsonResponse({
+      return Response.json({
         startAt: 0,
         maxResults: 100,
         total: 1,
@@ -508,7 +498,7 @@ describe('JiraProvider read path', () => {
     const searchHandler: StubHandler = () => {
       if (!stalled) {
         // First full reconcile: a clean single terminal page with both issues.
-        return jsonResponse({
+        return Response.json({
           isLast: true,
           issues: [
             makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' }),
@@ -518,7 +508,7 @@ describe('JiraProvider read path', () => {
       }
       // Later full reconcile: the cursor stalls after returning only ENG-1, so
       // ENG-2's page is never reached.
-      return jsonResponse({
+      return Response.json({
         nextPageToken: 'stuck',
         isLast: false,
         issues: [makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' })],
@@ -555,7 +545,7 @@ describe('JiraProvider read path', () => {
     let degraded = false
     const searchHandler: StubHandler = () => {
       if (!degraded) {
-        return jsonResponse({
+        return Response.json({
           isLast: true,
           issues: [
             makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' }),
@@ -563,7 +553,7 @@ describe('JiraProvider read path', () => {
           ],
         })
       }
-      return jsonResponse({
+      return Response.json({
         isLast: false,
         issues: [makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' })],
       })
@@ -650,7 +640,7 @@ describe('JiraProvider read path', () => {
 
   test('getTask accepts both id and key', async () => {
     const searchHandler: StubHandler = () =>
-      jsonResponse({
+      Response.json({
         startAt: 0,
         maxResults: 100,
         total: 1,
@@ -671,7 +661,7 @@ describe('JiraProvider read path', () => {
     // `Repo: https://github.com/abpai/garage-band` in the description, Jira
     // auto-converts the URL to an inlineCard, and the previous
     // adfToPlainText silently dropped attrs.url.
-    const description = {
+    const description: AdfDocument = {
       version: 1,
       type: 'doc',
       content: [
@@ -690,7 +680,7 @@ describe('JiraProvider read path', () => {
       ],
     }
     const searchHandler: StubHandler = () =>
-      jsonResponse({
+      Response.json({
         startAt: 0,
         maxResults: 100,
         total: 1,
@@ -808,8 +798,8 @@ describe('JiraProvider read path', () => {
       await provider.listTasks({ column: 'Bogus' })
       throw new Error('should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(KanbanError)
-      expect((err as KanbanError).code).toBe(ErrorCode.COLUMN_NOT_FOUND)
+      assertKanbanError(err)
+      expect(err.code).toBe(ErrorCode.COLUMN_NOT_FOUND)
     }
   })
 
@@ -837,19 +827,19 @@ describe('JiraProvider read path', () => {
       const token = new URL(url).searchParams.get('nextPageToken')
       searchCalls.push({ token })
       if (token === null) {
-        return jsonResponse({
+        return Response.json({
           nextPageToken: 'page-2',
           isLast: false,
           issues: page1Issues,
         })
       }
       if (token === 'page-2') {
-        return jsonResponse({
+        return Response.json({
           isLast: true,
           issues: page2Issues,
         })
       }
-      return jsonResponse({ isLast: true, issues: [] })
+      return Response.json({ isLast: true, issues: [] })
     }
     const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
     await provider.getBoard()
@@ -868,7 +858,7 @@ describe('JiraProvider read path', () => {
         updated: '2026-01-02T00:00:00Z',
       }),
     )
-    const searchHandler: StubHandler = () => jsonResponse({ isLast: true, issues })
+    const searchHandler: StubHandler = () => Response.json({ isLast: true, issues })
     let calls = 0
     let inFlight = 0
     let maxInFlight = 0
@@ -878,7 +868,7 @@ describe('JiraProvider read path', () => {
       maxInFlight = Math.max(maxInFlight, inFlight)
       await new Promise((resolve) => setTimeout(resolve, 5))
       inFlight -= 1
-      return jsonResponse({
+      return Response.json({
         startAt: 0,
         maxResults: 100,
         total: 0,
@@ -958,10 +948,7 @@ describe('JiraProvider read path', () => {
     expect(calls.some((c) => c.url.includes('/rest/api/3/search/jql'))).toBe(true)
   })
 
-  function captureUnmappedWarnings(): {
-    messages: string[]
-    restore: () => void
-  } {
+  function captureUnmappedWarnings() {
     const all: string[] = []
     const origWarn = console.warn
     console.warn = (...args: unknown[]) => {
@@ -980,7 +967,7 @@ describe('JiraProvider read path', () => {
   test('warns when an issue status maps to no board column and keeps it off the board', async () => {
     // Board maps statuses 10001/10002 to 'Done'; 10003 is on no column.
     const searchHandler: StubHandler = () =>
-      jsonResponse({
+      Response.json({
         startAt: 0,
         maxResults: 100,
         total: 1,
@@ -1004,7 +991,7 @@ describe('JiraProvider read path', () => {
   test('warns when an issue status is absent from the status-fallback catalog', async () => {
     // Status-fallback columns come from statuses 10001/10002/10003; 10099 is absent.
     const searchHandler: StubHandler = () =>
-      jsonResponse({
+      Response.json({
         startAt: 0,
         maxResults: 100,
         total: 1,
@@ -1024,7 +1011,7 @@ describe('JiraProvider read path', () => {
 
   test('unmapped-status warning fires once across repeated syncs', async () => {
     const searchHandler: StubHandler = () =>
-      jsonResponse({
+      Response.json({
         startAt: 0,
         maxResults: 100,
         total: 1,

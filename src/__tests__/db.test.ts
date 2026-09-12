@@ -122,8 +122,8 @@ describe('schema', () => {
 
     migrateSchema(legacy)
 
-    const columns = legacy.query('PRAGMA table_info(tasks)').all() as { name: string }[]
-    const indexes = legacy.query('PRAGMA index_list(tasks)').all() as { name: string }[]
+    const columns = legacy.query<{ name: string }, []>('PRAGMA table_info(tasks)').all()
+    const indexes = legacy.query<{ name: string }, []>('PRAGMA index_list(tasks)').all()
 
     expect(columns.some((c) => c.name === 'project')).toBe(true)
     expect(columns.some((c) => c.name === 'labels')).toBe(true)
@@ -239,6 +239,7 @@ describe('tasks', () => {
   })
 
   test('addTask validates priority', () => {
+    // SAFETY: intentionally violate Priority to verify runtime rejection of malformed input.
     expect(() => addTask(db, 'Bad', { priority: 'critical' as 'high' })).toThrow(KanbanError)
   })
 
@@ -374,11 +375,12 @@ describe('resetBoard', () => {
 
 describe('comment atomicity', () => {
   const countActivity = (taskId: string): number =>
-    (
-      db
-        .query('SELECT COUNT(*) AS count FROM activity_log WHERE task_id = $task_id')
-        .get({ $task_id: taskId }) as { count: number }
-    ).count
+    db
+      .query<
+        { count: number },
+        { $task_id: string }
+      >('SELECT COUNT(*) AS count FROM activity_log WHERE task_id = $task_id')
+      .get({ $task_id: taskId })!.count
 
   test('addComment writes the comment and its activity entry together', () => {
     const task = addTask(db, 'Has comments')

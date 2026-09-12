@@ -312,15 +312,18 @@ class PostgresLocalStore implements LocalStorePort {
       : this.sql`TRUE`
 
     // Whitelisted ORDER BY fragments; the sort key never reaches SQL as data.
-    const orderByMap: Record<string, ReturnType<typeof this.sql>> = {
-      priority: this
-        .sql`CASE tasks.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END`,
-      created: this.sql`tasks.created_at`,
-      updated: this.sql`tasks.updated_at`,
-      position: this.sql`tasks.position`,
-      title: this.sql`tasks.title`,
-    }
-    const orderBy = orderByMap[filters.sort ?? 'position'] ?? orderByMap['position']!
+    const orderByMap = new Map([
+      [
+        'priority',
+        this
+          .sql`CASE tasks.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END`,
+      ],
+      ['created', this.sql`tasks.created_at`],
+      ['updated', this.sql`tasks.updated_at`],
+      ['position', this.sql`tasks.position`],
+      ['title', this.sql`tasks.title`],
+    ])
+    const orderBy = orderByMap.get(filters.sort ?? 'position') ?? this.sql`tasks.position`
     const limit = filters.limit ? this.sql`LIMIT ${filters.limit}` : this.sql``
 
     const rows = await this.sql<Array<TaskRow & { comment_count: string | number }>>`

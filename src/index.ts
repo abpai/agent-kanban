@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { parseArgs } from 'node:util'
+import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { Database } from 'bun:sqlite'
 import { KanbanError, ErrorCode } from './errors'
 import { formatOutput, error, success } from './output'
@@ -15,6 +15,7 @@ import { unsupportedOperation } from './providers/errors'
 import { openKanbanRuntime } from './provider-runtime'
 import { WEBHOOK_SECRET_ENV, trackerConfigFromEnv, trackerProviderFromEnv } from './tracker-config'
 import type { KanbanProvider } from './providers/types'
+import type { StartServerOptions } from './server'
 import { MIN_POLLING_SYNC_INTERVAL_MS } from './sync-config'
 import { normalizeCreateTaskInput } from './use-cases'
 import {
@@ -31,42 +32,59 @@ export {
   type WebhookForwardFetch,
 }
 
-interface ParsedArgs {
-  values: Record<string, unknown>
-  positionals: string[]
-}
-
-function parseCliArgs(argv: string[]): ParsedArgs {
+function parseCommandArgs<const T extends ParseArgsConfig>(config: T) {
   try {
-    return parseArgs({
-      args: argv,
-      options: {
-        pretty: { type: 'boolean', default: false },
-        db: { type: 'string' },
-        help: { type: 'boolean', short: 'h', default: false },
-        d: { type: 'string' },
-        c: { type: 'string' },
-        p: { type: 'string' },
-        a: { type: 'string' },
-        m: { type: 'string' },
-        l: { type: 'string' },
-        label: { type: 'string', multiple: true },
-        labels: { type: 'string', multiple: true },
-        sort: { type: 'string' },
-        title: { type: 'string' },
-        position: { type: 'string' },
-        color: { type: 'string' },
-        project: { type: 'string' },
-        role: { type: 'string' },
-      },
-      strict: true,
-      allowPositionals: true,
-    })
+    return parseArgs(config)
   } catch (err) {
     throw new KanbanError(
       ErrorCode.INVALID_ARGUMENT,
       err instanceof Error ? err.message : String(err),
     )
+  }
+}
+
+function parseCliArgs(argv: string[]) {
+  return parseCommandArgs({
+    args: argv,
+    options: {
+      pretty: { type: 'boolean', default: false },
+      db: { type: 'string' },
+      help: { type: 'boolean', short: 'h', default: false },
+      d: { type: 'string' },
+      c: { type: 'string' },
+      p: { type: 'string' },
+      a: { type: 'string' },
+      m: { type: 'string' },
+      l: { type: 'string' },
+      label: { type: 'string', multiple: true },
+      labels: { type: 'string', multiple: true },
+      sort: { type: 'string' },
+      title: { type: 'string' },
+      position: { type: 'string' },
+      color: { type: 'string' },
+      project: { type: 'string' },
+      role: { type: 'string' },
+    },
+    strict: true,
+    allowPositionals: true,
+  })
+}
+
+type CliValues = ReturnType<typeof parseCliArgs>['values']
+
+function parsePriority(value: string | undefined): Priority | undefined {
+  switch (value) {
+    case undefined:
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'urgent':
+      return value
+    default:
+      throw new KanbanError(
+        ErrorCode.INVALID_PRIORITY,
+        `Invalid priority '${value}'. Must be low, medium, high, or urgent.`,
+      )
   }
 }
 
@@ -87,7 +105,7 @@ async function routeTask(
   provider: KanbanProvider,
   action: string | undefined,
   positionals: string[],
-  values: Record<string, unknown>,
+  values: CliValues,
 ): Promise<CliOutput> {
   switch (action) {
     case 'add': {
@@ -97,13 +115,13 @@ async function routeTask(
         await provider.createTask(
           normalizeCreateTaskInput({
             title,
-            description: values.d as string | undefined,
-            column: values.c as string | undefined,
-            priority: values.p as Priority | undefined,
-            assignee: values.a as string | undefined,
-            project: values.project as string | undefined,
+            description: values.d,
+            column: values.c,
+            priority: parsePriority(values.p),
+            assignee: values.a,
+            project: values.project,
             labels: [values.label, values.labels],
-            metadata: values.m as string | undefined,
+            metadata: values.m,
           }),
         ),
       )
@@ -111,12 +129,12 @@ async function routeTask(
     case 'list':
       return success(
         await provider.listTasks({
-          column: values.c as string | undefined,
-          priority: values.p as string | undefined,
-          assignee: values.a as string | undefined,
-          project: values.project as string | undefined,
-          limit: parsePositiveInt(values.l as string | undefined),
-          sort: values.sort as string | undefined,
+          column: values.c,
+          priority: values.p,
+          assignee: values.a,
+          project: values.project,
+          limit: parsePositiveInt(values.l),
+          sort: values.sort,
         }),
       )
     case 'view': {
@@ -129,12 +147,12 @@ async function routeTask(
       if (!id) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task ID is required')
       return success(
         await provider.updateTask(id, {
-          title: values.title as string | undefined,
-          description: values.d as string | undefined,
-          priority: values.p as Priority | undefined,
-          assignee: values.a as string | undefined,
-          project: values.project as string | undefined,
-          metadata: values.m as string | undefined,
+          title: values.title,
+          description: values.d,
+          priority: parsePriority(values.p),
+          assignee: values.a,
+          project: values.project,
+          metadata: values.m,
         }),
       )
     }
@@ -171,7 +189,7 @@ async function routeTask(
           'Usage: kanban task prioritize <id> <level>',
         )
       }
-      return success(await provider.updateTask(id, { priority: priority as Priority }))
+      return success(await provider.updateTask(id, { priority: parsePriority(priority) }))
     }
     default:
       throw new KanbanError(ErrorCode.UNKNOWN_COMMAND, `Unknown task command '${action}'`)
@@ -222,15 +240,15 @@ function routeColumn(
   capabilities: ProviderCapabilities,
   action: string | undefined,
   positionals: string[],
-  values: Record<string, unknown>,
+  values: CliValues,
 ): CliOutput {
   requireCapability(capabilities, 'columnCrud', 'Column commands')
   switch (action) {
     case 'add':
       return columnAdd(db, {
         name: positionals[2],
-        position: values.position as string | undefined,
-        color: values.color as string | undefined,
+        position: values.position,
+        color: values.color,
       })
     case 'list':
       return columnList(db)
@@ -268,7 +286,7 @@ async function routeConfig(
   dbPath: string,
   action: string | undefined,
   positionals: string[],
-  values: Record<string, unknown>,
+  values: CliValues,
 ): Promise<CliOutput> {
   if (action === 'show' || action === undefined) {
     return success(await provider.getConfig())
@@ -282,8 +300,7 @@ async function routeConfig(
     case 'set-member': {
       const name = positionals[2]
       if (!name) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Member name is required')
-      const role =
-        (values.role as string | undefined) === 'agent' ? ('agent' as const) : ('human' as const)
+      const role = values.role === 'agent' ? 'agent' : 'human'
       const existing = config.members.findIndex((member) => member.name === name)
       if (existing >= 0) {
         config.members[existing] = { name, role }
@@ -354,7 +371,7 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
 
   const actionRequiresExplicitInit = positionals[0] === 'board' && positionals[1] === 'init'
   const runtime = await openKanbanRuntime({
-    dbPath: (values.db as string | undefined) ?? getDbPath(),
+    dbPath: values.db ?? getDbPath(),
     seedLocalColumns: actionRequiresExplicitInit ? false : undefined,
   })
 
@@ -481,47 +498,35 @@ export interface ServeOptions {
 }
 
 export function parseServeArgs(argv: string[]): ServeOptions {
-  let values: Record<string, unknown>
-  try {
-    values = parseArgs({
-      args: argv,
-      options: {
-        db: { type: 'string' },
-        port: { type: 'string' },
-        'sync-interval-ms': { type: 'string' },
-        tunnel: { type: 'boolean', default: false },
-        token: { type: 'string' },
-        'allowed-origin': { type: 'string' },
-      },
-      strict: true,
-      allowPositionals: true,
-    }).values
-  } catch (err) {
-    throw new KanbanError(
-      ErrorCode.INVALID_ARGUMENT,
-      err instanceof Error ? err.message : String(err),
-    )
-  }
+  const { values } = parseCommandArgs({
+    args: argv,
+    options: {
+      db: { type: 'string' },
+      port: { type: 'string' },
+      'sync-interval-ms': { type: 'string' },
+      tunnel: { type: 'boolean', default: false },
+      token: { type: 'string' },
+      'allowed-origin': { type: 'string' },
+    },
+    strict: true,
+    allowPositionals: true,
+  })
   // Use `!== undefined` (not truthiness) so an explicit empty `--port=` is
   // validated and rejected rather than silently falling back to the default.
   const port =
     values.port !== undefined
-      ? parsePort(values.port as string, '--port')
+      ? parsePort(values.port, '--port')
       : parsePort(process.env['PORT'] || '3000', 'PORT')
   // Flags win over env so a one-off `--token` can override the ambient config.
-  const authToken = (values.token as string | undefined) || process.env['KANBAN_API_TOKEN']
-  const allowedOrigin =
-    (values['allowed-origin'] as string | undefined) || process.env['KANBAN_ALLOWED_ORIGIN']
-  return {
-    db: values.db as string | undefined,
-    port,
-    ...(values['sync-interval-ms'] !== undefined
-      ? { syncIntervalMs: parseSyncIntervalMs(values['sync-interval-ms'] as string) }
-      : {}),
-    tunnel: Boolean(values.tunnel),
-    ...(authToken ? { authToken } : {}),
-    ...(allowedOrigin ? { allowedOrigin } : {}),
+  const authToken = values.token || process.env['KANBAN_API_TOKEN']
+  const allowedOrigin = values['allowed-origin'] || process.env['KANBAN_ALLOWED_ORIGIN']
+  const options: ServeOptions = { db: values.db, port, tunnel: values.tunnel }
+  if (values['sync-interval-ms'] !== undefined) {
+    options.syncIntervalMs = parseSyncIntervalMs(values['sync-interval-ms'])
   }
+  if (authToken) options.authToken = authToken
+  if (allowedOrigin) options.allowedOrigin = allowedOrigin
+  return options
 }
 
 // Strict digits-only CLI contract via the shared parseBoundedInt (rejects
@@ -585,21 +590,13 @@ export interface McpOptions {
 }
 
 export function parseMcpArgs(argv: string[]): McpOptions {
-  let values: Record<string, unknown>
-  try {
-    values = parseArgs({
-      args: argv,
-      options: { db: { type: 'string' } },
-      strict: true,
-      allowPositionals: true,
-    }).values
-  } catch (err) {
-    throw new KanbanError(
-      ErrorCode.INVALID_ARGUMENT,
-      err instanceof Error ? err.message : String(err),
-    )
-  }
-  return { db: values.db as string | undefined }
+  const { values } = parseCommandArgs({
+    args: argv,
+    options: { db: { type: 'string' } },
+    strict: true,
+    allowPositionals: true,
+  })
+  return { db: values.db }
 }
 
 // Bad serve/mcp flags should print the same structured error envelope as the
@@ -642,27 +639,27 @@ if (import.meta.main) {
       process.exit(1)
     }
 
-    const runtime = await openKanbanRuntime({
+    const runtimeOptions: NonNullable<Parameters<typeof openKanbanRuntime>[0]> = {
       dbPath: opts.db ?? getDbPath(),
-      ...(opts.syncIntervalMs !== undefined
-        ? {
-            tracker: {
-              ...trackerConfigFromEnv(process.env),
-              syncIntervalMs: opts.syncIntervalMs,
-            },
-          }
-        : {}),
-    })
+    }
+    if (opts.syncIntervalMs !== undefined) {
+      runtimeOptions.tracker = {
+        ...trackerConfigFromEnv(process.env),
+        syncIntervalMs: opts.syncIntervalMs,
+      }
+    }
+    const runtime = await openKanbanRuntime(runtimeOptions)
     const { startServer } = await import('./server')
     const forwardConfig = resolveWebhookForwardConfig(process.env)
-    const server = startServer(runtime.provider, opts.port, {
+    const serverOptions: StartServerOptions = {
       syncIntervalMs: runtime.syncIntervalMs,
-      ...(opts.authToken ? { authToken: opts.authToken } : {}),
-      ...(opts.allowedOrigin ? { allowedOrigin: opts.allowedOrigin } : {}),
-      ...(forwardConfig
-        ? { onWebhookAccepted: buildWebhookForwardHook(forwardConfig, runtime.sql) }
-        : {}),
-    })
+    }
+    if (opts.authToken) serverOptions.authToken = opts.authToken
+    if (opts.allowedOrigin) serverOptions.allowedOrigin = opts.allowedOrigin
+    if (forwardConfig) {
+      serverOptions.onWebhookAccepted = buildWebhookForwardHook(forwardConfig, runtime.sql)
+    }
+    const server = startServer(runtime.provider, opts.port, serverOptions)
 
     let tunnelHandle: { stop: () => void } | null = null
     if (opts.tunnel) {

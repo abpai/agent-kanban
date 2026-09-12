@@ -19,7 +19,7 @@ import {
   type WebhookRequest,
   type WebhookResult,
 } from '../webhooks'
-import { adfToPlainText, plainTextToAdf, type AdfDocument } from './jira-adf'
+import { adfToPlainText, plainTextToAdf } from './jira-adf'
 import { buildDeltaJql, safeDeltaSince } from './jira-jql'
 import { JIRA_CAPABILITIES } from './capabilities'
 import { providerUpstreamError, unsupportedOperation } from './errors'
@@ -65,11 +65,26 @@ function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boo
 // priorities; the write path looks up the resolved name (case-insensitive)
 // in the cached `jira_priorities` table, so renames that preserve the default
 // casing still resolve.
-const CANONICAL_TO_JIRA_DEFAULT: Record<Priority, string> = {
+const CANONICAL_TO_JIRA_DEFAULT = {
   urgent: 'Highest',
   high: 'High',
   medium: 'Medium',
   low: 'Low',
+} satisfies Record<Priority, string>
+
+interface JiraWebhookBody {
+  webhookEvent?: string
+  issue?: JiraIssue
+}
+
+type JiraTaskFields = {
+  project?: { key: string }
+  summary?: string
+  issuetype?: { id: string }
+  description?: ReturnType<typeof plainTextToAdf>
+  priority?: { name: string }
+  assignee?: { accountId: string } | null
+  labels?: string[]
 }
 
 export interface JiraProviderConfig {
@@ -174,9 +189,7 @@ function toCacheIssue(
     id: issue.id,
     key: issue.key,
     summary: issue.fields.summary,
-    descriptionText: issue.fields.description
-      ? adfToPlainText(issue.fields.description as AdfDocument)
-      : '',
+    descriptionText: adfToPlainText(issue.fields.description),
     statusId: issue.fields.status.id,
     priorityName: issue.fields.priority?.name ?? null,
     issueTypeName: issue.fields.issuetype?.name ?? '',
@@ -250,34 +263,7 @@ export class JiraProviderCore implements KanbanProvider {
     // status_ids; a status id present on an issue but in no column is cached but
     // invisible to every listTasks({column}). Track the mapped set so we can
     // surface such unmapped statuses below instead of dropping them silently.
-    const mappedStatusIds = new Set<string>()
-    if (this.config.boardId !== undefined) {
-      const boardCfg = await this.client.getBoardColumns(this.config.boardId)
-      const boardId = this.config.boardId
-      const rows = jiraBoardColumnRows(boardId, boardCfg.columnConfig.columns)
-      for (const row of rows) for (const id of row.statusIds) mappedStatusIds.add(id)
-      await this.cache.replaceColumns(rows, fullReconcile)
-    } else {
-      const statusCats = await this.client.getProjectStatuses(project.key)
-      const seen = new Set<string>()
-      const uniqueStatuses: Array<{ id: string; name: string }> = []
-      for (const cat of statusCats) {
-        for (const s of cat.statuses) {
-          if (seen.has(s.id)) continue
-          seen.add(s.id)
-          uniqueStatuses.push({ id: s.id, name: s.name })
-        }
-      }
-      const rows = uniqueStatuses.map((s, i) => ({
-        id: `status:${s.id}`,
-        name: s.name,
-        position: i,
-        statusIds: [s.id],
-        source: 'status' as const,
-      }))
-      for (const row of rows) for (const id of row.statusIds) mappedStatusIds.add(id)
-      await this.cache.replaceColumns(rows, fullReconcile)
-    }
+    const mappedStatusIds = await this.syncColumns(project.key, fullReconcile)
     // Issue statuses seen this sync that map to no column (statusId → name).
     const unmappedStatuses = new Map<string, string>()
 
@@ -436,6 +422,33 @@ export class JiraProviderCore implements KanbanProvider {
       nextMeta.lastFullSyncAt = nextMeta.lastSyncAt
     }
     await this.cache.saveSyncMeta(nextMeta)
+  }
+
+  private async syncColumns(projectKey: string, prune: boolean): Promise<Set<string>> {
+    let rows: Parameters<JiraCachePort['replaceColumns']>[0]
+    if (this.config.boardId !== undefined) {
+      const boardCfg = await this.client.getBoardColumns(this.config.boardId)
+      rows = jiraBoardColumnRows(this.config.boardId, boardCfg.columnConfig.columns)
+    } else {
+      const statusCats = await this.client.getProjectStatuses(projectKey)
+      const seen = new Set<string>()
+      rows = []
+      for (const category of statusCats) {
+        for (const status of category.statuses) {
+          if (seen.has(status.id)) continue
+          seen.add(status.id)
+          rows.push({
+            id: `status:${status.id}`,
+            name: status.name,
+            position: rows.length,
+            statusIds: [status.id],
+            source: 'status',
+          })
+        }
+      }
+    }
+    await this.cache.replaceColumns(rows, prune)
+    return new Set(rows.flatMap((row) => row.statusIds))
   }
 
   private async resolveColumnId(input: string): Promise<string> {
@@ -604,7 +617,7 @@ export class JiraProviderCore implements KanbanProvider {
     return {
       id: comment.id,
       task_id: task.id,
-      body: comment.body ? adfToPlainText(comment.body as AdfDocument) : '',
+      body: adfToPlainText(comment.body),
       author: comment.author?.displayName ?? null,
       created_at: comment.created ?? timestamp,
       updated_at: timestamp,
@@ -647,7 +660,7 @@ export class JiraProviderCore implements KanbanProvider {
     this.normalizeProjectField(input.project)
     const issueTypeName = this.config.defaultIssueType ?? 'Task'
     const issueTypeId = await this.resolveIssueTypeId(issueTypeName)
-    const fields: Record<string, unknown> = {
+    const fields: JiraTaskFields = {
       project: { key: this.config.projectKey },
       summary: input.title,
       issuetype: { id: issueTypeId },
@@ -686,7 +699,7 @@ export class JiraProviderCore implements KanbanProvider {
       )
     }
     const issueKey = this.issueKeyFor(task)
-    const fields: Record<string, unknown> = {}
+    const fields: JiraTaskFields = {}
     if (input.title !== undefined) fields['summary'] = input.title
     if (input.description !== undefined) {
       fields['description'] = plainTextToAdf(input.description)
@@ -802,7 +815,7 @@ export class JiraProviderCore implements KanbanProvider {
       ? ((await this.cache.resolveIssueId(taskId)) ?? undefined)
       : undefined
     const rows = await this.cache.getCachedActivity({
-      ...(lookupIssueId !== undefined ? { issueId: lookupIssueId } : {}),
+      issueId: lookupIssueId,
       limit: limit ?? 100,
     })
     return Promise.all(rows.map((row) => this.activityRowToEntry(row)))
@@ -908,9 +921,11 @@ export class JiraProviderCore implements KanbanProvider {
       ...result,
       signatureStatus,
     })
-    let body: { webhookEvent?: string; issue?: JiraIssue } = {}
+    let body: JiraWebhookBody
     try {
-      body = JSON.parse(payload.rawBody) as typeof body
+      // SAFETY: This handler consumes Jira's webhook event/issue contract after signature
+      // authorization; unsupported events and issues outside the configured project are rejected below.
+      body = JSON.parse(payload.rawBody) as JiraWebhookBody
     } catch {
       return attachVerdict({ handled: false, message: 'Invalid JSON body' })
     }

@@ -1,7 +1,14 @@
+import { assertKanbanError } from './helpers/errors'
+import { mockFetch } from './helpers/fetch'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { ErrorCode, KanbanError } from '../errors'
-import { JiraClient } from '../providers/jira-client'
+import { ErrorCode } from '../errors'
+import {
+  JiraClient,
+  type JiraCreatePayload,
+  type JiraUpdatePayload,
+  type JiraIssue,
+} from '../providers/jira-client'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
 import {
   initJiraCacheSchema,
@@ -19,27 +26,16 @@ type StubCall = { url: string; method: string; body: string | null }
 type StubHandler = (url: string, init?: FetchInit) => Response | Promise<Response>
 type StubRoute = { match: (url: string, init?: FetchInit) => boolean; handler: StubHandler }
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  })
-}
-
 function emptyResponse(status = 204): Response {
   return new Response(null, { status })
 }
 
-function jiraFetchStub(routes: StubRoute[]): {
-  fn: typeof fetch
-  calls: StubCall[]
-} {
+function jiraFetchStub(routes: StubRoute[]) {
   const calls: StubCall[] = []
-  const fn = (async (input: string | URL | Request, init?: FetchInit) => {
-    const url =
-      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+  const fn = mockFetch(async (input: string | URL | Request, init?: FetchInit) => {
+    const url = input instanceof Request ? input.url : input.toString()
     const method = (init?.method ?? 'GET').toUpperCase()
-    const body = typeof init?.body === 'string' ? init.body : null
+    const body = init?.body == null ? null : await new Response(init.body).text()
     calls.push({ url, method, body })
     for (const r of routes) {
       if (r.match(url, init)) return r.handler(url, init)
@@ -47,7 +43,7 @@ function jiraFetchStub(routes: StubRoute[]): {
     return new Response('route not stubbed: ' + method + ' ' + url, {
       status: 500,
     })
-  }) as unknown as typeof fetch
+  })
   return { fn, calls }
 }
 
@@ -127,11 +123,11 @@ interface SyncRoutesOpts {
   users?: Array<{ accountId: string; displayName: string; active?: boolean }>
   priorities?: Array<{ id: string; name: string }>
   issueTypes?: Array<{ id: string; name: string }>
-  issues?: Array<Record<string, unknown>>
+  issues?: JiraIssue[]
   boardId?: number
 }
 
-function makeJiraIssueFixture(iss: SeedIssue): Record<string, unknown> {
+function makeJiraIssueFixture(iss: SeedIssue): JiraIssue {
   return {
     id: iss.id,
     key: iss.key,
@@ -172,27 +168,27 @@ function standardSyncRoutes(opts: SyncRoutesOpts): StubRoute[] {
   return [
     {
       match: (u) => u.includes(`/rest/api/3/project/${opts.projectKey}/statuses`),
-      handler: () => jsonResponse(statusCategories),
+      handler: () => Response.json(statusCategories),
     },
     {
       match: (u) => u.includes(`/rest/api/3/project/${opts.projectKey}`),
-      handler: () => jsonResponse({ id: '10000', key: opts.projectKey, name: 'Engineering' }),
+      handler: () => Response.json({ id: '10000', key: opts.projectKey, name: 'Engineering' }),
     },
     {
       match: (u) => u.includes('/rest/agile/1.0/board/'),
-      handler: () => jsonResponse(boardCfg),
+      handler: () => Response.json(boardCfg),
     },
     {
       match: (u) => u.includes('/rest/api/3/user/assignable/search'),
-      handler: () => jsonResponse(opts.users ?? []),
+      handler: () => Response.json(opts.users ?? []),
     },
     {
       match: (u) => u.includes('/rest/api/3/priority'),
-      handler: () => jsonResponse(opts.priorities ?? []),
+      handler: () => Response.json(opts.priorities ?? []),
     },
     {
       match: (u) => u.includes('/rest/api/3/issuetype/project'),
-      handler: () => jsonResponse(opts.issueTypes ?? []),
+      handler: () => Response.json(opts.issueTypes ?? []),
     },
     {
       // GET /rest/api/3/issue/{key} backs hydrateIssueByKey's read-after-write.
@@ -203,14 +199,16 @@ function standardSyncRoutes(opts: SyncRoutesOpts): StubRoute[] {
         (init?.method ?? 'GET') === 'GET',
       handler: (u) => {
         const key = new URL(u).pathname.split('/').pop()!
-        const found = (opts.issues ?? []).find((iss) => (iss as { key?: string }).key === key)
-        return found ? jsonResponse(found) : jsonResponse({ errorMessages: ['not found'] }, 404)
+        const found = (opts.issues ?? []).find((iss) => iss.key === key)
+        return found
+          ? Response.json(found)
+          : Response.json({ errorMessages: ['not found'] }, { status: 404 })
       },
     },
     {
       match: (u) => u.includes('/rest/api/3/search/jql'),
       handler: () =>
-        jsonResponse({
+        Response.json({
           startAt: 0,
           maxResults: 100,
           total: (opts.issues ?? []).length,
@@ -220,11 +218,7 @@ function standardSyncRoutes(opts: SyncRoutesOpts): StubRoute[] {
   ]
 }
 
-function makeProvider(
-  db: Database,
-  routes: StubRoute[],
-  config: JiraProviderConfig = baseConfig,
-): { provider: JiraProvider; calls: StubCall[] } {
+function makeProvider(db: Database, routes: StubRoute[], config: JiraProviderConfig = baseConfig) {
   const { fn, calls } = jiraFetchStub(routes)
   globalThis.fetch = fn
   const client = new JiraClient({
@@ -294,7 +288,7 @@ function fullSeed(db: Database): void {
   })
 }
 
-function fullSyncRoutes(extraIssues: Record<string, unknown>[] = []): StubRoute[] {
+function fullSyncRoutes(extraIssues: JiraIssue[] = []): StubRoute[] {
   return standardSyncRoutes({
     projectKey: 'ENG',
     columns: [
@@ -320,7 +314,7 @@ describe('JiraProvider mutations', () => {
       statusId: '20000',
       summary: 'Fix',
     })
-    const issues: Record<string, unknown>[] = [makeJiraIssueFixture(seedIssues[0]!)]
+    const issues: JiraIssue[] = [makeJiraIssueFixture(seedIssues[0]!)]
     const syncRoutes: StubRoute[] = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [
@@ -336,7 +330,7 @@ describe('JiraProvider mutations', () => {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
       handler: () => {
         issues.push(createdIssue)
-        return jsonResponse({
+        return Response.json({
           id: '600',
           key: 'ENG-10',
           self: 'https://example.atlassian.net/rest/api/3/issue/600',
@@ -355,25 +349,17 @@ describe('JiraProvider mutations', () => {
     expect(task.externalRef).toBe('ENG-10')
     const postCall = calls.find((c) => c.method === 'POST' && c.url.endsWith('/rest/api/3/issue'))
     expect(postCall).toBeDefined()
-    const body = JSON.parse(postCall!.body ?? '{}') as {
-      fields: Record<string, unknown>
-    }
+    const body: JiraCreatePayload = JSON.parse(postCall!.body ?? '{}')
     expect(body.fields.summary).toBe('Fix')
-    expect((body.fields.issuetype as { id: string }).id).toBe('10001')
-    expect((body.fields.priority as { name: string }).name).toBe('High')
-    expect((body.fields.assignee as { accountId: string }).accountId).toBe('a-1')
-    expect((body.fields.project as { key: string }).key).toBe('ENG')
+    expect(body).toHaveProperty('fields.issuetype.id', '10001')
+    expect(body).toHaveProperty('fields.priority.name', 'High')
+    expect(body).toHaveProperty('fields.assignee.accountId', 'a-1')
+    expect(body).toHaveProperty('fields.project.key', 'ENG')
     expect(body.fields.labels).toEqual(['garage-smoke', 'garage-owner-local'])
-    const desc = body.fields.description as {
-      version: number
-      type: string
-      content: Array<{ type: string; content?: unknown[] }>
-    }
-    expect(desc.version).toBe(1)
-    expect(desc.type).toBe('doc')
-    expect(desc.content.length).toBeGreaterThan(0)
-    expect(desc.content[0]!.type).toBe('paragraph')
-    expect(desc.content[1]!.type).toBe('bulletList')
+    expect(body).toHaveProperty('fields.description.version', 1)
+    expect(body).toHaveProperty('fields.description.type', 'doc')
+    expect(body).toHaveProperty('fields.description.content.0.type', 'paragraph')
+    expect(body).toHaveProperty('fields.description.content.1.type', 'bulletList')
   })
 
   test('updateTask happy path: summary + description + priority rewritten', async () => {
@@ -394,20 +380,13 @@ describe('JiraProvider mutations', () => {
       (c) => c.method === 'PUT' && c.url.endsWith('/rest/api/3/issue/ENG-1'),
     )
     expect(putCall).toBeDefined()
-    const body = JSON.parse(putCall!.body ?? '{}') as {
-      fields: Record<string, unknown>
-    }
-    expect(Object.keys(body.fields).sort()).toEqual(['description', 'priority', 'summary'].sort())
-    expect(body.fields.summary).toBe('New')
-    expect((body.fields.priority as { name: string }).name).toBe('Highest')
-    const desc = body.fields.description as {
-      version: number
-      type: string
-      content: unknown[]
-    }
-    expect(desc.version).toBe(1)
-    expect(desc.type).toBe('doc')
-    expect(desc.content.length).toBeGreaterThan(0)
+    const body: JiraUpdatePayload = JSON.parse(putCall!.body ?? '{}')
+    expect(Object.keys(body.fields!).sort()).toEqual(['description', 'priority', 'summary'].sort())
+    expect(body).toHaveProperty('fields.summary', 'New')
+    expect(body).toHaveProperty('fields.priority.name', 'Highest')
+    expect(body).toHaveProperty('fields.description.version', 1)
+    expect(body).toHaveProperty('fields.description.type', 'doc')
+    expect(body).toHaveProperty('fields.description.content.0', expect.anything())
   })
 
   test('updateTask clearing assignee with empty string sets fields.assignee to null', async () => {
@@ -424,11 +403,8 @@ describe('JiraProvider mutations', () => {
       (c) => c.method === 'PUT' && c.url.endsWith('/rest/api/3/issue/ENG-1'),
     )
     expect(putCall).toBeDefined()
-    const body = JSON.parse(putCall!.body ?? '{}') as {
-      fields: Record<string, unknown>
-    }
-    expect('assignee' in body.fields).toBe(true)
-    expect(body.fields.assignee).toBeNull()
+    const body: JiraUpdatePayload = JSON.parse(putCall!.body ?? '{}')
+    expect(body).toHaveProperty('fields.assignee', null)
   })
 
   test('updateTask replaces labels exactly when labels is provided', async () => {
@@ -447,10 +423,8 @@ describe('JiraProvider mutations', () => {
       (c) => c.method === 'PUT' && c.url.endsWith('/rest/api/3/issue/ENG-1'),
     )
     expect(putCall).toBeDefined()
-    const body = JSON.parse(putCall!.body ?? '{}') as {
-      fields: Record<string, unknown>
-    }
-    expect(body.fields.labels).toEqual(['garage-smoke', 'garage-owner-local'])
+    const body: JiraUpdatePayload = JSON.parse(putCall!.body ?? '{}')
+    expect(body).toHaveProperty('fields.labels', ['garage-smoke', 'garage-owner-local'])
   })
 
   test('updateTask clears labels when labels is []', async () => {
@@ -467,11 +441,8 @@ describe('JiraProvider mutations', () => {
       (c) => c.method === 'PUT' && c.url.endsWith('/rest/api/3/issue/ENG-1'),
     )
     expect(putCall).toBeDefined()
-    const body = JSON.parse(putCall!.body ?? '{}') as {
-      fields: Record<string, unknown>
-    }
-    expect('labels' in body.fields).toBe(true)
-    expect(body.fields.labels).toEqual([])
+    const body: JiraUpdatePayload = JSON.parse(putCall!.body ?? '{}')
+    expect(body).toHaveProperty('fields.labels', [])
   })
 
   test('updateTask leaves labels untouched when labels is absent', async () => {
@@ -488,11 +459,9 @@ describe('JiraProvider mutations', () => {
       (c) => c.method === 'PUT' && c.url.endsWith('/rest/api/3/issue/ENG-1'),
     )
     expect(putCall).toBeDefined()
-    const body = JSON.parse(putCall!.body ?? '{}') as {
-      fields: Record<string, unknown>
-    }
-    expect('labels' in body.fields).toBe(false)
-    expect(body.fields.summary).toBe('Renamed only')
+    const body: JiraUpdatePayload = JSON.parse(putCall!.body ?? '{}')
+    expect(body).not.toHaveProperty('fields.labels')
+    expect(body).toHaveProperty('fields.summary', 'Renamed only')
   })
 
   test('moveTask resolves a canonical status selector against a board column', async () => {
@@ -510,7 +479,7 @@ describe('JiraProvider mutations', () => {
       match: (u, init) =>
         u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'GET',
       handler: () =>
-        jsonResponse({
+        Response.json({
           transitions: [
             { id: '21', name: 'Done', to: { id: '10001', name: 'Done' } },
             { id: '22', name: 'Reject', to: { id: '30000', name: 'Rejected' } },
@@ -539,9 +508,9 @@ describe('JiraProvider mutations', () => {
     expect(postIdx).toBeGreaterThanOrEqual(0)
     expect(getIdx).toBeLessThan(postIdx)
     const postCall = calls[postIdx]!
-    const body = JSON.parse(postCall.body ?? '{}') as {
+    const body: {
       transition: { id: string }
-    }
+    } = JSON.parse(postCall.body ?? '{}')
     expect(body.transition.id).toBe('21')
   })
 
@@ -564,7 +533,7 @@ describe('JiraProvider mutations', () => {
       match: (u) => /\/rest\/api\/3\/issue\/501\/changelog/.test(new URL(u).pathname),
       handler: () => {
         changelogCalls += 1
-        return jsonResponse({
+        return Response.json({
           values: [
             {
               id: 'h1',
@@ -579,7 +548,7 @@ describe('JiraProvider mutations', () => {
       match: (u, init) =>
         u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'GET',
       handler: () =>
-        jsonResponse({
+        Response.json({
           transitions: [{ id: '21', name: 'Done', to: { id: '10001', name: 'Done' } }],
         }),
     }
@@ -617,7 +586,7 @@ describe('JiraProvider mutations', () => {
       match: (u, init) =>
         u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'GET',
       handler: () =>
-        jsonResponse({
+        Response.json({
           transitions: [{ id: '22', name: 'Reject', to: { id: '30000', name: 'Rejected' } }],
         }),
     }
@@ -626,8 +595,8 @@ describe('JiraProvider mutations', () => {
       await provider.moveTask('ENG-1', 'Done')
       throw new Error('should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(KanbanError)
-      const e = err as KanbanError
+      assertKanbanError(err)
+      const e = err
       expect(e.code).toBe(ErrorCode.PROVIDER_UPSTREAM_ERROR)
       expect(e.message).toContain('ENG-1')
       expect(e.message).toContain('Done')
@@ -649,7 +618,7 @@ describe('JiraProvider mutations', () => {
       match: (u, init) =>
         u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'GET',
       handler: () =>
-        jsonResponse({
+        Response.json({
           transitions: [{ id: '21', name: 'Done', to: { id: '10001', name: 'Done' } }],
         }),
     }
@@ -657,12 +626,12 @@ describe('JiraProvider mutations', () => {
       match: (u, init) =>
         u.endsWith('/rest/api/3/issue/ENG-1/transitions') && (init?.method ?? 'GET') === 'POST',
       handler: () =>
-        jsonResponse(
+        Response.json(
           {
             errorMessages: ['Required field missing'],
             errors: { resolution: 'is required' },
           },
-          400,
+          { status: 400 },
         ),
     }
     const { provider } = makeProvider(db, [transitionsRoute, postTransitionRoute])
@@ -670,8 +639,8 @@ describe('JiraProvider mutations', () => {
       await provider.moveTask('ENG-1', 'Done')
       throw new Error('should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(KanbanError)
-      const e = err as KanbanError
+      assertKanbanError(err)
+      const e = err
       expect(e.code).toBe(ErrorCode.PROVIDER_UPSTREAM_ERROR)
       expect(e.message).toContain('resolution')
       expect(e.message).toContain('is required')
@@ -693,8 +662,8 @@ describe('JiraProvider mutations', () => {
       await provider.createTask({ title: 'x', assignee: 'Bob2' })
       throw new Error('should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(KanbanError)
-      const e = err as KanbanError
+      assertKanbanError(err)
+      const e = err
       expect(e.code).toBe(ErrorCode.PROVIDER_UPSTREAM_ERROR)
       expect(e.message).toContain('Bob2')
     }
@@ -721,8 +690,8 @@ describe('JiraProvider mutations', () => {
       await provider.createTask({ title: 'x', priority: 'high' })
       throw new Error('should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(KanbanError)
-      const e = err as KanbanError
+      assertKanbanError(err)
+      const e = err
       expect(e.code).toBe(ErrorCode.PROVIDER_UPSTREAM_ERROR)
       expect(e.message).toContain('high')
       expect(e.message).toContain('High')
@@ -749,8 +718,8 @@ describe('JiraProvider mutations', () => {
       await provider.createTask({ title: 'x' })
       throw new Error('should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(KanbanError)
-      const e = err as KanbanError
+      assertKanbanError(err)
+      const e = err
       expect(e.code).toBe(ErrorCode.PROVIDER_UPSTREAM_ERROR)
       expect(e.message).toContain('Task')
       expect(e.message).toContain('Bug')
@@ -765,8 +734,8 @@ describe('JiraProvider mutations', () => {
       await provider.createTask({ title: 'x', project: 'OTHER' })
       throw new Error('should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(KanbanError)
-      expect((err as KanbanError).code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
+      assertKanbanError(err)
+      expect(err.code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
     }
   })
 
@@ -778,7 +747,7 @@ describe('JiraProvider mutations', () => {
       statusId: '20000',
       summary: 'x',
     })
-    const issues: Record<string, unknown>[] = [makeJiraIssueFixture(seedIssues[0]!)]
+    const issues: JiraIssue[] = [makeJiraIssueFixture(seedIssues[0]!)]
     const syncRoutes = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [
@@ -794,7 +763,7 @@ describe('JiraProvider mutations', () => {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
       handler: () => {
         issues.push(createdIssue)
-        return jsonResponse({ id: '600', key: 'ENG-10', self: 'x' })
+        return Response.json({ id: '600', key: 'ENG-10', self: 'x' })
       },
     }
     const { provider, calls } = makeProvider(db, [mutationRoute, ...syncRoutes])
@@ -803,9 +772,9 @@ describe('JiraProvider mutations', () => {
       (c) => c.method === 'POST' && c.url.endsWith('/rest/api/3/issue'),
     )
     expect(postCalls).toHaveLength(1)
-    const body = JSON.parse(postCalls[0]!.body ?? '{}') as {
+    const body: {
       fields: { project: { key: string } }
-    }
+    } = JSON.parse(postCalls[0]!.body ?? '{}')
     expect(body.fields.project.key).toBe('ENG')
   })
 
@@ -817,7 +786,7 @@ describe('JiraProvider mutations', () => {
       statusId: '20000',
       summary: 'x',
     })
-    const issues: Record<string, unknown>[] = [makeJiraIssueFixture(seedIssues[0]!)]
+    const issues: JiraIssue[] = [makeJiraIssueFixture(seedIssues[0]!)]
     const syncRoutes = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [
@@ -833,7 +802,7 @@ describe('JiraProvider mutations', () => {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
       handler: () => {
         issues.push(createdIssue)
-        return jsonResponse({ id: '601', key: 'ENG-11', self: 'x' })
+        return Response.json({ id: '601', key: 'ENG-11', self: 'x' })
       },
     }
     const { provider, calls } = makeProvider(db, [mutationRoute, ...syncRoutes])
@@ -842,9 +811,9 @@ describe('JiraProvider mutations', () => {
       (c) => c.method === 'POST' && c.url.endsWith('/rest/api/3/issue'),
     )
     expect(postCalls).toHaveLength(1)
-    const body = JSON.parse(postCalls[0]!.body ?? '{}') as {
+    const body: {
       fields: { project: { key: string } }
-    }
+    } = JSON.parse(postCalls[0]!.body ?? '{}')
     expect(body.fields.project.key).toBe('ENG')
   })
 
@@ -855,8 +824,8 @@ describe('JiraProvider mutations', () => {
       await provider.updateTask('ENG-1', { metadata: '{}' })
       throw new Error('should have thrown')
     } catch (err) {
-      expect(err).toBeInstanceOf(KanbanError)
-      expect((err as KanbanError).code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
+      assertKanbanError(err)
+      expect(err.code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
     }
     expect(calls.some((c) => c.method === 'PUT')).toBe(false)
   })

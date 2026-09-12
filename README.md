@@ -34,7 +34,7 @@ That buys you a few things that are easy to miss at first:
 bun install -g @andypai/agent-kanban
 ```
 
-`agent-kanban` targets the Bun runtime. Install Bun first if it is not already available on your machine.
+`agent-kanban` requires **Bun 1.4.2 or newer**. CI and the Docker image use Bun 1.4.2. Install or upgrade Bun before installing the CLI.
 
 ### Local development
 

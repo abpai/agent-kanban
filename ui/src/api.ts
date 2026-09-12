@@ -1,4 +1,5 @@
 import type { BoardBootstrap, Task, Priority } from './types'
+import type { CliOutput } from '../../src/types'
 import { withBasePath, authHeaders } from './base'
 
 const BASE = withBasePath('/api')
@@ -11,12 +12,6 @@ export class ApiError extends Error {
     super(message)
     this.name = 'ApiError'
   }
-}
-
-interface ApiEnvelope<T> {
-  ok: boolean
-  data?: T
-  error?: { code?: string; message?: string }
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -39,20 +34,24 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   // store keeps its stable error codes (e.g. CONFLICT) instead of seeing a raw
   // SyntaxError.
   const contentType = res.headers.get('content-type') ?? ''
-  let body: ApiEnvelope<T> | undefined
+  let body: CliOutput<T> | undefined
   if (contentType.includes('application/json')) {
     try {
-      body = (await res.json()) as ApiEnvelope<T>
+      // SAFETY: these same-origin routes emit CliOutput with the shared DTOs
+      // requested below. JSON decoding cannot express that route contract;
+      // the envelope check below rejects non-envelope server/proxy responses.
+      body = (await res.json()) as CliOutput<T>
     } catch {
       throw new ApiError('INVALID_RESPONSE', 'Server returned a malformed JSON response')
     }
   }
 
+  // eslint-disable-next-line anti-slop/no-runtime-typeof -- HTTP JSON can violate the shared envelope; reject primitive bodies before field access.
   if (body && typeof body === 'object' && 'ok' in body) {
     if (!body.ok) {
       throw new ApiError(body.error?.code ?? 'UNKNOWN', body.error?.message ?? 'Unknown error')
     }
-    return body.data as T
+    return body.data
   }
 
   if (!res.ok) {

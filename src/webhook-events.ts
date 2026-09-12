@@ -23,10 +23,20 @@
  * ship before any consumer exists.
  */
 
-import type { JSONValue, Sql } from 'postgres'
+import type { JsonObject, JsonValue } from './json'
+
+export interface WebhookEventSql {
+  // oxlint-disable-next-line anti-slop/no-unknown-returns -- Receipt writes ignore the driver-specific result; callers only await completion.
+  (strings: TemplateStringsArray, ...values: (string | null)[]): PromiseLike<unknown>
+}
 
 import type { TrackerProvider } from './tracker-config'
 import type { WebhookRequest, WebhookResult } from './webhooks'
+
+interface WebhookMeta {
+  eventType?: string
+  externalRef?: string
+}
 
 export type WebhookEventStatus = 'accepted' | 'skipped' | 'error'
 
@@ -35,7 +45,7 @@ export interface WebhookEventRecord {
   eventType?: string | undefined
   externalRef?: string | undefined
   status: WebhookEventStatus
-  detail?: Record<string, unknown> | undefined
+  detail?: JsonObject | undefined
 }
 
 /** `KANBAN_WEBHOOK_EVENTS` toggles the receipts table; enabled unless explicitly off. */
@@ -47,7 +57,7 @@ export function webhookEventsEnabled(
 }
 
 /** Idempotent — call from a Postgres provider's schema bootstrap. */
-export async function ensureWebhookEventsSchema(sql: Sql): Promise<void> {
+export async function ensureWebhookEventsSchema(sql: WebhookEventSql): Promise<void> {
   if (!webhookEventsEnabled()) return
   await sql`
     CREATE TABLE IF NOT EXISTS webhook_events (
@@ -73,7 +83,7 @@ export function webhookEventStatus(result: WebhookResult): WebhookEventStatus {
 
 /** Run a webhook dispatch and record its outcome (accepted/skipped/error) fire-and-forget. */
 export async function withWebhookRecording(
-  sql: Sql,
+  sql: WebhookEventSql,
   provider: TrackerProvider,
   payload: WebhookRequest,
   dispatch: () => Promise<WebhookResult>,
@@ -103,9 +113,13 @@ export async function withWebhookRecording(
 }
 
 /** Append a receipt. Swallows every error — a logging miss must never fail the webhook. */
-export async function recordWebhookEvent(sql: Sql, record: WebhookEventRecord): Promise<void> {
+export async function recordWebhookEvent(
+  sql: WebhookEventSql,
+  record: WebhookEventRecord,
+): Promise<void> {
   if (!webhookEventsEnabled()) return
   try {
+    // Bind serialized JSON as text so postgres.js does not JSON-encode the string again.
     await sql`
       INSERT INTO webhook_events (provider, event_type, external_ref, status, detail)
       VALUES (
@@ -113,7 +127,7 @@ export async function recordWebhookEvent(sql: Sql, record: WebhookEventRecord): 
         ${record.eventType ?? null},
         ${record.externalRef ?? null},
         ${record.status},
-        ${sql.json((record.detail ?? {}) as JSONValue)}
+        ${JSON.stringify(record.detail ?? {})}::text::jsonb
       )
     `
   } catch (err) {
@@ -122,18 +136,15 @@ export async function recordWebhookEvent(sql: Sql, record: WebhookEventRecord): 
 }
 
 /** Light, provider-shaped peek at the raw body for a receipt's `event_type` / `external_ref`. */
-export function extractWebhookMeta(
-  providerType: TrackerProvider,
-  rawBody: string,
-): { eventType?: string; externalRef?: string } {
-  let parsed: unknown
+export function extractWebhookMeta(providerType: TrackerProvider, rawBody: string): WebhookMeta {
+  let parsed: JsonValue
   try {
     parsed = JSON.parse(rawBody)
   } catch {
     return {}
   }
-  if (typeof parsed !== 'object' || parsed === null) return {}
-  const body = parsed as Record<string, unknown>
+  if (!isJsonObject(parsed)) return {}
+  const body = parsed
 
   if (providerType === 'jira') {
     const eventType = typeof body['webhookEvent'] === 'string' ? body['webhookEvent'] : undefined
@@ -150,18 +161,19 @@ export function extractWebhookMeta(
   return {}
 }
 
-function nestedString(container: unknown, key: string): string | undefined {
-  if (typeof container !== 'object' || container === null) return undefined
-  const value = (container as Record<string, unknown>)[key]
+function nestedString(container: JsonValue | undefined, key: string): string | undefined {
+  if (!isJsonObject(container)) return undefined
+  const value = container[key]
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-function withDefined(meta: { eventType?: string | undefined; externalRef?: string | undefined }): {
-  eventType?: string
-  externalRef?: string
-} {
-  return {
-    ...(meta.eventType ? { eventType: meta.eventType } : {}),
-    ...(meta.externalRef ? { externalRef: meta.externalRef } : {}),
-  }
+function withDefined(meta: WebhookMeta): WebhookMeta {
+  const result: WebhookMeta = {}
+  if (meta.eventType) result.eventType = meta.eventType
+  if (meta.externalRef) result.externalRef = meta.externalRef
+  return result
+}
+
+function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

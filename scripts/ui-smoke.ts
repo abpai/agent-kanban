@@ -180,7 +180,8 @@ try {
     dialog.getByRole('button', { name: 'Create task', exact: true }).click(),
   ])
   assert(createdResponse.ok())
-  const created = ((await createdResponse.json()) as { data: Task }).data
+  const createdBody: { data: Task } = await createdResponse.json()
+  const created = createdBody.data
   await dialog.waitFor({ state: 'hidden' })
   assert.equal(getTask(db, created.id).column_name, 'in-progress')
   assert.deepEqual(getTask(db, created.id).labels, ['smoke', 'browser'])
@@ -210,8 +211,8 @@ try {
   const taskRoute = `**/api/tasks/${created.id}`
   await page.route(taskRoute, async (route) => {
     const request = route.request()
-    const data =
-      request.method() === 'PATCH' ? (request.postDataJSON() as { expectedVersion?: string }) : null
+    const data: { expectedVersion?: string } | null =
+      request.method() === 'PATCH' ? request.postDataJSON() : null
     if (data && !data.expectedVersion && failConflictRetry) {
       failConflictRetry = false
       await route.fulfill({

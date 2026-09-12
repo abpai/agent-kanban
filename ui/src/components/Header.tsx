@@ -1,5 +1,7 @@
 import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store'
+import { getTaskOptions } from '../utils'
+import { parseActivityDays } from '../store/ui-slice'
 
 export function Header() {
   const {
@@ -37,19 +39,12 @@ export function Header() {
       wsConnected: s.wsConnected,
     })),
   )
+  const options = getTaskOptions(metrics, config)
   const assignees = [
-    ...new Set([
-      ...(metrics?.assignees ?? []),
-      ...(config?.members?.map((m) => m.name) ?? []),
-      ...(filterAssignee ? [filterAssignee] : []),
-    ]),
+    ...new Set([...options.assignees, ...(filterAssignee ? [filterAssignee] : [])]),
   ].sort()
   const projects = [
-    ...new Set([
-      ...(metrics?.projects ?? []),
-      ...(config?.projects ?? []),
-      ...(filterProject ? [filterProject] : []),
-    ]),
+    ...new Set([...options.projects, ...(filterProject ? [filterProject] : [])]),
   ].sort()
   const providerLabel = team
     ? `${team.name} (${team.key})`
@@ -134,11 +129,7 @@ export function Header() {
           className="filterSelect"
           aria-label="Filter by activity"
           value={filterActivityDays ?? ''}
-          onChange={(e) =>
-            setFilterActivityDays(
-              e.target.value ? (Number(e.target.value) as 1 | 7 | 14 | 28 | 70) : null,
-            )
-          }
+          onChange={(e) => setFilterActivityDays(parseActivityDays(e.target.value))}
         >
           <option value="">Any activity</option>
           <option value="1">Active in 24h</option>

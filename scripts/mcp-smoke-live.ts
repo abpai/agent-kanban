@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util'
 import { Database } from 'bun:sqlite'
-import { Client } from '@modelcontextprotocol/sdk/client'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { createTrackerCore, createTrackerMcpServer } from '../src/mcp/index'
 import { createProvider } from '../src/providers/index'
 import { trackerConfigFromEnv } from '../src/tracker-config'
@@ -86,14 +85,19 @@ const httpServer = Bun.serve({
 })
 const url = new URL(`http://127.0.0.1:${httpServer.port}/mcp`)
 const transport = new StreamableHTTPClientTransport(url)
-const client = new Client({ name: 'smoke-live', version: '1.0.0' })
-await client.connect(transport)
+const client = new Client(
+  { name: 'smoke-live', version: '1.0.0' },
+  { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+)
 
 function unwrap<T>(result: Awaited<ReturnType<Client['callTool']>>): T {
+  // SAFETY: Calls below target our default MCP tools, whose structuredContent wraps the domain result in { result }.
   return (result.structuredContent as { result: T }).result
 }
 
 try {
+  await client.connect(transport)
+  console.info('protocol:', client.getProtocolEra())
   console.info(`\nprovider=${providerName} ticket=${ticketId} write=${writeEnabled}`)
 
   const tools = await client.listTools()

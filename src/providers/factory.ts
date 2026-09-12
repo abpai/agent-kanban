@@ -40,7 +40,7 @@ function jiraProviderConfig(
     email: config.email,
     apiToken: config.apiToken,
     projectKey: config.projectKey,
-    ...(config.boardId !== undefined ? { boardId: config.boardId } : {}),
+    boardId: config.boardId,
     defaultIssueType: config.defaultIssueType ?? 'Task',
     pollingSyncIntervalMs: config.syncIntervalMs,
   }

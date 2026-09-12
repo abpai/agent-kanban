@@ -1,3 +1,4 @@
+import { assertKanbanError } from './helpers/errors'
 import { describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -28,6 +29,8 @@ function expectOk<T>(result: Awaited<ReturnType<typeof run>>): T {
   if (!result.output.ok) {
     throw new Error('expected successful CLI output')
   }
+  // SAFETY: callers specify the documented result type of the command they just ran;
+  // the success envelope is checked above and each test asserts its result fields.
   return result.output.data as T
 }
 
@@ -37,11 +40,11 @@ async function expectKanbanError(
 ): Promise<KanbanError> {
   const err = await runPromise.then(
     () => null,
-    (e: unknown) => e,
+    (cause: unknown) => cause,
   )
-  expect(err).toBeInstanceOf(KanbanError)
-  expect((err as KanbanError).code).toBe(code)
-  return err as KanbanError
+  assertKanbanError(err)
+  expect(err.code).toBe(code)
+  return err
 }
 
 describe('parseServeArgs', () => {
@@ -94,7 +97,8 @@ describe('parseServeArgs', () => {
       try {
         parseServeArgs(['serve', '--sync-interval-ms', raw])
       } catch (err) {
-        expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+        assertKanbanError(err)
+        expect(err.code).toBe(ErrorCode.INVALID_ARGUMENT)
       }
     }
   })
@@ -105,7 +109,8 @@ describe('parseServeArgs', () => {
       try {
         parseServeArgs(['serve', `--sync-interval-ms=${bad}`])
       } catch (err) {
-        expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+        assertKanbanError(err)
+        expect(err.code).toBe(ErrorCode.INVALID_ARGUMENT)
       }
     }
     // explicit empty is rejected rather than silently falling back to the default
@@ -152,7 +157,8 @@ describe('parseServeArgs', () => {
     try {
       parseServeArgs(['serve', '--bogus'])
     } catch (err) {
-      expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+      assertKanbanError(err)
+      expect(err.code).toBe(ErrorCode.INVALID_ARGUMENT)
     }
   })
 
@@ -162,7 +168,8 @@ describe('parseServeArgs', () => {
       try {
         parseServeArgs(['serve', `--port=${bad}`])
       } catch (err) {
-        expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+        assertKanbanError(err)
+        expect(err.code).toBe(ErrorCode.INVALID_ARGUMENT)
       }
     }
   })
@@ -195,7 +202,8 @@ describe('assertTunnelSecurity (F44 + D5)', () => {
     try {
       assertTunnelSecurity({ tunnel: true }, {})
     } catch (err) {
-      expect((err as KanbanError).message).toContain('without an API token')
+      assertKanbanError(err)
+      expect(err.message).toContain('without an API token')
     }
   })
 
@@ -212,7 +220,8 @@ describe('assertTunnelSecurity (F44 + D5)', () => {
       assertTunnelSecurity({ tunnel: true, authToken: 't' }, { KANBAN_PROVIDER: 'jira' })
       throw new Error('expected refusal')
     } catch (err) {
-      expect((err as KanbanError).message).toContain('JIRA_WEBHOOK_SECRET')
+      assertKanbanError(err)
+      expect(err.message).toContain('JIRA_WEBHOOK_SECRET')
     }
   })
 
@@ -230,7 +239,8 @@ describe('assertTunnelSecurity (F44 + D5)', () => {
       assertTunnelSecurity({ tunnel: true, authToken: 't' }, { KANBAN_PROVIDER: 'Linear' })
       throw new Error('expected refusal')
     } catch (err) {
-      expect((err as KanbanError).message).toContain('LINEAR_WEBHOOK_SECRET')
+      assertKanbanError(err)
+      expect(err.message).toContain('LINEAR_WEBHOOK_SECRET')
     }
   })
 })
@@ -241,7 +251,8 @@ describe('parseMcpArgs', () => {
     try {
       parseMcpArgs(['mcp', '--bogus'])
     } catch (err) {
-      expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+      assertKanbanError(err)
+      expect(err.code).toBe(ErrorCode.INVALID_ARGUMENT)
     }
   })
 })
@@ -253,8 +264,8 @@ describe('run', () => {
       expect(result.message).toContain('Board initialized')
 
       const db = new Database(dbPath)
-      const columns = db.query('SELECT COUNT(*) as count FROM columns').get() as { count: number }
-      expect(columns.count).toBeGreaterThan(0)
+      const columns = db.query<{ count: number }, []>('SELECT COUNT(*) as count FROM columns').get()
+      expect(columns!.count).toBeGreaterThan(0)
       db.close()
 
       await expectKanbanError(
@@ -319,7 +330,7 @@ describe('run', () => {
       expect(result.output.ok).toBe(true)
 
       const verify = new Database(dbPath)
-      const columns = verify.query('PRAGMA table_info(tasks)').all() as { name: string }[]
+      const columns = verify.query<{ name: string }, []>('PRAGMA table_info(tasks)').all()
       expect(columns.some((column) => column.name === 'project')).toBe(true)
       verify.close()
     })
@@ -501,8 +512,8 @@ describe('run', () => {
   })
 
   test('rejects unknown top-level options before opening a runtime', async () => {
-    const err = await run(['--bogus']).catch((e: unknown) => e)
-    expect(err).toBeInstanceOf(KanbanError)
-    expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+    const err = await run(['--bogus']).catch((cause: unknown) => cause)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.INVALID_ARGUMENT)
   })
 })

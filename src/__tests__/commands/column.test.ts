@@ -9,7 +9,6 @@ import {
   columnDelete,
 } from '../../commands/column'
 import { KanbanError } from '../../errors'
-import type { Column } from '../../types'
 
 let db: Database
 
@@ -23,10 +22,7 @@ beforeEach(() => {
 describe('columnAdd', () => {
   test('adds a column', () => {
     const result = columnAdd(db, { name: 'testing' })
-    expect(result.ok).toBe(true)
-    if (result.ok) {
-      expect((result.data as Column).name).toBe('testing')
-    }
+    expect(result).toMatchObject({ ok: true, data: { name: 'testing' } })
   })
 
   test('throws without name', () => {
@@ -37,8 +33,9 @@ describe('columnAdd', () => {
 describe('columnList', () => {
   test('returns all columns', () => {
     const result = columnList(db)
+    expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.data as Column[]).toHaveLength(5)
+      expect(result.data).toHaveLength(5)
     }
   })
 })
@@ -46,9 +43,7 @@ describe('columnList', () => {
 describe('columnRename', () => {
   test('renames column', () => {
     const result = columnRename(db, { idOrName: 'recurring', newName: 'weekly' })
-    if (result.ok) {
-      expect((result.data as Column).name).toBe('weekly')
-    }
+    expect(result).toMatchObject({ ok: true, data: { name: 'weekly' } })
   })
 
   test('throws without args', () => {
@@ -59,9 +54,7 @@ describe('columnRename', () => {
 describe('columnReorder', () => {
   test('reorders column', () => {
     const result = columnReorder(db, { idOrName: 'done', position: '0' })
-    if (result.ok) {
-      expect((result.data as Column).position).toBe(0)
-    }
+    expect(result).toMatchObject({ ok: true, data: { position: 0 } })
   })
 })
 

@@ -1,3 +1,19 @@
+import type { BoardConfig, BoardMetrics, Priority } from './types'
+
+export function getTaskOptions(metrics: BoardMetrics | null, config: BoardConfig | null) {
+  return {
+    assignees: [
+      ...new Set([...(metrics?.assignees ?? []), ...(config?.members?.map((m) => m.name) ?? [])]),
+    ].sort(),
+    projects: [...new Set([...(metrics?.projects ?? []), ...(config?.projects ?? [])])].sort(),
+  }
+}
+
+export function parsePriority(value: string): Priority {
+  if (value === 'low' || value === 'medium' || value === 'high' || value === 'urgent') return value
+  throw new Error('Choose a valid priority')
+}
+
 export function relativeTime(iso: string): string {
   const date = new Date(iso + (iso.includes('Z') || iso.includes('+') ? '' : 'Z'))
   const now = Date.now()

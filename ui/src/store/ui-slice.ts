@@ -10,12 +10,21 @@ const STORAGE_KEYS = {
   activityDays: 'agent-kanban:filter:activity-days',
 } as const
 
-function loadStoredActivityDays(): ActivityWindowDays {
-  const value = safeLocalStorageGet(STORAGE_KEYS.activityDays)
-  if (value === '1' || value === '7' || value === '14' || value === '28' || value === '70') {
-    return Number(value) as 1 | 7 | 14 | 28 | 70
+export function parseActivityDays(value: string | null): ActivityWindowDays {
+  switch (value) {
+    case '1':
+      return 1
+    case '7':
+      return 7
+    case '14':
+      return 14
+    case '28':
+      return 28
+    case '70':
+      return 70
+    default:
+      return null
   }
-  return null
 }
 
 /**
@@ -43,7 +52,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (set) => (
   selectedTaskId: null,
   filterAssignee: safeLocalStorageGet(STORAGE_KEYS.assignee),
   filterProject: safeLocalStorageGet(STORAGE_KEYS.project),
-  filterActivityDays: loadStoredActivityDays(),
+  filterActivityDays: parseActivityDays(safeLocalStorageGet(STORAGE_KEYS.activityDays)),
   searchQuery: '',
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   showNewTaskModal: false,

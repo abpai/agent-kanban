@@ -89,7 +89,7 @@ const FIXTURE_TASKS: FixtureTask[] = [
   },
 ]
 
-export function seedFixtures(db: Database): { taskCount: number; movedCount: number } {
+export function seedFixtures(db: Database) {
   let movedCount = 0
 
   for (const fixture of FIXTURE_TASKS) {

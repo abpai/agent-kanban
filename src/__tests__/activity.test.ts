@@ -23,8 +23,11 @@ beforeEach(() => {
 
 function getColumnTimeEntries(taskId: string): { exited_at: string | null }[] {
   return db
-    .query('SELECT * FROM column_time_tracking WHERE task_id = $id ORDER BY entered_at')
-    .all({ $id: taskId }) as { exited_at: string | null }[]
+    .query<
+      { exited_at: string | null },
+      { $id: string }
+    >('SELECT * FROM column_time_tracking WHERE task_id = $id ORDER BY entered_at')
+    .all({ $id: taskId })
 }
 
 describe('activity logging', () => {
@@ -150,8 +153,11 @@ describe('column time tracking', () => {
     const taskId = task.id
     deleteTask(db, taskId)
     const entries = db
-      .query('SELECT * FROM column_time_tracking WHERE task_id = $id')
-      .all({ $id: taskId }) as { exited_at: string | null }[]
+      .query<
+        { exited_at: string | null },
+        { $id: string }
+      >('SELECT * FROM column_time_tracking WHERE task_id = $id')
+      .all({ $id: taskId })
     expect(entries[0]!.exited_at).not.toBeNull()
   })
 })

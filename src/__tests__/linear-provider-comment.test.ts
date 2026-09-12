@@ -1,3 +1,4 @@
+import { mockFetch } from './helpers/fetch'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import type { BoardConfig, BoardView, Task } from '../types'
@@ -76,7 +77,18 @@ function fakeLinearCache(task: Task): LinearCachePort {
 
 let db: Database
 let originalFetch: typeof fetch
-let requests: Array<{ query: string; variables: Record<string, unknown> }>
+
+interface CommentRequest {
+  query: string
+  variables: {
+    id?: string
+    issueId?: string
+    after?: string | null
+    input?: { issueId?: string; body: string }
+  }
+}
+
+let requests: CommentRequest[]
 
 beforeEach(() => {
   db = new Database(':memory:')
@@ -102,14 +114,12 @@ beforeEach(() => {
   })
   originalFetch = globalThis.fetch
   requests = []
-  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body)) as {
-      query: string
-      variables: Record<string, unknown>
-    }
+  globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+    const body: CommentRequest = JSON.parse(String(init?.body))
     requests.push(body)
 
     if (body.query.includes('mutation CommentCreate')) {
+      if (!body.variables.input) throw new Error('Missing CommentCreate input')
       return new Response(
         JSON.stringify({
           data: {
@@ -117,7 +127,7 @@ beforeEach(() => {
               success: true,
               comment: {
                 id: 'comment-1',
-                body: String((body.variables.input as { body: string }).body),
+                body: body.variables.input.body,
                 createdAt: '2026-01-03T00:00:00Z',
                 updatedAt: '2026-01-03T00:00:00Z',
                 user: { id: 'user-1', displayName: 'Linear User' },
@@ -133,6 +143,7 @@ beforeEach(() => {
     }
 
     if (body.query.includes('mutation CommentUpdate')) {
+      if (!body.variables.input) throw new Error('Missing CommentUpdate input')
       return new Response(
         JSON.stringify({
           data: {
@@ -140,7 +151,7 @@ beforeEach(() => {
               success: true,
               comment: {
                 id: String(body.variables.id),
-                body: String((body.variables.input as { body: string }).body),
+                body: body.variables.input.body,
                 createdAt: '2026-01-03T00:00:00Z',
                 updatedAt: '2026-01-04T00:00:00Z',
                 user: { id: 'user-1', displayName: 'Linear User' },
@@ -210,7 +221,7 @@ beforeEach(() => {
     }
 
     throw new Error(`Unexpected Linear GraphQL query: ${body.query}`)
-  }) as unknown as typeof fetch
+  })
 })
 
 afterEach(() => {

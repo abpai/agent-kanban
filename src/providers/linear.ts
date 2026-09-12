@@ -105,15 +105,21 @@ class SqliteLinearCache implements LinearCachePort {
 
   async findUserIdByName(name: string): Promise<string | null> {
     const row = this.db
-      .query('SELECT id FROM linear_users WHERE LOWER(name) = LOWER($name) LIMIT 1')
-      .get({ $name: name }) as { id: string } | null
+      .query<
+        { id: string },
+        Record<string, string | number>
+      >('SELECT id FROM linear_users WHERE LOWER(name) = LOWER($name) LIMIT 1')
+      .get({ $name: name })
     return row?.id ?? null
   }
 
   async findProjectIdByName(name: string): Promise<string | null> {
     const row = this.db
-      .query('SELECT id FROM linear_projects WHERE LOWER(name) = LOWER($name) LIMIT 1')
-      .get({ $name: name }) as { id: string } | null
+      .query<
+        { id: string },
+        Record<string, string | number>
+      >('SELECT id FROM linear_projects WHERE LOWER(name) = LOWER($name) LIMIT 1')
+      .get({ $name: name })
     return row?.id ?? null
   }
 

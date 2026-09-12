@@ -1,17 +1,18 @@
 import { Database } from 'bun:sqlite'
 import type { ActivityEntry, BoardMetrics } from './types'
-import { assembleBoardMetrics, classifyColumnRoles } from './metrics-spec'
+import { assembleBoardMetrics, classifyColumnRoles, type MetricsInputs } from './metrics-spec'
 
 function getDistinctTaskFieldValues(db: Database, field: 'assignee' | 'project'): string[] {
-  return (
-    db
-      .query(`SELECT DISTINCT ${field} as value FROM tasks WHERE ${field} != '' ORDER BY ${field}`)
-      .all() as { value: string }[]
-  ).map((row) => row.value)
+  return db
+    .query<{ value: string }, []>(
+      `SELECT DISTINCT ${field} as value FROM tasks WHERE ${field} != '' ORDER BY ${field}`,
+    )
+    .all()
+    .map((row) => row.value)
 }
 
 function getCount(db: Database, sql: string): number {
-  return (db.query(sql).get() as { count: number }).count
+  return db.query<{ count: number }, []>(sql).get()!.count
 }
 
 export function getDiscoveredAssignees(db: Database): string[] {
@@ -23,15 +24,13 @@ export function getDiscoveredProjects(db: Database): string[] {
 }
 
 export function getBoardMetrics(db: Database): BoardMetrics {
-  const columnCounts = (
-    db
-      .query(
-        `SELECT c.id as id, c.name as name, c.position as position, COUNT(t.id) as count
+  const columnCounts = db
+    .query<MetricsInputs['columnCounts'][number], []>(
+      `SELECT c.id as id, c.name as name, c.position as position, COUNT(t.id) as count
          FROM columns c LEFT JOIN tasks t ON t.column_id = c.id
          GROUP BY c.id ORDER BY c.position`,
-      )
-      .all() as { id: string; name: string; position: number; count: number }[]
-  ).map((row) => ({ id: row.id, name: row.name, position: row.position, count: row.count }))
+    )
+    .all()
 
   // Done/in-progress classification and all derived fields live in metrics-spec;
   // here we only gather the raw aggregates this backend's SQL produces. The done
@@ -39,8 +38,11 @@ export function getBoardMetrics(db: Database): BoardMetrics {
   const { doneColumnIds } = classifyColumnRoles(columnCounts)
 
   const priorityCounts = db
-    .query(`SELECT priority, COUNT(*) as count FROM tasks GROUP BY priority`)
-    .all() as { priority: string; count: number }[]
+    .query<
+      MetricsInputs['priorityCounts'][number],
+      []
+    >(`SELECT priority, COUNT(*) as count FROM tasks GROUP BY priority`)
+    .all()
 
   const totalTasks = getCount(db, 'SELECT COUNT(*) as count FROM tasks')
 
@@ -52,8 +54,8 @@ export function getBoardMetrics(db: Database): BoardMetrics {
   const avgResult =
     doneColumnIds.length === 0
       ? { avg_hours: null }
-      : (db
-          .query(
+      : db
+          .query<{ avg_hours: number | null }, string[]>(
             `SELECT AVG(
         (julianday(done_enter.entered_at) - julianday(first_enter.entered_at)) * 24
        ) as avg_hours
@@ -68,11 +70,14 @@ export function getBoardMetrics(db: Database): BoardMetrics {
          FROM column_time_tracking GROUP BY task_id
        ) first_enter ON first_enter.task_id = done_enter.task_id`,
           )
-          .get(...doneColumnIds) as { avg_hours: number | null })
+          .get(...doneColumnIds)!
 
   const recentActivity = db
-    .query('SELECT * FROM activity_log ORDER BY timestamp DESC, rowid DESC LIMIT 20')
-    .all() as ActivityEntry[]
+    .query<
+      ActivityEntry,
+      []
+    >('SELECT * FROM activity_log ORDER BY timestamp DESC, rowid DESC LIMIT 20')
+    .all()
 
   const tasksCreatedThisWeek = getCount(
     db,

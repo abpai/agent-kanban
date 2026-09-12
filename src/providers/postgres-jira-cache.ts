@@ -131,13 +131,10 @@ export class PostgresJiraCache implements JiraCachePort {
     await this.sql.begin(async (tx) => {
       for (const key of keys) {
         if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
-        const value = meta[key]
-        if (value === null) {
-          await tx`DELETE FROM jira_sync_meta WHERE key = ${key}`
-          continue
-        }
         if (key === 'boardId') {
-          if (typeof value === 'number' && Number.isFinite(value)) {
+          const value = meta.boardId
+          if (value === null) await tx`DELETE FROM jira_sync_meta WHERE key = ${key}`
+          else if (value !== undefined && Number.isFinite(value)) {
             await tx`
               INSERT INTO jira_sync_meta (key, value)
               VALUES (${key}, ${String(value)})
@@ -146,7 +143,9 @@ export class PostgresJiraCache implements JiraCachePort {
           }
           continue
         }
-        if (typeof value === 'string') {
+        const value = meta[key]
+        if (value === null) await tx`DELETE FROM jira_sync_meta WHERE key = ${key}`
+        else if (value !== undefined) {
           await tx`
             INSERT INTO jira_sync_meta (key, value)
             VALUES (${key}, ${value})

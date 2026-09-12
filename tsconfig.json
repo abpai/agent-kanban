@@ -16,7 +16,9 @@
     "noImplicitOverride": true,
     "forceConsistentCasingInFileNames": true,
     "incremental": true,
-    "tsBuildInfoFile": ".cache/tsconfig.tsbuildinfo"
+    "tsBuildInfoFile": ".cache/tsconfig.tsbuildinfo",
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "tools/**/*.ts"],
+  "exclude": ["tools/oxlint/anti-slop/__fixtures__/**"]
 }

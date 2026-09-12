@@ -26,6 +26,20 @@ Without `DATABASE_URL`, Postgres-specific suites may not exercise the same
 coverage as CI. Treat a local no-database run as useful but not a substitute for
 CI when the change touches Postgres storage or cache behavior.
 
+## Custom lint rule proof
+
+`bun test tools/oxlint/anti-slop/rules.test.ts` exercises valid/invalid fixtures
+for every vendored generic deslop rule, suppression handling, and the complexity
+22 boundary. These tests are also discovered by the full `bun test` lane.
+
+## MCP protocol proof
+
+The core/server tests cover provider policy and hooks, authenticated Streamable
+HTTP calls in both the 2025 and 2026 protocol eras, and raw 2026 discovery and
+tool calls without initialization or session state. `mcp-stdio.test.ts` launches
+the actual CLI with a temporary SQLite database and exercises both protocol eras,
+including tool calls after connection setup to prove the database stays open.
+
 ## Browser and visual proof
 
 `bun run test:ui` exercises the built dashboard against an isolated SQLite

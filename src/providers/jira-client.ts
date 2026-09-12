@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer'
 import { ErrorCode } from '../errors'
+import type { JsonObject } from '../json'
 import { providerUpstreamError } from './errors'
+import type { AdfDocument } from './jira-adf'
 
 export interface JiraProject {
   id: string
@@ -31,7 +33,7 @@ export interface JiraIssue {
   key: string
   fields: {
     summary: string
-    description?: unknown
+    description?: AdfDocument | string | null
     status: { id: string; name: string }
     issuetype: { id: string; name: string }
     priority?: { id: string; name: string } | null
@@ -102,6 +104,7 @@ export function decideJiraPagination(
   // `total` promises. The live /search/jql endpoint omits `total` and ignores
   // `startAt`, so the loop never advances by offset — a `total` promising more
   // than this page is reported incomplete rather than fetched.
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- A malformed upstream total must never authorize deleting cached issues.
   if (typeof page.total === 'number') {
     const issueCount = page.issues?.length ?? 0
     return { complete: (page.startAt ?? 0) + issueCount >= page.total }
@@ -113,21 +116,21 @@ export function decideJiraPagination(
 }
 
 export interface JiraCreatePayload {
-  fields: Record<string, unknown>
+  fields: JsonObject
 }
 
 export interface JiraUpdatePayload {
-  fields?: Record<string, unknown>
-  update?: Record<string, unknown>
+  fields?: JsonObject
+  update?: JsonObject
 }
 
 export interface JiraCommentPayload {
-  body: unknown
+  body: AdfDocument
 }
 
 export interface JiraComment {
   id: string
-  body?: unknown
+  body?: AdfDocument | string | null
   created?: string
   updated?: string
   author?: { accountId?: string; displayName?: string }
@@ -233,7 +236,7 @@ export class JiraClient {
       if (qs.length > 0) url += `?${qs}`
     }
 
-    const headers: Record<string, string> = {
+    const headers = {
       Authorization: this.authHeader,
       Accept: 'application/json',
       'Content-Type': 'application/json',
@@ -258,6 +261,8 @@ export class JiraClient {
       let parsed: JiraErrorBody = {}
       if (text.length > 0) {
         try {
+          // SAFETY: Jira's error response contract supplies message strings and field errors;
+          // malformed JSON falls back to the HTTP status message below.
           parsed = JSON.parse(text) as JiraErrorBody
         } catch {
           parsed = {}
@@ -278,17 +283,15 @@ export class JiraClient {
       providerUpstreamError(message)
     }
 
-    if (response.status === 204) {
-      return undefined as TResponse
-    }
     const contentLength = response.headers.get('content-length')
-    if (contentLength === '0') {
-      return undefined as TResponse
-    }
-    const text = await response.text()
+    const text = response.status === 204 || contentLength === '0' ? '' : await response.text()
     if (text.length === 0) {
+      // SAFETY: Jira mutation endpoints return an empty success body; their private callers
+      // request void, while read endpoints are expected to return the documented JSON body.
       return undefined as TResponse
     }
+    // SAFETY: Each private caller pairs a fixed Jira REST endpoint with its documented
+    // response type; unsuccessful HTTP responses have already been rejected above.
     return JSON.parse(text) as TResponse
   }
 
@@ -317,18 +320,16 @@ export class JiraClient {
     fields?: string[]
     nextPageToken?: string
   }): Promise<JiraSearchPage> {
-    const query: QueryParams = {
+    const query = {
       jql: params.jql,
       maxResults: params.maxResults,
+      nextPageToken: params.nextPageToken || undefined,
+      startAt: params.nextPageToken ? undefined : params.startAt,
+      fields: params.fields?.length ? params.fields.join(',') : undefined,
     }
     // /rest/api/3/search/jql ignores startAt and paginates by nextPageToken.
     // Send the cursor when we have one; only send startAt on the first page for
     // back-compat with the legacy endpoint.
-    if (params.nextPageToken) query.nextPageToken = params.nextPageToken
-    else query.startAt = params.startAt
-    if (params.fields && params.fields.length > 0) {
-      query.fields = params.fields.join(',')
-    }
     return this.request<never, JiraSearchPage>('GET', '/rest/api/3/search/jql', undefined, query)
   }
 
@@ -416,15 +417,11 @@ export class JiraClient {
     )
   }
 
-  transitionIssue(
-    idOrKey: string,
-    transitionId: string,
-    fields?: Record<string, unknown>,
-  ): Promise<void> {
-    const body: { transition: { id: string }; fields?: Record<string, unknown> } = {
+  transitionIssue(idOrKey: string, transitionId: string, fields?: JsonObject): Promise<void> {
+    const body = {
       transition: { id: transitionId },
+      fields,
     }
-    if (fields !== undefined) body.fields = fields
     return this.request<typeof body, void>(
       'POST',
       `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/transitions`,

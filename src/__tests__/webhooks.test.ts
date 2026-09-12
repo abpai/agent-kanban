@@ -1,3 +1,4 @@
+import { mockFetch } from './helpers/fetch'
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { createHmac } from 'node:crypto'
@@ -38,18 +39,11 @@ const LINEAR_TEST_SECRET = 'hushhush'
 
 // Sign for both providers; each handler only reads its own header, so this works
 // regardless of which provider the test exercises.
-function signedHeaders(body: string): Record<string, string> {
+function signedHeaders(body: string) {
   return {
     'x-hub-signature': `sha256=${hmac(JIRA_TEST_SECRET, body)}`,
     'linear-signature': hmac(LINEAR_TEST_SECRET, body),
   }
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  })
 }
 
 describe('verifyHmacSha256', () => {
@@ -399,11 +393,10 @@ describe('Jira webhook', () => {
     seedJira(db)
     process.env['JIRA_WEBHOOK_SECRET'] = JIRA_TEST_SECRET
     const originalFetch = globalThis.fetch
-    globalThis.fetch = (async (input) => {
-      const url =
-        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    globalThis.fetch = mockFetch(async (input) => {
+      const url = input instanceof Request ? input.url : input.toString()
       if (url.includes('/rest/api/3/issue/600/changelog')) {
-        return jsonResponse({
+        return Response.json({
           startAt: 0,
           maxResults: 100,
           total: 1,
@@ -418,7 +411,7 @@ describe('Jira webhook', () => {
         })
       }
       return new Response(`route not stubbed: ${url}`, { status: 500 })
-    }) as typeof fetch
+    })
 
     try {
       const client = new JiraClient({
@@ -585,10 +578,10 @@ describe('Linear webhook', () => {
     const db = new Database(':memory:')
     seedLinear(db)
     process.env['LINEAR_WEBHOOK_SECRET'] = LINEAR_TEST_SECRET
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-      }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query IssueTeam')) {
         return new Response(
@@ -607,7 +600,7 @@ describe('Linear webhook', () => {
       }
 
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'tid', 'key')
     const body = JSON.stringify({

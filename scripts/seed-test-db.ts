@@ -31,9 +31,9 @@ for (const col of board.columns) {
   console.info(`  ${col.name}: ${col.tasks.length} task(s)`)
 }
 
-const activityCount = (
-  db.query('SELECT COUNT(*) as count FROM activity_log').get() as { count: number }
-).count
+const activityCount = db
+  .query<{ count: number }, []>('SELECT COUNT(*) as count FROM activity_log')
+  .get()!.count
 console.info(`Activity log entries: ${activityCount}`)
 
 db.close()

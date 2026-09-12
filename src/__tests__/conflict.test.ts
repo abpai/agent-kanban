@@ -1,8 +1,9 @@
+import { assertKanbanError } from './helpers/errors'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initSchema, seedDefaultColumns, resolveColumn, bulkMoveAll } from '../db'
 import { LocalProvider } from '../providers/local'
-import { ErrorCode, KanbanError } from '../errors'
+import { ErrorCode } from '../errors'
 
 let db: Database
 let provider: LocalProvider
@@ -43,8 +44,8 @@ describe('local provider conflict detection', () => {
     } catch (e) {
       err = e
     }
-    expect(err).toBeInstanceOf(KanbanError)
-    expect((err as KanbanError).code).toBe(ErrorCode.CONFLICT)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.CONFLICT)
   })
 
   test('task exposes version and source_updated_at', async () => {
@@ -82,8 +83,8 @@ describe('local provider conflict detection', () => {
     } catch (e) {
       err = e
     }
-    expect(err).toBeInstanceOf(KanbanError)
-    expect((err as KanbanError).code).toBe(ErrorCode.CONFLICT)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.CONFLICT)
   })
 
   // moveTask(id, column) intentionally has no expectedVersion parameter, so moves

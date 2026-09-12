@@ -12,6 +12,8 @@ function expectOk<T>(result: Awaited<ReturnType<typeof run>>): T {
   expect(result.exitCode).toBe(0)
   expect(result.output.ok).toBe(true)
   if (!result.output.ok) throw new Error('expected successful CLI output')
+  // SAFETY: each caller ran a known CLI command, checked its success envelope,
+  // and asserts the documented result fields of that command below.
   return result.output.data as T
 }
 
@@ -407,7 +409,7 @@ describe('postgres local provider', () => {
     expect(metrics.completedTasks).toBe(1)
     // Bug fix: a task resting in Done now contributes to the average (no longer
     // requires exited_at), and the value is a real number, not a string.
-    expect(typeof metrics.avgCompletionHours).toBe('number')
+    expect(metrics.avgCompletionHours).toEqual(expect.any(Number))
     expect(metrics.avgCompletionHours!).toBeGreaterThanOrEqual(0)
     expect(metrics.tasksCreatedThisWeek).toBe(2)
     expect(metrics.inProgressCount).toBe(0)

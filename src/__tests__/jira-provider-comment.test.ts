@@ -1,3 +1,4 @@
+import { mockFetch } from './helpers/fetch'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { JiraClient } from '../providers/jira-client'
@@ -51,9 +52,9 @@ beforeEach(() => {
   ])
   originalFetch = globalThis.fetch
   requests = []
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  globalThis.fetch = mockFetch(async (input: string | URL | Request, init?: RequestInit) => {
     const request = {
-      url: typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url,
+      url: input instanceof Request ? input.url : input.toString(),
       init,
     }
     requests.push(request)
@@ -162,7 +163,7 @@ beforeEach(() => {
     }
 
     throw new Error(`Unexpected Jira request: ${request.url}`)
-  }) as unknown as typeof fetch
+  })
 })
 
 afterEach(() => {
@@ -182,9 +183,9 @@ describe('JiraProvider.comment', () => {
 
     expect(requests[0]?.url).toBe('https://example.atlassian.net/rest/api/3/issue/ENG-1/comment')
     expect(requests[0]?.init?.method).toBe('POST')
-    const body = JSON.parse(String(requests[0]?.init?.body)) as {
+    const body: {
       body: { type: string; content: unknown[] }
-    }
+    } = JSON.parse(String(requests[0]?.init?.body))
     expect(body.body.type).toBe('doc')
     expect(body.body.content).toEqual([
       { type: 'paragraph', content: [{ type: 'text', text: 'hello from jira' }] },

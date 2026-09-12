@@ -1,3 +1,4 @@
+import { assertKanbanError } from './helpers/errors'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
@@ -72,7 +73,7 @@ async function withTempDb<T>(
   return withEnv({ KANBAN_DB_PATH: dbPath, ...env }, () => fn(dbPath, dir))
 }
 
-function cliEnv(overrides: Record<string, string> = {}): Record<string, string> {
+function cliEnv(overrides: Record<string, string> = {}) {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value
@@ -92,10 +93,7 @@ function cliEnv(overrides: Record<string, string> = {}): Record<string, string> 
   }
 }
 
-function cli(
-  args: string[],
-  options: { cwd?: string; env?: Record<string, string> } = {},
-): { exitCode: number; stdout: string; stderr: string } {
+function cli(args: string[], options: { cwd?: string; env?: Record<string, string> } = {}) {
   const result = Bun.spawnSync({
     cmd: [process.execPath, CLI_ENTRY, ...args],
     cwd: options.cwd,
@@ -135,8 +133,8 @@ function readDb<T>(dbPath: string, read: (db: Database) => T): T {
 function countRows(dbPath: string, table: string): number {
   return readDb(dbPath, (db) => {
     try {
-      const row = db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }
-      return row.count
+      const row = db.query<{ count: number }, []>(`SELECT COUNT(*) AS count FROM ${table}`).get()
+      return row!.count
     } catch {
       return 0
     }
@@ -147,6 +145,8 @@ function expectOk<T>(result: Awaited<ReturnType<typeof run>>): T {
   expect(result.exitCode).toBe(0)
   expect(result.output.ok).toBe(true)
   if (!result.output.ok) throw new Error('expected ok output')
+  // SAFETY: each caller specifies the documented result of the CLI command it ran;
+  // the success envelope is checked above and result fields are asserted by the test.
   return result.output.data as T
 }
 
@@ -156,11 +156,11 @@ async function expectRunError(
 ): Promise<KanbanError> {
   const err = await promise.then(
     () => null,
-    (caught: unknown) => caught,
+    (cause: unknown) => cause,
   )
-  expect(err).toBeInstanceOf(KanbanError)
-  expect((err as KanbanError).code).toBe(code)
-  return err as KanbanError
+  assertKanbanError(err)
+  expect(err.code).toBe(code)
+  return err
 }
 
 async function addTask(
@@ -173,19 +173,22 @@ async function addTask(
 
 function activityCount(dbPath: string, where = ''): number {
   return readDb(dbPath, (db) => {
-    const row = db.query(`SELECT COUNT(*) AS count FROM activity_log ${where}`).get() as {
-      count: number
-    }
-    return row.count
+    const row = db
+      .query<{ count: number }, []>(`SELECT COUNT(*) AS count FROM activity_log ${where}`)
+      .get()
+    return row!.count
   })
 }
 
 function columnTimeCount(dbPath: string, taskId: string): number {
   return readDb(dbPath, (db) => {
     const row = db
-      .query('SELECT COUNT(*) AS count FROM column_time_tracking WHERE task_id = $taskId')
-      .get({ $taskId: taskId }) as { count: number }
-    return row.count
+      .query<
+        { count: number },
+        { $taskId: string }
+      >('SELECT COUNT(*) AS count FROM column_time_tracking WHERE task_id = $taskId')
+      .get({ $taskId: taskId })
+    return row!.count
   })
 }
 
@@ -680,9 +683,9 @@ describe('Phase 3 CLI task lifecycle execution matrix', () => {
       ],
       { env: cliEnv() },
     )
-    const fullId = JSON.parse(full.stdout).data.id as string
+    const fullId: string = JSON.parse(full.stdout).data.id
     const minimal = cli(['--db', dbPath, 'task', 'add', 'Pretty minimal'], { env: cliEnv() })
-    const minimalId = JSON.parse(minimal.stdout).data.id as string
+    const minimalId: string = JSON.parse(minimal.stdout).data.id
 
     const fullView = cli(['--db', dbPath, 'task', 'view', fullId, '--pretty'], { env: cliEnv() })
     const minimalView = cli(['--db', dbPath, 'task', 'view', minimalId, '--pretty'], {
@@ -1068,9 +1071,12 @@ describe('Phase 3 CLI task lifecycle execution matrix', () => {
       expect(
         readDb(dbPath, (db) => {
           const row = db
-            .query('SELECT COUNT(*) AS count FROM comments WHERE task_id = $taskId')
-            .get({ $taskId: task.id }) as { count: number }
-          return row.count
+            .query<
+              { count: number },
+              { $taskId: string }
+            >('SELECT COUNT(*) AS count FROM comments WHERE task_id = $taskId')
+            .get({ $taskId: task.id })
+          return row!.count
         }),
       ).toBe(0)
     })
@@ -1104,7 +1110,7 @@ describe('Phase 3 CLI task lifecycle execution matrix', () => {
       ],
       { env: cliEnv() },
     )
-    const taskId = JSON.parse(created.stdout).data.id as string
+    const taskId: string = JSON.parse(created.stdout).data.id
 
     const list = cli(['--db', dbPath, 'task', 'list', '--pretty'], { env: cliEnv() })
     const view = cli(['--db', dbPath, 'task', 'view', taskId, '--pretty'], { env: cliEnv() })
@@ -1211,9 +1217,9 @@ describe('Phase 3 CLI task lifecycle execution matrix', () => {
     const dbPath = tempDbPath()
 
     const created = cli(['--db', dbPath, 'task', 'add', 'Automation task'], { env: cliEnv() })
-    const parsed = JSON.parse(created.stdout) as { ok: true; data: { id: string } }
+    const parsed: { ok: true; data: { id: string } } = JSON.parse(created.stdout)
     const viewed = cli(['--db', dbPath, 'task', 'view', parsed.data.id], { env: cliEnv() })
-    const viewedParsed = JSON.parse(viewed.stdout) as { ok: true; data: { id: string } }
+    const viewedParsed: { ok: true; data: { id: string } } = JSON.parse(viewed.stdout)
 
     expect(created.exitCode).toBe(0)
     expect(viewed.exitCode).toBe(0)
@@ -1244,7 +1250,7 @@ describe('Phase 3 CLI task lifecycle execution matrix', () => {
       ],
       { env: cliEnv() },
     )
-    const taskId = JSON.parse(created.stdout).data.id as string
+    const taskId: string = JSON.parse(created.stdout).data.id
 
     const list = cli(['--db', dbPath, 'task', 'list', '--pretty'], { env: cliEnv() })
     const view = cli(['--db', dbPath, 'task', 'view', taskId, '--pretty'], { env: cliEnv() })
