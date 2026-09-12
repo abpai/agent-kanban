@@ -36,7 +36,7 @@ The web dashboard expects `ui/dist` to exist for packaged and local server runs.
 - Preserve Bun-first workflows unless there is a strong reason to expand runtime support.
 - Avoid committing secrets or local env files. Only `.env.example` should be tracked.
 - If you add a new config variable, update `.env.example` and the README in the same change.
-- If you touch provider behavior, call out any local-vs-Linear differences in docs or tests.
+- If you touch provider behavior, call out differences between local, Linear, and Jira in docs or tests.
 
 ## Pull Requests
 
@@ -53,5 +53,5 @@ When filing a bug, include:
 - Expected behavior
 - Actual behavior
 - Relevant stdout/stderr output
-- Provider mode (`local` or `linear`)
+- Provider mode (`local`, `linear`, or `jira`)
 - Bun version and OS when relevant

@@ -17,11 +17,7 @@ import { parseProviderTeamInfo } from './team-info'
 export type JiraIssueRow = JiraTaskRow
 
 /**
- * Postgres-backed cache/repository for the Jira provider. Mirrors the role of the
- * SQLite-side `jira-cache.ts` free functions, but as an instance that owns the
- * async `postgres.js` client and its own schema-readiness promise. Holds only
- * cache I/O (persistence + materialization); API sync and business logic stay in
- * `PostgresJiraProvider`.
+ * Postgres cache I/O and schema readiness for the shared JiraProviderCore.
  */
 export class PostgresJiraCache implements JiraCachePort {
   readonly ready: Promise<void>

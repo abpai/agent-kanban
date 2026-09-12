@@ -10,12 +10,8 @@ export function error(code: string, message: string): CliOutput<never> {
 
 export function formatOutput(result: CliOutput, pretty: boolean): string {
   if (!pretty) return JSON.stringify(result)
-  if (!result.ok) return formatError(result.error)
+  if (!result.ok) return `Error [${result.error.code}]: ${result.error.message}`
   return formatPrettyData(result.data)
-}
-
-function formatError(err: { code: string; message: string }): string {
-  return `Error [${err.code}]: ${err.message}`
 }
 
 function formatPrettyData(data: unknown): string {

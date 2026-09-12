@@ -5,6 +5,8 @@ import { parseDecimalDigits } from './transport-input'
 
 export type TrackerProvider = 'local' | 'linear' | 'jira'
 
+export const DEFAULT_COLUMN_NAMES = ['recurring', 'backlog', 'in-progress', 'review', 'done']
+
 /**
  * Single source of truth for which env var holds each provider's webhook signing
  * secret (`null` = the provider has no webhook ingestion). Typed as

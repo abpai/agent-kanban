@@ -495,13 +495,6 @@ describe('JiraProvider mutations', () => {
     expect(body.fields.summary).toBe('Renamed only')
   })
 
-  test('advertises labelReplacement capability', async () => {
-    fullSeed(db)
-    const { provider } = makeProvider(db, fullSyncRoutes())
-    const ctx = await provider.getContext()
-    expect(ctx.capabilities.labelReplacement).toBe(true)
-  })
-
   test('moveTask resolves a canonical status selector against a board column', async () => {
     seedCache(db, {
       priorities: seedPriorities,

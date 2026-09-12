@@ -27,6 +27,8 @@ export interface UiSlice {
   filterAssignee: string | null
   filterProject: string | null
   filterActivityDays: ActivityWindowDays
+  searchQuery: string
+  setSearchQuery: (query: string) => void
   showNewTaskModal: boolean
   newTaskDefaultColumn: string | null
 
@@ -42,6 +44,8 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (set) => (
   filterAssignee: safeLocalStorageGet(STORAGE_KEYS.assignee),
   filterProject: safeLocalStorageGet(STORAGE_KEYS.project),
   filterActivityDays: loadStoredActivityDays(),
+  searchQuery: '',
+  setSearchQuery: (searchQuery) => set({ searchQuery }),
   showNewTaskModal: false,
   newTaskDefaultColumn: null,
 

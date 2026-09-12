@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  filterVisibleTasks,
   moveTaskInBoard,
   replaceTask,
   upsertTaskInColumn,
@@ -64,6 +65,49 @@ function makeBoard(): BoardView {
 }
 
 describe('boardUtils', () => {
+  test('search matches task details and combines with board filters', () => {
+    const task = makeTask({
+      id: 't-search',
+      title: 'Ship dashboard',
+      column_id: 'c-backlog',
+      position: 0,
+      externalRef: 'ENG-42',
+      description: 'Reduce rendering work',
+      labels: ['performance'],
+      assignee: 'Andy',
+      project: 'Kanban',
+      updated_at: new Date().toISOString(),
+    })
+    const tasks = [
+      task,
+      makeTask({ id: 'other', title: 'Other task', column_id: 'c-backlog', position: 1 }),
+    ]
+    for (const query of [
+      '  DASHBOARD ',
+      'eng-42',
+      'rendering',
+      'PERFORMANCE',
+      'andy',
+      'kanban',
+      't-search',
+    ]) {
+      expect(filterVisibleTasks(tasks, 'Andy', 'Kanban', 1, query)).toEqual([task])
+    }
+    expect(filterVisibleTasks(tasks, 'Someone else', null, null, 'dashboard')).toEqual([])
+    expect(filterVisibleTasks(tasks, null, 'Other project', null, 'dashboard')).toEqual([])
+    expect(filterVisibleTasks(tasks, null, null, null, 'missing')).toEqual([])
+    expect(filterVisibleTasks(tasks, null, null, null, '  ')).toBe(tasks)
+    expect(
+      filterVisibleTasks(
+        [{ ...task, updated_at: '2020-01-01T00:00:00Z' }],
+        null,
+        null,
+        1,
+        'dashboard',
+      ),
+    ).toEqual([])
+  })
+
   test('replaceTask removes duplicate real task ids when resolving an optimistic create', () => {
     const board = makeBoard()
     const withWsInsertedReal: BoardView = {

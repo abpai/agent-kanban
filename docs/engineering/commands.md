@@ -1,7 +1,7 @@
 # Engineering commands
 
-Agent Kanban uses Bun as its runtime and package manager. CI pins Bun 1.3.11;
-the local package manager field currently names Bun 1.3.3.
+Agent Kanban uses Bun as its runtime and package manager. CI and the
+`packageManager` field both pin Bun 1.3.11.
 
 ## Bootstrap
 
@@ -34,7 +34,27 @@ Run this before handing off a normal code change:
 bun run check
 ```
 
-This expands to lint, root TypeScript, and UI TypeScript checks.
+This expands to lint, root TypeScript (including `scripts/`), and UI TypeScript
+checks. TypeScript and Prettier cache successful work under the ignored
+`.cache/` directory.
+
+### Lint and formatting
+
+`bun run lint:oxlint` checks JavaScript and TypeScript, including the existing
+type-aware `no-floating-promises` rule. `.oxlintrc.json` spells out the migrated
+ESLint rules so the migration preserves the quality gate. TypeScript catches
+undefined names in TypeScript; Oxlint retains `no-undef` for JavaScript.
+
+`bun run lint:format` checks the same JavaScript/TypeScript formatting surface
+as the previous ESLint setup, with a content-based Prettier cache. Run
+`bun run format` to format the full repository, or pass changed paths directly
+to `bun x --no-install prettier --write` for a focused fix.
+
+This adopts the separate Oxlint/Prettier checks and incremental TypeScript
+approach from [templates.bun](https://github.com/abpai/templates.bun/blob/main/package.json).
+The template's custom lint plugins and ratchet tooling are not needed for this
+repository's existing rules. Native type-aware linting is provided by the
+paired `oxlint-tsgolint` dependency; keep it installed when updating Oxlint.
 
 ## Dead-code / unused-export scan
 
@@ -55,9 +75,26 @@ Done means the full lane is green, or every skipped/blocked command is explained
 
 ```bash
 bun run check
+bun run knip
 bun test
 bun run build
 bun run ui:build
+bun run test:ui
+```
+
+### Dashboard browser proof
+
+`bun run test:ui` starts the built dashboard against a temporary SQLite database
+and drives it in headless Chrome. It checks the main task workflow at desktop
+and mobile sizes and exits after cleaning up the server and temporary data.
+Build `ui/dist/` first. The smoke uses an existing Chrome/Chromium installation;
+set `CHROME_PATH` if its executable is outside the standard locations. CI uses
+the runner's `/usr/bin/google-chrome`.
+
+To retain screenshots for visual review:
+
+```bash
+bun run test:ui --screenshots=/tmp/kanban-ui-proof
 ```
 
 ### Postgres parity proof

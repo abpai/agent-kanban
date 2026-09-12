@@ -25,10 +25,6 @@ const moveTo = values['move-to']
 const usage =
   'usage: bun --env-file=.env.local scripts/mcp-smoke-live.ts --provider <jira|linear> --ticket <KEY> [--write] [--move-to <column>]'
 
-function log(...args: unknown[]): void {
-  console.info(...args)
-}
-
 if (providerName !== 'jira' && providerName !== 'linear') {
   console.error(usage)
   process.exit(2)
@@ -66,10 +62,12 @@ const core = createTrackerCore<Scope>({
   },
   hooks: {
     onToolResult({ tool, durationMs, result }) {
-      log(`  [${tool}] ${durationMs}ms ${result ? JSON.stringify(result) : ''}`)
+      console.info(`  [${tool}] ${durationMs}ms ${result ? JSON.stringify(result) : ''}`)
     },
     onToolError({ tool, durationMs, errorCode, error }) {
-      log(`  [${tool}] ${durationMs}ms ERROR ${errorCode}: ${error.publicMessage ?? error.message}`)
+      console.info(
+        `  [${tool}] ${durationMs}ms ERROR ${errorCode}: ${error.publicMessage ?? error.message}`,
+      )
     },
   },
 })
@@ -91,43 +89,43 @@ const transport = new StreamableHTTPClientTransport(url)
 const client = new Client({ name: 'smoke-live', version: '1.0.0' })
 await client.connect(transport)
 
-function unwrap<T>(result: { structuredContent?: unknown }): T {
+function unwrap<T>(result: Awaited<ReturnType<Client['callTool']>>): T {
   return (result.structuredContent as { result: T }).result
 }
 
 try {
-  log(`\nprovider=${providerName} ticket=${ticketId} write=${writeEnabled}`)
+  console.info(`\nprovider=${providerName} ticket=${ticketId} write=${writeEnabled}`)
 
   const tools = await client.listTools()
-  log('\ntools:', tools.tools.map((t) => t.name).join(', '))
+  console.info('\ntools:', tools.tools.map((t) => t.name).join(', '))
 
-  log('\n# getTicket')
+  console.info('\n# getTicket')
   const ticket = unwrap<{ id: string; title: string; column_id?: string }>(
     await client.callTool({ name: 'getTicket', arguments: { ticketId } }),
   )
-  log(`  title: ${ticket.title}`)
-  log(`  id: ${ticket.id}`)
+  console.info(`  title: ${ticket.title}`)
+  console.info(`  id: ${ticket.id}`)
 
-  log('\n# listComments')
+  console.info('\n# listComments')
   const comments = unwrap<Array<{ id: string; body: string; author?: string | null }>>(
     await client.callTool({ name: 'listComments', arguments: { ticketId } }),
   )
-  log(`  ${comments.length} comment(s)`)
+  console.info(`  ${comments.length} comment(s)`)
   for (const c of comments.slice(-3)) {
     const snippet = c.body.length > 60 ? `${c.body.slice(0, 60)}…` : c.body
-    log(`  - ${c.id} by ${c.author ?? '?'}: ${snippet}`)
+    console.info(`  - ${c.id} by ${c.author ?? '?'}: ${snippet}`)
   }
 
-  log('\n# getBoard (columns only)')
+  console.info('\n# getBoard (columns only)')
   const board = unwrap<{ columns: Array<{ name: string; tasks: unknown[] }> }>(
     await client.callTool({ name: 'getBoard', arguments: {} }),
   )
   for (const col of board.columns) {
-    log(`  ${col.name}: ${col.tasks.length} task(s)`)
+    console.info(`  ${col.name}: ${col.tasks.length} task(s)`)
   }
 
   if (writeEnabled) {
-    log('\n# postComment (WRITE)')
+    console.info('\n# postComment (WRITE)')
     const postedBody = `mcp-smoke-live probe ${new Date().toISOString()}`
     const posted = unwrap<{ id: string; body: string }>(
       await client.callTool({
@@ -135,9 +133,9 @@ try {
         arguments: { ticketId, body: postedBody },
       }),
     )
-    log(`  posted id=${posted.id}`)
+    console.info(`  posted id=${posted.id}`)
 
-    log('\n# updateComment (WRITE)')
+    console.info('\n# updateComment (WRITE)')
     const updated = unwrap<{ id: string; body: string }>(
       await client.callTool({
         name: 'updateComment',
@@ -148,20 +146,20 @@ try {
         },
       }),
     )
-    log(`  updated body: ${updated.body}`)
+    console.info(`  updated body: ${updated.body}`)
   } else {
-    log('\n(skipping write ops; pass --write to exercise postComment/updateComment)')
+    console.info('\n(skipping write ops; pass --write to exercise postComment/updateComment)')
   }
 
   if (moveTo) {
-    log(`\n# moveTicket → ${moveTo} (WRITE)`)
+    console.info(`\n# moveTicket → ${moveTo} (WRITE)`)
     await client.callTool({
       name: 'moveTicket',
       arguments: { ticketId, column: moveTo },
     })
   }
 
-  log('\nsmoke-live: ok')
+  console.info('\nsmoke-live: ok')
 } finally {
   await client.close()
   await tracker.close()

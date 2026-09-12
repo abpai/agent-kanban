@@ -204,11 +204,12 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
     const board = get().board
     const snapshot = board
     const found = board ? findTask(board, id) : null
-    if (board) set({ board: removeTaskById(board, id), selectedTaskId: null })
+    if (board) set({ board: removeTaskById(board, id), selectedTaskId: null, error: null })
     try {
       await api.deleteTask(id)
     } catch (err) {
       if (snapshot) set({ board: snapshot, selectedTaskId: found ? id : null })
+      set({ error: getErrorMessage(err, 'Failed to delete task') })
       throw err
     }
   },
@@ -216,8 +217,8 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
   resolveConflictKeepLocal: async () => {
     const conflict = get().pendingConflict
     if (!conflict) return
-    set({ pendingConflict: null })
     await api.updateTask(conflict.taskId, conflict.attemptedUpdates)
+    set({ pendingConflict: null })
     await get().fetchAll()
   },
 

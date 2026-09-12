@@ -18,11 +18,8 @@ export type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear
 type LinearIssueRow = LinearTaskRow
 
 /**
- * Postgres-backed cache/repository for the Linear provider. Mirrors the role of
- * the SQLite-side `linear-cache.ts` free functions, but as an instance that owns
- * the async `postgres.js` client and its own schema-readiness promise. Holds only
- * cache I/O (persistence + materialization, including description-change activity
- * synthesis on write); API sync and business logic stay in `PostgresLinearProvider`.
+ * Postgres cache I/O, schema readiness, and description-change activity synthesis
+ * for the shared LinearProviderCore.
  */
 export class PostgresLinearCache implements LinearCachePort {
   readonly ready: Promise<void>

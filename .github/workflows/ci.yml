@@ -58,3 +58,8 @@ jobs:
 
       - name: Build web dashboard
         run: bun run ui:build
+
+      - name: Exercise dashboard in Chrome
+        run: bun run test:ui
+        env:
+          CHROME_PATH: /usr/bin/google-chrome

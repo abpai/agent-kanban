@@ -138,8 +138,8 @@ surface.
 
 Unsupported operations return error code `UNSUPPORTED_OPERATION` with exit code 1.
 
-Task comments are exposed through the CLI, REST API, MCP, and dashboard task
-detail flows.
+Task comments are exposed through the CLI, REST API, and MCP. Dashboard task
+details show the comment count.
 
 In Linear and Jira modes, webhooks update the cache immediately when configured,
 and the normal poll loop still runs as a fallback so missed deliveries and

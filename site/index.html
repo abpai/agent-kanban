@@ -58,6 +58,8 @@
 
       html {
         background: var(--black);
+        scroll-behavior: smooth;
+        scroll-padding-top: 80px;
       }
 
       body {
@@ -794,18 +796,10 @@
         }
       }
 
-      /* ─── Scroll reveal ─── */
-      .reveal {
-        opacity: 0;
-        transform: translateY(16px);
-        transition:
-          opacity 0.4s cubic-bezier(0.25, 0.1, 0.25, 1),
-          transform 0.4s cubic-bezier(0.25, 0.1, 0.25, 1);
-      }
-
-      .reveal.visible {
-        opacity: 1;
-        transform: translateY(0);
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
       }
     </style>
   </head>
@@ -846,7 +840,7 @@
         <h1>Kanban for<br />AI agents</h1>
         <p class="hero-subtitle">
           CLI-first task management built for automation. Agents get deterministic JSON output.
-          Humans get a web dashboard. Runs on local SQLite or Linear.
+          Humans get a web dashboard. Works with local boards, Linear, and Jira.
         </p>
         <div class="hero-ctas">
           <a
@@ -868,7 +862,7 @@
     </section>
 
     <!-- Screenshot -->
-    <section class="showcase section reveal">
+    <section class="showcase section">
       <div class="frame">
         <div class="frame-bar">
           <span class="frame-dot"></span>
@@ -887,7 +881,7 @@
     </section>
 
     <!-- Features -->
-    <section id="features" class="features section reveal">
+    <section id="features" class="features section">
       <p class="section-label">Capabilities</p>
       <h2 class="section-title">Built for agents,<br />usable by humans</h2>
       <div class="features-grid">
@@ -903,8 +897,8 @@
           <div class="feature-icon feature-icon--success"></div>
           <h3 class="feature-name">Real-time web dashboard</h3>
           <p class="feature-desc">
-            Interactive kanban board with WebSocket push updates. Filter by assignee, project, or
-            priority. Works on desktop and mobile.
+            Interactive kanban board with WebSocket push updates. Search tasks and filter by
+            assignee, project, or recent activity. Works on desktop and mobile.
           </p>
         </div>
         <div class="feature-card">
@@ -943,7 +937,7 @@
     </section>
 
     <!-- CLI Demo -->
-    <section class="demo section reveal">
+    <section class="demo section">
       <p class="section-label">Interface</p>
       <h2 class="section-title">Bash is the API</h2>
       <div class="frame terminal">
@@ -983,8 +977,8 @@
     </section>
 
     <!-- Providers -->
-    <section class="providers section reveal">
-      <p class="section-label">Backends</p>
+    <section class="providers section">
+      <p class="section-label">Providers</p>
       <h2 class="section-title">Choose your provider</h2>
       <div class="providers-grid">
         <div class="provider-card">
@@ -1003,13 +997,13 @@
         </div>
         <div class="provider-card">
           <p class="provider-label">Team scale</p>
-          <h3 class="provider-name">Linear</h3>
+          <h3 class="provider-name">Linear &amp; Jira</h3>
           <p class="provider-desc">
-            Sync with your Linear workspace. Same CLI interface, team-scale backend.
+            Connect a Linear team or Jira project. Use the same CLI with a synchronized local cache.
           </p>
           <ul class="provider-features">
             <li>Create &amp; update tasks</li>
-            <li>Move tasks between states</li>
+            <li>Move tasks between columns</li>
             <li>External refs (TEAM-123)</li>
             <li>Direct issue URLs</li>
             <li>Team sync via API</li>
@@ -1019,7 +1013,7 @@
     </section>
 
     <!-- Mobile showcase -->
-    <section class="mobile-showcase section reveal">
+    <section class="mobile-showcase section">
       <div class="mobile-showcase-inner">
         <div class="mobile-showcase-text">
           <p class="section-label">Responsive</p>
@@ -1043,7 +1037,7 @@
     </section>
 
     <!-- Install CTA -->
-    <section class="install section reveal">
+    <section class="install section">
       <h2 class="install-title">Get started</h2>
       <p class="install-sub">Install globally with Bun and start managing tasks in seconds.</p>
       <button
@@ -1101,21 +1095,6 @@
     </footer>
 
     <script>
-      // Scroll reveal
-      const observer = new IntersectionObserver(
-        (entries) => {
-          entries.forEach((entry) => {
-            if (entry.isIntersecting) {
-              entry.target.classList.add('visible')
-              observer.unobserve(entry.target)
-            }
-          })
-        },
-        { threshold: 0.1 },
-      )
-
-      document.querySelectorAll('.reveal').forEach((el) => observer.observe(el))
-
       // Copy install command
       const copyInstallButton = document.getElementById('copyInstallButton')
       const installCommand = document.getElementById('installCommand')
@@ -1134,15 +1113,6 @@
       }
 
       copyInstallButton.addEventListener('click', copyInstall)
-
-      // Smooth scroll for nav links
-      document.querySelectorAll('a[href^="#"]').forEach((a) => {
-        a.addEventListener('click', (e) => {
-          e.preventDefault()
-          const target = document.querySelector(a.getAttribute('href'))
-          if (target) target.scrollIntoView({ behavior: 'smooth' })
-        })
-      })
     </script>
   </body>
 </html>

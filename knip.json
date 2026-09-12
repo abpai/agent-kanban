@@ -6,6 +6,5 @@
       "project": ["src/**/*.ts", "scripts/**/*.ts"]
     },
     "ui": {}
-  },
-  "ignoreUnresolved": ["bun-types"]
+  }
 }

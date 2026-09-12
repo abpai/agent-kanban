@@ -82,7 +82,7 @@ describe('buildWebhookForwardHook', () => {
     expect(input).toBe(config.url)
     expect(init?.method).toBe('POST')
     expect(init?.body).toBe(EVENT.rawBody)
-    expect((init?.headers as Record<string, string>).authorization).toBe('Bearer token-1')
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer token-1')
     expect(init?.signal).toBeInstanceOf(globalThis.AbortSignal)
     expect(sql.calls[0]!.values).toEqual([
       'jira',

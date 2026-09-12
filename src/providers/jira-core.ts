@@ -50,7 +50,7 @@ import type {
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from '../sync-config'
 import { WEBHOOK_SECRET_ENV, webhookSecretFromEnv } from '../tracker-config'
 import { warnOnce } from './warn-once'
-import { applyTaskFilters, forEachWithConcurrency, SyncGate, syncStatusFromMeta } from './sync-core'
+import { applyTaskFilters, mapWithConcurrency, SyncGate, syncStatusFromMeta } from './sync-core'
 
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 
@@ -373,7 +373,7 @@ export class JiraProviderCore implements KanbanProvider {
       // poll-based `moved` trigger works. Server-side dedupe
       // keyed on (issue_id, history_id, item_field) keeps this cheap
       // even if the same issue is updated repeatedly.
-      await forEachWithConcurrency(page.issues, 5, async (issue) => {
+      await mapWithConcurrency(page.issues, 5, async (issue) => {
         await this.ingestIssueActivity(issue.id).catch((err) => {
           // Activity is best-effort; the main sync shouldn't fail if
           // one changelog call 404s or rate-limits.

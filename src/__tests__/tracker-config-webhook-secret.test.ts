@@ -21,16 +21,6 @@ describe('WEBHOOK_SECRET_ENV (single source of truth)', () => {
       jira: 'JIRA_WEBHOOK_SECRET',
     })
   })
-
-  test('every non-local provider points at a *_WEBHOOK_SECRET env name', () => {
-    for (const [provider, envName] of Object.entries(WEBHOOK_SECRET_ENV)) {
-      if (provider === 'local') {
-        expect(envName).toBeNull()
-      } else {
-        expect(envName).toMatch(/_WEBHOOK_SECRET$/)
-      }
-    }
-  })
 })
 
 describe('trackerProviderFromEnv', () => {

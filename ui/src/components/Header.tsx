@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '../store'
 
 export function Header() {
@@ -6,145 +7,160 @@ export function Header() {
     config,
     provider,
     team,
-    capabilities,
+    canCreate,
     filterAssignee,
     filterProject,
     filterActivityDays,
+    searchQuery,
     setFilterAssignee,
     setFilterProject,
     setFilterActivityDays,
+    setSearchQuery,
     setShowNewTaskModal,
     wsConnected,
-  } = useStore()
-
-  // Merge assignees from metrics + config members
-  const metricAssignees = metrics?.assignees ?? []
-  const configMembers = config?.members?.map((m) => m.name) ?? []
-  const allAssignees = [...new Set([...metricAssignees, ...configMembers])].sort()
-
-  // Merge projects from metrics + config
-  const metricProjects = metrics?.projects ?? []
-  const configProjects = config?.projects ?? []
-  const allProjects = [...new Set([...metricProjects, ...configProjects])].sort()
-
-  const providerLabel =
-    team && (provider === 'linear' || provider === 'jira')
-      ? `${team.name} (${team.key})`
-      : provider === 'jira'
-        ? 'Jira'
-        : provider
-  const hasActiveFilters =
-    filterAssignee !== null || filterProject !== null || filterActivityDays !== null
-
-  const resetFilters = () => {
-    setFilterAssignee(null)
-    setFilterProject(null)
-    setFilterActivityDays(null)
-  }
+  } = useStore(
+    useShallow((s) => ({
+      metrics: s.metrics,
+      config: s.config,
+      provider: s.provider,
+      team: s.team,
+      canCreate: s.capabilities.taskCreate,
+      filterAssignee: s.filterAssignee,
+      filterProject: s.filterProject,
+      filterActivityDays: s.filterActivityDays,
+      searchQuery: s.searchQuery,
+      setFilterAssignee: s.setFilterAssignee,
+      setFilterProject: s.setFilterProject,
+      setFilterActivityDays: s.setFilterActivityDays,
+      setSearchQuery: s.setSearchQuery,
+      setShowNewTaskModal: s.setShowNewTaskModal,
+      wsConnected: s.wsConnected,
+    })),
+  )
+  const assignees = [
+    ...new Set([
+      ...(metrics?.assignees ?? []),
+      ...(config?.members?.map((m) => m.name) ?? []),
+      ...(filterAssignee ? [filterAssignee] : []),
+    ]),
+  ].sort()
+  const projects = [
+    ...new Set([
+      ...(metrics?.projects ?? []),
+      ...(config?.projects ?? []),
+      ...(filterProject ? [filterProject] : []),
+    ]),
+  ].sort()
+  const providerLabel = team
+    ? `${team.name} (${team.key})`
+    : provider === 'local'
+      ? 'Local board'
+      : provider
+  const hasFilters = filterAssignee || filterProject || filterActivityDays || searchQuery
 
   return (
-    <div className="header">
+    <header className="header">
       <div className="headerTop">
         <div className="headerIdentity">
-          <div className="headerTitleRow">
-            <h1>
-              <span>agent</span>-kanban
-            </h1>
-            <div
-              className="liveStatus"
-              title={wsConnected ? 'Live updates enabled' : 'Polling for updates'}
-            >
-              <span className={`wsIndicator ${wsConnected ? 'connected' : 'disconnected'}`} />
-              <span>{wsConnected ? 'Live' : 'Polling'}</span>
-            </div>
-          </div>
-          <div className="providerBadge">{providerLabel}</div>
+          <h1>
+            agent<span className="brandSeparator">/</span>kanban
+          </h1>
+          <span className="providerBadge">{providerLabel}</span>
         </div>
-
-        {capabilities.taskCreate && (
-          <button className="newTaskBtn" onClick={() => setShowNewTaskModal(true)}>
-            + New Task
-          </button>
-        )}
-      </div>
-
-      {metrics && (
-        <div className="statsBar">
-          <div className="statCard">
-            <span className="statValue">{metrics.tasksCreatedThisWeek}</span>
-            <span className="statLabel">This week</span>
-          </div>
-          <div className="statCard">
-            <span className="statValue">{metrics.inProgressCount}</span>
-            <span className="statLabel">In progress</span>
-          </div>
-          <div className="statCard">
-            <span className="statValue">{metrics.totalTasks}</span>
-            <span className="statLabel">Total</span>
-          </div>
-          <div className="statCard">
-            <span className="statValue">{metrics.completionPercent}%</span>
-            <span className="statLabel">Completion</span>
-          </div>
-        </div>
-      )}
-
-      <div className="filterBar">
-        <div className="filterLabel">Filter</div>
-        <div className="filterRow">
-          <div className="filterGroup filterScroller">
-            <button
-              key="all-assignees"
-              className={`filterBtn${filterAssignee === null ? ' active' : ''}`}
-              onClick={() => setFilterAssignee(null)}
-            >
-              Everyone
-            </button>
-            {allAssignees.map((name) => (
-              <button
-                key={name}
-                className={`filterBtn${filterAssignee === name ? ' active' : ''}`}
-                onClick={() => setFilterAssignee(filterAssignee === name ? null : name)}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-          <span className="filterDivider" aria-hidden="true" />
-          <select
-            className={`filterSelect${filterActivityDays !== null ? ' active' : ''}`}
-            value={filterActivityDays ?? ''}
-            onChange={(e) => {
-              const value = e.target.value
-              setFilterActivityDays(value ? (Number(value) as 1 | 7 | 14 | 28 | 70) : null)
-            }}
+        <div className="headerActions">
+          <span
+            className="liveStatus"
+            title={
+              wsConnected ? 'Changes appear automatically' : 'Checking for changes every 5 seconds'
+            }
           >
-            <option value="">Any activity</option>
-            <option value="1">Active in 24h</option>
-            <option value="7">Active in 7d</option>
-            <option value="14">Active in 14d</option>
-            <option value="28">Active in 28d</option>
-            <option value="70">Active in 70d</option>
-          </select>
-          <select
-            className={`filterSelect${filterProject !== null ? ' active' : ''}`}
-            value={filterProject ?? ''}
-            onChange={(e) => setFilterProject(e.target.value || null)}
-          >
-            <option value="">All projects</option>
-            {allProjects.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-          {hasActiveFilters && (
-            <button className="filterReset" onClick={resetFilters} type="button">
-              Clear
+            <span className={`wsIndicator ${wsConnected ? 'connected' : ''}`} />
+            {wsConnected ? 'Live' : 'Polling'}
+          </span>
+          {canCreate && (
+            <button className="btnPrimary" onClick={() => setShowNewTaskModal(true)}>
+              + New task
             </button>
           )}
         </div>
       </div>
-    </div>
+      <div className="boardHeading">
+        <h2>Board</h2>
+        {metrics && (
+          <p className="boardSummary">
+            <strong>{metrics.totalTasks}</strong> tasks<span aria-hidden="true"> · </span>
+            <strong>{metrics.inProgressCount}</strong> in progress
+            <span aria-hidden="true"> · </span>
+            {metrics.completionPercent}% complete
+          </p>
+        )}
+      </div>
+      <div className="filterBar" role="search" aria-label="Filter tasks">
+        <input
+          className="searchInput"
+          type="search"
+          aria-label="Search tasks"
+          placeholder="Search tasks…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+        <select
+          className="filterSelect"
+          aria-label="Filter by assignee"
+          value={filterAssignee ?? ''}
+          onChange={(e) => setFilterAssignee(e.target.value || null)}
+        >
+          <option value="">Everyone</option>
+          {assignees.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="filterSelect"
+          aria-label="Filter by project"
+          value={filterProject ?? ''}
+          onChange={(e) => setFilterProject(e.target.value || null)}
+        >
+          <option value="">All projects</option>
+          {projects.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="filterSelect"
+          aria-label="Filter by activity"
+          value={filterActivityDays ?? ''}
+          onChange={(e) =>
+            setFilterActivityDays(
+              e.target.value ? (Number(e.target.value) as 1 | 7 | 14 | 28 | 70) : null,
+            )
+          }
+        >
+          <option value="">Any activity</option>
+          <option value="1">Active in 24h</option>
+          <option value="7">Active in 7 days</option>
+          <option value="14">Active in 14 days</option>
+          <option value="28">Active in 28 days</option>
+          <option value="70">Active in 70 days</option>
+        </select>
+        {hasFilters && (
+          <button
+            className="filterReset"
+            onClick={() => {
+              setFilterAssignee(null)
+              setFilterProject(null)
+              setFilterActivityDays(null)
+              setSearchQuery('')
+            }}
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+    </header>
   )
 }

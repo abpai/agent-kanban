@@ -4,6 +4,7 @@ import type { BoardConfig, BoardView, Task } from '../types'
 import { LinearClient } from '../providers/linear-client'
 import { LinearProviderCore, type LinearCachePort } from '../providers/linear-core'
 import { LinearProvider } from '../providers/linear'
+import { LINEAR_CAPABILITIES } from '../providers/capabilities'
 import {
   initLinearCacheSchema,
   replaceStates,
@@ -217,7 +218,7 @@ afterEach(() => {
 })
 
 describe('LinearProvider.comment', () => {
-  test('posts the commentCreate mutation and advertises comment capability', async () => {
+  test('posts the commentCreate mutation and advertises provider capabilities', async () => {
     const provider = new LinearProvider(db, 'team-1', 'lin_api_test')
 
     const comment = await provider.comment('ENG-1', 'hello from linear')
@@ -238,7 +239,7 @@ describe('LinearProvider.comment', () => {
     expect((await provider.getTask('ENG-1')).comment_count).toBe(1)
 
     const context = await provider.getContext()
-    expect(context.capabilities.comment).toBe(true)
+    expect(context.capabilities).toEqual(LINEAR_CAPABILITIES)
   })
 
   test('queries issue comments and normalizes them into TaskComment rows', async () => {

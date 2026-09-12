@@ -18,17 +18,9 @@ import { POSTGRES_LOCAL_CAPABILITIES } from './capabilities'
 import { unsupportedOperation } from './errors'
 import { LocalProviderCore, type LocalStorePort } from './local-core'
 import type { CreateTaskInput, TaskListFilters, UpdateTaskInput } from './types'
-import type { LocalTrackerConfig } from '../tracker-config'
+import { DEFAULT_COLUMN_NAMES, type LocalTrackerConfig } from '../tracker-config'
 import { normalizeLabels, parseStoredLabels } from '../labels'
 import type { Exec } from './postgres-batch'
-
-const DEFAULT_COLUMNS = [
-  { name: 'recurring', position: 0 },
-  { name: 'backlog', position: 1 },
-  { name: 'in-progress', position: 2 },
-  { name: 'review', position: 3 },
-  { name: 'done', position: 4 },
-]
 
 interface TaskRow {
   id: string
@@ -59,17 +51,6 @@ interface ActivityRow {
 
 function nowIso(): string {
   return new Date().toISOString()
-}
-
-function defaultColumns(config: Pick<LocalTrackerConfig, 'defaultColumns'>): Array<{
-  name: string
-  position: number
-}> {
-  const names =
-    config.defaultColumns && config.defaultColumns.length > 0
-      ? config.defaultColumns
-      : DEFAULT_COLUMNS.map((column) => column.name)
-  return names.map((name, position) => ({ name, position }))
 }
 
 function assertPriority(priority: string): asserts priority is Priority {
@@ -190,10 +171,13 @@ class PostgresLocalStore implements LocalStorePort {
     >`SELECT COUNT(*) AS count FROM columns`
     if (Number(row?.count ?? 0) > 0) return
 
-    for (const column of defaultColumns(this.config)) {
+    const names = this.config.defaultColumns?.length
+      ? this.config.defaultColumns
+      : DEFAULT_COLUMN_NAMES
+    for (const [position, name] of names.entries()) {
       await this.sql`
         INSERT INTO columns (id, name, position, created_at, updated_at)
-        VALUES (${generateId('c')}, ${column.name}, ${column.position}, ${nowIso()}, ${nowIso()})
+        VALUES (${generateId('c')}, ${name}, ${position}, ${nowIso()}, ${nowIso()})
       `
     }
   }

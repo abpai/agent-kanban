@@ -16,7 +16,9 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": true
+    "noEmit": true,
+    "incremental": true,
+    "tsBuildInfoFile": "../.cache/ui.tsbuildinfo"
   },
-  "include": ["src"]
+  "include": ["src", "vite.config.ts"]
 }

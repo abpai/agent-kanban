@@ -7,14 +7,7 @@ import { ErrorCode, KanbanError } from './errors'
 import type { BoardView, Column, Priority, Task, TaskComment, TaskWithColumn } from './types'
 import { logActivity, enterColumn, exitColumn } from './activity'
 import { normalizeLabels, parseStoredLabels } from './labels'
-
-const DEFAULT_COLUMNS = [
-  { name: 'recurring', position: 0 },
-  { name: 'backlog', position: 1 },
-  { name: 'in-progress', position: 2 },
-  { name: 'review', position: 3 },
-  { name: 'done', position: 4 },
-]
+import { DEFAULT_COLUMN_NAMES } from './tracker-config'
 
 export function getDbPath(): string {
   const envPath = process.env['KANBAN_DB_PATH']
@@ -142,15 +135,10 @@ export function seedDefaultColumns(db: Database, columnNames?: string[]): void {
     count: number
   }
   if (existing.count > 0) return
-  // Honor KANBAN_DEFAULT_COLUMNS (passed through as columnNames) when provided,
-  // matching the Postgres local provider; otherwise fall back to the built-in set.
-  const columns =
-    columnNames && columnNames.length > 0
-      ? columnNames.map((name, position) => ({ name, position }))
-      : DEFAULT_COLUMNS
+  const names = columnNames?.length ? columnNames : DEFAULT_COLUMN_NAMES
   const stmt = db.prepare('INSERT INTO columns (id, name, position) VALUES ($id, $name, $position)')
-  for (const col of columns) {
-    stmt.run({ $id: generateId('c'), $name: col.name, $position: col.position })
+  for (const [position, name] of names.entries()) {
+    stmt.run({ $id: generateId('c'), $name: name, $position: position })
   }
 }
 

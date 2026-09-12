@@ -13,14 +13,30 @@ export function filterVisibleTasks(
   filterAssignee: string | null,
   filterProject: string | null,
   filterActivityDays: number | null = null,
+  searchQuery = '',
 ): Task[] {
+  const query = searchQuery.trim().toLowerCase()
+  if (!filterAssignee && !filterProject && filterActivityDays === null && !query) return tasks
+  const cutoffMs = filterActivityDays === null ? null : Date.now() - filterActivityDays * 86_400_000
   return tasks.filter((task) => {
     if (filterAssignee && task.assignee !== filterAssignee) return false
     if (filterProject && task.project !== filterProject) return false
-    if (filterActivityDays !== null) {
+    if (
+      query &&
+      ![
+        task.id,
+        task.externalRef,
+        task.title,
+        task.description,
+        task.assignee,
+        task.project,
+        ...task.labels,
+      ].some((value) => value?.toLowerCase().includes(query))
+    )
+      return false
+    if (cutoffMs !== null) {
       const updatedAtMs = Date.parse(task.updated_at)
       if (!Number.isNaN(updatedAtMs)) {
-        const cutoffMs = Date.now() - filterActivityDays * 24 * 60 * 60 * 1000
         if (updatedAtMs < cutoffMs) return false
       }
     }
