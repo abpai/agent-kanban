@@ -11,7 +11,12 @@ import {
 // so the derived fields — done/in-progress classification, completion math, and
 // priority ordering — can never drift between backends.
 
-const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 }
+const PRIORITY_RANK = new Map([
+  ['urgent', 0],
+  ['high', 1],
+  ['medium', 2],
+  ['low', 3],
+])
 
 /** A column plus how many tasks currently sit in it. */
 interface MetricsColumnCount extends ClassifiableColumn {
@@ -38,10 +43,7 @@ export interface MetricsInputs {
  * querying column_time_tracking); assembleBoardMetrics() reclassifies from the
  * same column set so the two never disagree.
  */
-export function classifyColumnRoles(columns: ClassifiableColumn[]): {
-  doneColumnIds: string[]
-  inProgressColumnIds: string[]
-} {
+export function classifyColumnRoles(columns: ClassifiableColumn[]) {
   return {
     doneColumnIds: selectDoneColumnIds(columns),
     inProgressColumnIds: selectInProgressColumnIds(columns),
@@ -65,7 +67,7 @@ export function assembleBoardMetrics(inputs: MetricsInputs): BoardMetrics {
     .reduce((sum, column) => sum + column.count, 0)
 
   const tasksByPriority = [...inputs.priorityCounts].sort(
-    (a, b) => (PRIORITY_RANK[a.priority] ?? 99) - (PRIORITY_RANK[b.priority] ?? 99),
+    (a, b) => (PRIORITY_RANK.get(a.priority) ?? 99) - (PRIORITY_RANK.get(b.priority) ?? 99),
   )
 
   const completionPercent =

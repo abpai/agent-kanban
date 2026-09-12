@@ -158,6 +158,51 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+async function connectSocket(runtime: StartedServer) {
+  const socket = new WebSocket(`ws://127.0.0.1:${runtime.port}/ws`)
+  const messages: string[] = []
+  socket.addEventListener('message', (event) => messages.push(String(event.data)))
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener('open', () => resolve(), { once: true })
+    socket.addEventListener('error', () => reject(new Error('ws connection failed')), {
+      once: true,
+    })
+  })
+  return { socket, messages }
+}
+
+async function closeSocket(socket: WebSocket): Promise<void> {
+  if (socket.readyState === WebSocket.CLOSED) return
+  await new Promise<void>((resolve) => {
+    socket.addEventListener('close', () => resolve(), { once: true })
+    socket.close()
+  })
+}
+
+async function expectSocketCount(runtime: StartedServer, count: number): Promise<void> {
+  for (const path of ['/api/health', '/api/sync-status']) {
+    const response = await fetch(`http://127.0.0.1:${runtime.port}${path}`)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toHaveProperty('data.wsClients', count)
+  }
+}
+
+async function waitForMessages(messages: string[], count: number): Promise<void> {
+  const deadline = Date.now() + 1000
+  while (messages.length < count && Date.now() < deadline) {
+    await sleep(5)
+  }
+  expect(messages).toHaveLength(count)
+}
+
+async function createTask(runtime: StartedServer): Promise<Response> {
+  return fetch(`http://127.0.0.1:${runtime.port}/api/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Broadcast me' }),
+  })
+}
+
 const runtimes: StartedServer[] = []
 
 afterEach(() => {
@@ -197,14 +242,11 @@ describe('startServer', () => {
     runtimes.push(runtime)
 
     const response = await fetch(`http://127.0.0.1:${runtime.port}/api/health`)
-    const body = (await response.json()) as {
-      ok: boolean
-      data: { provider: string; status: string; wsClients: number }
-    }
+    const body = await response.json()
 
     expect(response.status).toBe(200)
-    expect(body.ok).toBe(true)
-    expect(body.data.provider).toBe('local')
+    expect(body).toHaveProperty('ok', true)
+    expect(body).toHaveProperty('data.provider', 'local')
     expect(getContextCalls).toBe(0)
   })
 
@@ -232,13 +274,10 @@ describe('startServer', () => {
     await sleep(5)
     response = await fetch(`http://127.0.0.1:${runtime.port}/api/ready`)
     expect(response.status).toBe(200)
-    const body = (await response.json()) as {
-      ok: boolean
-      data: { ready: boolean; backgroundSync: { warm: boolean } }
-    }
-    expect(body.ok).toBe(true)
-    expect(body.data.ready).toBe(true)
-    expect(body.data.backgroundSync.warm).toBe(true)
+    const body = await response.json()
+    expect(body).toHaveProperty('ok', true)
+    expect(body).toHaveProperty('data.ready', true)
+    expect(body).toHaveProperty('data.backgroundSync.warm', true)
   })
 
   test('sync-status reports provider sync metadata and background scheduler state', async () => {
@@ -272,22 +311,15 @@ describe('startServer', () => {
 
     await sleep(55)
     const response = await fetch(`http://127.0.0.1:${runtime.port}/api/sync-status`)
-    const body = (await response.json()) as {
-      ok: boolean
-      data: {
-        provider: string
-        backgroundSync: { enabled: boolean; warm: boolean; lastSuccessAt: string | null }
-        providerSync: ProviderSyncStatus
-      }
-    }
+    const body = await response.json()
 
     expect(response.status).toBe(200)
-    expect(body.ok).toBe(true)
-    expect(body.data.provider).toBe('jira')
-    expect(body.data.backgroundSync.enabled).toBe(true)
-    expect(body.data.backgroundSync.warm).toBe(true)
-    expect(body.data.backgroundSync.lastSuccessAt).not.toBeNull()
-    expect(body.data.providerSync.lastSyncAt).not.toBeNull()
+    expect(body).toHaveProperty('ok', true)
+    expect(body).toHaveProperty('data.provider', 'jira')
+    expect(body).toHaveProperty('data.backgroundSync.enabled', true)
+    expect(body).toHaveProperty('data.backgroundSync.warm', true)
+    expect(body).toHaveProperty('data.backgroundSync.lastSuccessAt', expect.any(String))
+    expect(body).toHaveProperty('data.providerSync.lastSyncAt', expect.any(String))
     expect(syncCalls).toBeGreaterThanOrEqual(2)
   })
 })
@@ -308,9 +340,9 @@ describe('startServer auth + CORS', () => {
 
     const noAuth = await fetch(`http://127.0.0.1:${runtime.port}/api/bootstrap`)
     expect(noAuth.status).toBe(401)
-    const noAuthBody = (await noAuth.json()) as { ok: boolean; error: { code: string } }
-    expect(noAuthBody.ok).toBe(false)
-    expect(noAuthBody.error.code).toBe('UNAUTHORIZED')
+    const noAuthBody = await noAuth.json()
+    expect(noAuthBody).toHaveProperty('ok', false)
+    expect(noAuthBody).toHaveProperty('error.code', 'UNAUTHORIZED')
 
     const wrong = await fetch(`http://127.0.0.1:${runtime.port}/api/bootstrap`, {
       headers: { Authorization: 'Bearer nope' },
@@ -389,10 +421,10 @@ describe('startServer auth + CORS', () => {
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
     })
-    const body = (await res.json()) as { ok: boolean; error: { code: string } }
+    const body = await res.json()
     expect(res.status).toBe(500)
-    expect(body.ok).toBe(false)
-    expect(body.error.code).toBe('INTERNAL_ERROR')
+    expect(body).toHaveProperty('ok', false)
+    expect(body).toHaveProperty('error.code', 'INTERNAL_ERROR')
   })
 
   test('F06: a `/kanban`-prefixed API path still enforces the auth gate (no prefix bypass)', async () => {
@@ -412,68 +444,89 @@ describe('startServer auth + CORS', () => {
     expect(health.status).toBe(200)
   })
 
-  test('F13: a connected WS client receives task:upsert when a task is created via the API', async () => {
-    const runtime = startServer(makeProvider(), 0)
-    runtimes.push(runtime)
+  test('F13: task events reach every connected client only on the mutated server', async () => {
+    const taskA = noopTask()
+    const taskB = { ...noopTask(), id: 'server-b-task' }
+    const a = startServer(makeProvider(), 0)
+    runtimes.push(a)
+    const b = startServer(
+      makeProvider({
+        async createTask() {
+          return taskB
+        },
+      }),
+      0,
+    )
+    runtimes.push(b)
 
-    const ws = new WebSocket(`ws://127.0.0.1:${runtime.port}/ws`)
-    await new Promise<void>((resolve, reject) => {
-      ws.onopen = () => resolve()
-      ws.onerror = () => reject(new Error('ws connection failed'))
-    })
-    const received = new Promise<{
-      type: string
-      task?: { column_id?: string }
-      columnId?: string
-    }>((resolve, reject) => {
-      ws.onmessage = (e) => resolve(JSON.parse(String(e.data)))
-      // Fast-fail with a clear message instead of hanging until the global test
-      // timeout if the broadcast never arrives (e.g. the socket was not yet
-      // registered when the mutation fired).
-      setTimeout(() => reject(new Error('timed out waiting for ws broadcast')), 4000)
-    })
+    const a1 = await connectSocket(a)
+    const a2 = await connectSocket(a)
+    const b1 = await connectSocket(b)
     try {
-      // Let the open handler register the socket before the mutation broadcasts.
-      await sleep(25)
+      await expectSocketCount(a, 2)
+      await expectSocketCount(b, 1)
 
-      await fetch(`http://127.0.0.1:${runtime.port}/api/tasks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: 'Broadcast me' }),
-      })
+      expect((await createTask(a)).status).toBe(200)
+      await Promise.all([waitForMessages(a1.messages, 1), waitForMessages(a2.messages, 1)])
+      const eventA = { type: 'task:upsert', task: taskA, columnId: 'backlog' }
+      expect(a1.messages.map((message) => JSON.parse(message))).toEqual([eventA])
+      expect(a2.messages.map((message) => JSON.parse(message))).toEqual([eventA])
+      expect(b1.messages).toEqual([])
 
-      const msg = await received
-      expect(msg.type).toBe('task:upsert')
-      expect(msg.columnId).toBe('backlog')
+      expect((await createTask(b)).status).toBe(200)
+      await waitForMessages(b1.messages, 1)
+      const eventB = { type: 'task:upsert', task: taskB, columnId: 'backlog' }
+      expect(b1.messages.map((message) => JSON.parse(message))).toEqual([eventB])
+
+      await closeSocket(a1.socket)
+      await expectSocketCount(a, 1)
+      await expectSocketCount(b, 1)
+      expect((await createTask(a)).status).toBe(200)
+      await waitForMessages(a2.messages, 2)
+      expect(a1.messages.map((message) => JSON.parse(message))).toEqual([eventA])
+      expect(a2.messages.map((message) => JSON.parse(message))).toEqual([eventA, eventA])
+      expect(b1.messages.map((message) => JSON.parse(message))).toEqual([eventB])
+
+      await closeSocket(a2.socket)
+      await expectSocketCount(a, 0)
+      await expectSocketCount(b, 1)
+      await closeSocket(b1.socket)
+      await expectSocketCount(b, 0)
     } finally {
-      ws.close()
+      await Promise.all([a1, a2, b1].map(({ socket }) => closeSocket(socket)))
     }
   })
 
-  test('wsClients are tracked per server instance, not shared globally', async () => {
-    const a = startServer(makeProvider(), 0)
-    runtimes.push(a)
-    const b = startServer(makeProvider(), 0)
-    runtimes.push(b)
-
-    const ws = new WebSocket(`ws://127.0.0.1:${a.port}/ws`)
-    await new Promise<void>((resolve, reject) => {
-      ws.onopen = () => resolve()
-      ws.onerror = () => reject(new Error('ws connection failed'))
-    })
-    // Let server A's open handler register the socket.
-    await sleep(25)
-
-    const healthA = (await (await fetch(`http://127.0.0.1:${a.port}/api/health`)).json()) as {
-      data: { wsClients: number }
+  test('stop(false) lets an in-flight mutation finish without broadcasting afterward', async () => {
+    const mutationStarted = Promise.withResolvers<void>()
+    const completeMutation = Promise.withResolvers<void>()
+    const runtime = startServer(
+      makeProvider({
+        async createTask() {
+          mutationStarted.resolve()
+          await completeMutation.promise
+          return noopTask()
+        },
+      }),
+      0,
+    )
+    runtimes.push(runtime)
+    const client = await connectSocket(runtime)
+    try {
+      await expectSocketCount(runtime, 1)
+      const response = createTask(runtime)
+      await mutationStarted.promise
+      runtime.stop(false)
+      completeMutation.resolve()
+      expect((await response).status).toBe(200)
+      // Allow a late broadcast to arrive while the graceful-stop socket stays open.
+      await sleep(25)
+      expect(client.socket.readyState).toBe(WebSocket.OPEN)
+      expect(client.messages).toEqual([])
+    } finally {
+      completeMutation.resolve()
+      await closeSocket(client.socket)
     }
-    const healthB = (await (await fetch(`http://127.0.0.1:${b.port}/api/health`)).json()) as {
-      data: { wsClients: number }
-    }
-    expect(healthA.data.wsClients).toBe(1)
-    // Before per-instance scoping, B shared A's global set and also reported 1.
-    expect(healthB.data.wsClients).toBe(0)
-    ws.close()
   })
 
   test('CORS headers are emitted only when an allowed origin is configured', async () => {

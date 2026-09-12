@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { Database } from 'bun:sqlite'
-import { Client } from '@modelcontextprotocol/sdk/client'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { addTask, initSchema, seedDefaultColumns } from '../src/db'
 import { createTrackerCore, createTrackerMcpServer } from '../src/mcp/index'
 import { LocalProvider } from '../src/providers/local'
@@ -36,31 +35,31 @@ const httpServer = Bun.serve({
 const url = new URL(`http://127.0.0.1:${httpServer.port}/mcp`)
 
 const transport = new StreamableHTTPClientTransport(url)
-const client = new Client({ name: 'smoke', version: '1.0.0' })
+const client = new Client(
+  { name: 'smoke', version: '1.0.0' },
+  { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+)
 
-function unwrap<T>(result: { structuredContent?: unknown }): T {
+function unwrap<T>(result: Awaited<ReturnType<Client['callTool']>>): T {
+  // SAFETY: Calls below target our default MCP tools, whose structuredContent wraps the domain result in { result }.
   return (result.structuredContent as { result: T }).result
 }
 
-function log(label: string, value: string): void {
-  console.info(label, value)
-}
-
-await client.connect(transport)
-
 try {
+  await client.connect(transport)
+  console.info('protocol:', client.getProtocolEra())
   const tools = await client.listTools()
-  log('tools:', tools.tools.map((t) => t.name).join(', '))
+  console.info('tools:', tools.tools.map((t) => t.name).join(', '))
 
   const getTicket = unwrap<{ id: string; title: string }>(
     await client.callTool({ name: 'getTicket', arguments: { ticketId: seed.id } }),
   )
-  log('getTicket:', getTicket.title)
+  console.info('getTicket:', getTicket.title)
 
   const board = unwrap<{ columns: Array<{ name: string }> }>(
     await client.callTool({ name: 'getBoard', arguments: {} }),
   )
-  log('getBoard columns:', board.columns.map((column) => column.name).join(', '))
+  console.info('getBoard columns:', board.columns.map((column) => column.name).join(', '))
 
   const posted = unwrap<{ id: string }>(
     await client.callTool({
@@ -68,12 +67,12 @@ try {
       arguments: { ticketId: seed.id, body: 'hello from smoke' },
     }),
   )
-  log('postComment id:', posted.id)
+  console.info('postComment id:', posted.id)
 
   const list = unwrap<Array<{ body: string }>>(
     await client.callTool({ name: 'listComments', arguments: { ticketId: seed.id } }),
   )
-  log('listComments bodies:', list.map((comment) => comment.body).join(' | '))
+  console.info('listComments bodies:', list.map((comment) => comment.body).join(' | '))
 
   const updated = unwrap<{ body: string }>(
     await client.callTool({
@@ -81,7 +80,7 @@ try {
       arguments: { ticketId: seed.id, commentId: posted.id, body: 'rewritten by smoke' },
     }),
   )
-  log('updateComment body:', updated.body)
+  console.info('updateComment body:', updated.body)
 
   const moved = unwrap<unknown>(
     await client.callTool({
@@ -89,8 +88,8 @@ try {
       arguments: { ticketId: seed.id, column: 'in-progress' },
     }),
   )
-  log('moveTicket result:', JSON.stringify(moved))
-  log('smoke:', 'ok')
+  console.info('moveTicket result:', JSON.stringify(moved))
+  console.info('smoke:', 'ok')
 } finally {
   await client.close()
   await tracker.close()

@@ -5,3 +5,5 @@ coverage/
 .npm/
 .env*
 .vscode/
+.cache/
+tools/oxlint/anti-slop/

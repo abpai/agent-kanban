@@ -43,8 +43,4 @@ process.on('SIGINT', () => cleanup(130))
 process.on('SIGTERM', () => cleanup(143))
 
 // Keep the script alive and exit when either child exits
-const result = await Promise.race([
-  api.exited.then((exitCode) => ({ exitCode })),
-  ui.exited.then((exitCode) => ({ exitCode })),
-])
-cleanup(result.exitCode)
+cleanup(await Promise.race([api.exited, ui.exited]))

@@ -1,18 +1,18 @@
-import { Server } from '@modelcontextprotocol/sdk/server'
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import {
-  CallToolRequestSchema,
-  ErrorCode as JsonRpcErrorCode,
-  ListToolsRequestSchema,
-  McpError,
-  isInitializeRequest,
+  createMcpHandler,
+  isSpecType,
+  ProtocolError,
+  ProtocolErrorCode,
+  Server,
+  type AuthInfo,
+  type CallToolRequest,
   type CallToolResult,
-} from '@modelcontextprotocol/sdk/types.js'
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv'
-import type {
-  JsonSchemaValidatorResult,
-  JsonSchemaType,
-} from '@modelcontextprotocol/sdk/validation'
+  type JsonSchemaType,
+  type JsonSchemaValidator,
+  type ListToolsResult,
+  type Tool,
+} from '@modelcontextprotocol/server'
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv'
 import type { TrackerCore } from './core'
 import { TrackerMcpError, toMcpError, toTrackerMcpError, trackerMcpJsonRpcCode } from './errors'
 import type { TrackerMcpAuthResolver, TrackerMcpServer, TrackerMcpTool } from './types'
@@ -22,30 +22,36 @@ const EMPTY_OBJECT_SCHEMA = {
   type: 'object',
   properties: {},
   additionalProperties: false,
-} as JsonSchemaType
+} satisfies JsonSchemaType
 
 interface RegisteredTrackerTool<TScope> {
   tool: TrackerMcpTool<TScope>
-  validateInput(input: unknown): JsonSchemaValidatorResult<unknown>
-  validateOutput?(output: unknown): JsonSchemaValidatorResult<unknown>
+  definition: Tool
+  validateInput: JsonSchemaValidator<Parameters<TrackerMcpTool<TScope>['handler']>[0]['args']>
+  validateOutput?: JsonSchemaValidator<unknown>
 }
 
-interface SessionEntry<TScope> {
-  server: Server
-  transport: WebStandardStreamableHTTPServerTransport
-  sessionId?: string
-  tools: Map<string, RegisteredTrackerTool<TScope>>
+interface TrackerRequestContext<TScope> {
+  scope: TScope
+  request?: Request
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+async function trackInflight<T>(promise: Promise<T>, inflight: Set<Promise<unknown>>): Promise<T> {
+  inflight.add(promise)
+  try {
+    return await promise
+  } finally {
+    inflight.delete(promise)
+  }
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Error hooks inspect request arguments before the tool schema can validate them.
 function ticketIdFromArgs(args: unknown): string | undefined {
-  if (!isRecord(args) || typeof args.ticketId !== 'string') return undefined
-  return args.ticketId
+  if (typeof args !== 'object' || args === null || !('ticketId' in args)) return undefined
+  return typeof args.ticketId === 'string' ? args.ticketId : undefined
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Custom tools deliberately return arbitrary values; this is their MCP serialization boundary.
 function serializeToolResult(result: unknown): string {
   if (typeof result === 'string') return result
   try {
@@ -55,6 +61,7 @@ function serializeToolResult(result: unknown): string {
   }
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Serializes the public custom-tool result contract into the SDK envelope.
 function toCallToolResult(result: unknown): CallToolResult {
   return {
     content: [{ type: 'text', text: serializeToolResult(result) }],
@@ -79,7 +86,7 @@ function ticketIdSchema(extra: Record<string, JsonSchemaType> = {}): JsonSchemaT
     properties: { ticketId: { type: 'string' }, ...extra },
     required: ['ticketId', ...Object.keys(extra)],
     additionalProperties: false,
-  } as JsonSchemaType
+  } satisfies JsonSchemaType
 }
 
 export function defaultTools<TScope>(core: TrackerCore<TScope>): TrackerMcpTool<TScope>[] {
@@ -89,14 +96,20 @@ export function defaultTools<TScope>(core: TrackerCore<TScope>): TrackerMcpTool<
       description: 'Fetch a ticket by id.',
       inputSchema: ticketIdSchema(),
       handler: ({ scope, args }) =>
-        core.handlers.getTicket({ scope, ...(args as { ticketId: string }) }),
+        core.handlers.getTicket({
+          scope,
+          ticketId: requiredStringArgument(args.ticketId, 'ticketId'),
+        }),
     },
     {
       name: 'listComments',
       description: 'List comments for a ticket.',
       inputSchema: ticketIdSchema(),
       handler: ({ scope, args }) =>
-        core.handlers.listComments({ scope, ...(args as { ticketId: string }) }),
+        core.handlers.listComments({
+          scope,
+          ticketId: requiredStringArgument(args.ticketId, 'ticketId'),
+        }),
     },
     {
       name: 'getBoard',
@@ -107,34 +120,66 @@ export function defaultTools<TScope>(core: TrackerCore<TScope>): TrackerMcpTool<
     {
       name: 'postComment',
       description: 'Create a comment on a ticket.',
-      inputSchema: ticketIdSchema({ body: { type: 'string' } as JsonSchemaType }),
+      inputSchema: ticketIdSchema({ body: { type: 'string' } satisfies JsonSchemaType }),
       handler: ({ scope, args }) =>
-        core.handlers.postComment({ scope, ...(args as { ticketId: string; body: string }) }),
+        core.handlers.postComment({
+          scope,
+          ticketId: requiredStringArgument(args.ticketId, 'ticketId'),
+          body: requiredStringArgument(args.body, 'body'),
+        }),
     },
     {
       name: 'updateComment',
       description: 'Update an existing ticket comment.',
       inputSchema: ticketIdSchema({
-        commentId: { type: 'string' } as JsonSchemaType,
-        body: { type: 'string' } as JsonSchemaType,
+        commentId: { type: 'string' } satisfies JsonSchemaType,
+        body: { type: 'string' } satisfies JsonSchemaType,
       }),
       handler: ({ scope, args }) =>
         core.handlers.updateComment({
           scope,
-          ...(args as { ticketId: string; commentId: string; body: string }),
+          ticketId: requiredStringArgument(args.ticketId, 'ticketId'),
+          commentId: requiredStringArgument(args.commentId, 'commentId'),
+          body: requiredStringArgument(args.body, 'body'),
         }),
     },
     {
       name: 'moveTicket',
       description: 'Move a ticket to another column.',
-      inputSchema: ticketIdSchema({ column: { type: 'string' } as JsonSchemaType }),
+      inputSchema: ticketIdSchema({ column: { type: 'string' } satisfies JsonSchemaType }),
       handler: ({ scope, args }) =>
         core.handlers.moveTicket({
           scope,
-          ...(args as { ticketId: string; column: string }),
+          ticketId: requiredStringArgument(args.ticketId, 'ticketId'),
+          column: requiredStringArgument(args.column, 'column'),
         }),
     },
   ]
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Decodes one required string from a schema-defined MCP argument object.
+function requiredStringArgument(value: unknown, field: string): string {
+  if (typeof value === 'string') return value
+  throw new TrackerMcpError({
+    code: 'validation_failed',
+    publicMessage: `${field} must be a string`,
+  })
+}
+
+function resultEnvelopeSchema(schema: JsonSchemaType): JsonSchemaType {
+  const { $ref, ...resultSchema } = schema
+  // Preserve the raw schema's local-reference root inside the result envelope.
+  resultSchema.$id ??= `urn:uuid:${crypto.randomUUID()}`
+  // Ajv recurses indefinitely for a nested resource with a root $ref. An allOf
+  // reference keeps the same validation while leaving the resource addressable.
+  if ($ref !== undefined) resultSchema.allOf = [{ $ref }, ...(resultSchema.allOf ?? [])]
+  return {
+    $schema: schema.$schema,
+    type: 'object',
+    properties: { result: resultSchema },
+    required: ['result'],
+    additionalProperties: false,
+  }
 }
 
 function registerTools<TScope>(
@@ -147,8 +192,19 @@ function registerTools<TScope>(
     if (registry.has(tool.name)) {
       throw new Error(`Duplicate tracker MCP tool name '${tool.name}'`)
     }
+    const definition = {
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      outputSchema: tool.outputSchema ? resultEnvelopeSchema(tool.outputSchema) : undefined,
+      annotations: tool.annotations,
+    }
+    if (!isSpecType.Tool(definition)) {
+      throw new Error(`Invalid tracker MCP tool definition '${tool.name}'`)
+    }
     registry.set(tool.name, {
       tool,
+      definition,
       validateInput: validatorProvider.getValidator(tool.inputSchema),
       validateOutput: tool.outputSchema
         ? validatorProvider.getValidator(tool.outputSchema)
@@ -159,20 +215,14 @@ function registerTools<TScope>(
   return registry
 }
 
-function isInitializePayload(body: unknown): boolean {
-  return Array.isArray(body)
-    ? body.some((message) => isInitializeRequest(message))
-    : isInitializeRequest(body)
-}
-
-function createSessionServer<TScope>(
+function createToolServer<TScope>(
   core: TrackerCore<TScope>,
-  entry: SessionEntry<TScope>,
+  tools: Map<string, RegisteredTrackerTool<TScope>>,
+  context: TrackerRequestContext<TScope>,
+  name: string,
+  inflight: Set<Promise<unknown>>,
 ): Server {
-  const server = new Server(
-    { name: 'agent-kanban-tracker-mcp', version: VERSION },
-    { capabilities: { tools: {} } },
-  )
+  const server = new Server({ name, version: VERSION }, { capabilities: { tools: {} } })
 
   async function throwReportedToolError(input: {
     scope: TScope | null
@@ -191,22 +241,16 @@ function createSessionServer<TScope>(
     throw toMcpError(input.error)
   }
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: Array.from(entry.tools.values()).map(({ tool }) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-      ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
-      ...(tool.annotations ? { annotations: tool.annotations } : {}),
-    })),
-  }))
+  server.setRequestHandler(
+    'tools/list',
+    async (): Promise<ListToolsResult> => ({
+      tools: Array.from(tools.values()).map(({ definition }) => definition),
+    }),
+  )
 
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    const registered = entry.tools.get(request.params.name)
-    const rawScope = extra.authInfo?.extra?.['scope']
-    const rawRequest = extra.authInfo?.extra?.['request']
-    const scope = rawScope as TScope | null
-    const originalRequest = rawRequest instanceof Request ? rawRequest : null
+  async function callTool(request: CallToolRequest): Promise<CallToolResult> {
+    const registered = tools.get(request.params.name)
+    const { scope } = context
     const startedAt = Date.now()
 
     if (!registered) {
@@ -221,10 +265,6 @@ function createSessionServer<TScope>(
         args: request.params.arguments,
         error,
       })
-    }
-
-    if (!scope || !originalRequest) {
-      throw new McpError(JsonRpcErrorCode.InternalError, 'Missing authenticated request context')
     }
 
     const tool = registered
@@ -247,8 +287,8 @@ function createSessionServer<TScope>(
     try {
       result = await tool.tool.handler({
         scope,
-        args: validated.data as Record<string, unknown>,
-        request: originalRequest,
+        args: validated.data,
+        request: context.request,
       })
     } catch (error) {
       throw toMcpError(error)
@@ -272,9 +312,30 @@ function createSessionServer<TScope>(
     }
 
     return toCallToolResult(result)
-  })
+  }
+
+  server.setRequestHandler('tools/call', (request) => trackInflight(callTool(request), inflight))
 
   return server
+}
+
+export function createTrackerMcpFactory<TScope>(input: {
+  core: TrackerCore<TScope>
+  tools?: 'default' | TrackerMcpTool<TScope>[]
+  name?: string
+  inflight: Set<Promise<unknown>>
+}) {
+  const tools =
+    input.tools === 'default' || input.tools === undefined ? defaultTools(input.core) : input.tools
+  const toolRegistry = registerTools(tools)
+  return (context: TrackerRequestContext<TScope>): Server =>
+    createToolServer(
+      input.core,
+      toolRegistry,
+      context,
+      input.name ?? 'agent-kanban-tracker-mcp',
+      input.inflight,
+    )
 }
 
 export function createTrackerMcpServer<TScope>(input: {
@@ -282,62 +343,28 @@ export function createTrackerMcpServer<TScope>(input: {
   auth: TrackerMcpAuthResolver<TScope>
   tools?: 'default' | TrackerMcpTool<TScope>[]
 }): TrackerMcpServer {
-  const tools =
-    input.tools === 'default' || input.tools === undefined ? defaultTools(input.core) : input.tools
-
-  const toolRegistry = registerTools(tools)
-  const sessions = new Map<string, SessionEntry<TScope>>()
   const inflight = new Set<Promise<unknown>>()
+  const buildServer = createTrackerMcpFactory({ ...input, inflight })
+  const authenticated = new WeakMap<AuthInfo, TrackerRequestContext<TScope>>()
   let closed = false
-
-  async function trackInflight<T>(promise: Promise<T>): Promise<T> {
-    inflight.add(promise)
-    try {
-      return await promise
-    } finally {
-      inflight.delete(promise)
+  const handler = createMcpHandler(({ authInfo }) => {
+    if (closed) throw new ProtocolError(-32000, 'Tracker MCP server is closed')
+    const context = authInfo && authenticated.get(authInfo)
+    if (!context) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InternalError,
+        'Missing authenticated request context',
+      )
     }
-  }
-
-  async function parsePostBody(request: Request): Promise<unknown> {
+    return buildServer(context)
+  })
+  async function authenticate(request: Request): Promise<TScope> {
     try {
-      return await request.json()
-    } catch (error) {
-      throw new TrackerMcpError({
-        code: 'validation_failed',
-        publicMessage: 'Invalid JSON request body',
-        cause: error,
-      })
-    }
-  }
-
-  async function authenticate(request: Request): Promise<{
-    scope: TScope
-    authInfo: {
-      token: string
-      clientId: string
-      scopes: string[]
-      extra: Record<string, unknown>
-    }
-  }> {
-    try {
-      const scope = await input.auth({
+      return await input.auth({
         request,
         url: new URL(request.url),
         headers: request.headers,
       })
-      return {
-        scope,
-        authInfo: {
-          token: 'tracker-mcp',
-          clientId: 'tracker-mcp',
-          scopes: [],
-          extra: {
-            scope,
-            request,
-          },
-        },
-      }
     } catch (error) {
       if (error instanceof TrackerMcpError && error.code === 'auth_failed') throw error
       throw new TrackerMcpError({
@@ -351,90 +378,22 @@ export function createTrackerMcpServer<TScope>(input: {
     }
   }
 
-  async function createSession(): Promise<SessionEntry<TScope>> {
-    const entry = {} as SessionEntry<TScope>
-    entry.tools = toolRegistry
-    entry.transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => crypto.randomUUID(),
-      onsessioninitialized: (sessionId) => {
-        entry.sessionId = sessionId
-        sessions.set(sessionId, entry)
-      },
-    })
-    entry.server = createSessionServer(input.core, entry)
-    entry.transport.onclose = () => {
-      if (entry.sessionId) sessions.delete(entry.sessionId)
-    }
-    await entry.server.connect(entry.transport)
-    return entry
-  }
-
   async function handleAuthenticatedRequest(request: Request): Promise<Response> {
-    const method = request.method.toUpperCase()
-    const { authInfo } = await authenticate(request)
-    const sessionId = request.headers.get('mcp-session-id')
-
-    if (method === 'POST') {
-      const parsedBody = await parsePostBody(request)
-
-      if (sessionId) {
-        const existing = sessions.get(sessionId)
-        if (!existing) {
-          return httpJsonRpcError(
-            404,
-            trackerMcpJsonRpcCode('validation_failed'),
-            'Session not found',
-          )
-        }
-        return existing.transport.handleRequest(request, { parsedBody, authInfo })
-      }
-
-      if (!isInitializePayload(parsedBody)) {
-        return httpJsonRpcError(
-          400,
-          trackerMcpJsonRpcCode('validation_failed'),
-          'Initialization required before calling tools',
-        )
-      }
-
-      const entry = await createSession()
-      return entry.transport.handleRequest(request, { parsedBody, authInfo })
+    const scope = await authenticate(request)
+    if (closed) return httpJsonRpcError(503, -32000, 'Tracker MCP server is closed')
+    const authInfo: AuthInfo = { token: 'tracker-mcp', clientId: 'tracker-mcp', scopes: [] }
+    authenticated.set(authInfo, { scope, request })
+    try {
+      return await handler.fetch(request, { authInfo })
+    } finally {
+      authenticated.delete(authInfo)
     }
-
-    if (method === 'GET' || method === 'DELETE') {
-      if (!sessionId) {
-        return httpJsonRpcError(
-          400,
-          trackerMcpJsonRpcCode('validation_failed'),
-          'Session ID header is required',
-        )
-      }
-      const existing = sessions.get(sessionId)
-      if (!existing) {
-        return httpJsonRpcError(
-          404,
-          trackerMcpJsonRpcCode('validation_failed'),
-          'Session not found',
-        )
-      }
-      return existing.transport.handleRequest(request, { authInfo })
-    }
-
-    return httpJsonRpcError(
-      405,
-      JsonRpcErrorCode.InvalidRequest,
-      `Unsupported MCP HTTP method '${request.method}'`,
-    )
   }
 
   return {
     async fetch(request: Request): Promise<Response> {
       if (closed) {
-        return httpJsonRpcError(
-          503,
-          JsonRpcErrorCode.ConnectionClosed,
-          'Tracker MCP server is closed',
-        )
+        return httpJsonRpcError(503, -32000, 'Tracker MCP server is closed')
       }
 
       const responsePromise = (async () => {
@@ -472,7 +431,7 @@ export function createTrackerMcpServer<TScope>(input: {
         }
       })()
 
-      return trackInflight(responsePromise)
+      return trackInflight(responsePromise, inflight)
     },
 
     async selfPing(): Promise<void> {
@@ -485,9 +444,8 @@ export function createTrackerMcpServer<TScope>(input: {
       closed = true
 
       const closeAll = (async () => {
-        const entries = Array.from(sessions.values())
-        await Promise.allSettled(entries.map((entry) => entry.server.close()))
-        await Promise.allSettled(Array.from(inflight))
+        await handler.close()
+        while (inflight.size > 0) await Promise.allSettled(Array.from(inflight))
       })()
 
       if (!signal) {

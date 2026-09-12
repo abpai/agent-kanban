@@ -25,7 +25,7 @@ export function startCloudflareTunnel(port: number, opts: TunnelOptions = {}): T
   const log = opts.log ?? ((m: string) => console.info(m))
   const warn = opts.warn ?? ((m: string) => console.warn(m))
 
-  let child: Subprocess
+  let child: Subprocess<'ignore', 'pipe', 'pipe'>
   try {
     child = Bun.spawn(command, { stdout: 'pipe', stderr: 'pipe' })
   } catch (err) {
@@ -64,7 +64,7 @@ export function startCloudflareTunnel(port: number, opts: TunnelOptions = {}): T
       // Once announced, keep draining the pipe (so the child doesn't block on a
       // full stdout buffer) but stop scanning.
       if (announced) continue
-      buffer += decoder.decode(chunk as Uint8Array, { stream: true })
+      buffer += decoder.decode(chunk, { stream: true })
       const match = buffer.match(TRYCLOUDFLARE_URL)
       if (match) {
         announce(match[0])
@@ -81,8 +81,8 @@ export function startCloudflareTunnel(port: number, opts: TunnelOptions = {}): T
   const drain = (stream: ReadableStream<Uint8Array> | null | undefined): void => {
     void scanForUrl(stream).catch(() => {})
   }
-  drain(child.stdout as ReadableStream<Uint8Array>)
-  drain(child.stderr as ReadableStream<Uint8Array>)
+  drain(child.stdout)
+  drain(child.stderr)
 
   void child.exited.then((code) => {
     if (!announced) {

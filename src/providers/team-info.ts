@@ -3,20 +3,21 @@ import type { ProviderTeamInfo } from '../types'
 export function parseProviderTeamInfo(raw: string | null): ProviderTeamInfo | null {
   if (raw === null) return null
   try {
-    const parsed = JSON.parse(raw) as unknown
+    const parsed: unknown = JSON.parse(raw)
+    /* oxlint-disable anti-slop/no-runtime-typeof -- Persisted JSON is untrusted; validate the required team fields at this decode boundary. */
     if (
       parsed &&
       typeof parsed === 'object' &&
       'id' in parsed &&
       'key' in parsed &&
       'name' in parsed &&
-      typeof (parsed as { id: unknown }).id === 'string' &&
-      typeof (parsed as { key: unknown }).key === 'string' &&
-      typeof (parsed as { name: unknown }).name === 'string'
+      typeof parsed.id === 'string' &&
+      typeof parsed.key === 'string' &&
+      typeof parsed.name === 'string'
     ) {
-      const team = parsed as { id: string; key: string; name: string }
-      return { id: team.id, key: team.key, name: team.name }
+      return { id: parsed.id, key: parsed.key, name: parsed.name }
     }
+    /* oxlint-enable anti-slop/no-runtime-typeof */
   } catch {
     // Corrupt persisted provider metadata should not prevent cache bootstrap.
   }

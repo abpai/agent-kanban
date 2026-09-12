@@ -34,7 +34,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: '1.3.11'
+          bun-version: '1.4.2'
 
       - name: Install root dependencies
         run: bun install --frozen-lockfile
@@ -58,3 +58,8 @@ jobs:
 
       - name: Build web dashboard
         run: bun run ui:build
+
+      - name: Exercise dashboard in Chrome
+        run: bun run test:ui
+        env:
+          CHROME_PATH: /usr/bin/google-chrome

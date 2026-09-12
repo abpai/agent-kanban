@@ -71,8 +71,10 @@ const auth: TrackerMcpAuthResolver<Scope> = async ({ headers }) => {
 
 - Read only from `headers`/`url`; do not consume `request.body`.
 - Throw `TrackerMcpError({ code: 'auth_failed' })` on missing/malformed/expired
-  tokens. The core maps it to HTTP 401 before any SSE stream opens.
+  tokens. The server returns HTTP 401 before discovery or tool dispatch.
 - Revoke by deleting the storage row.
+- Authentication runs on every request. The protocol's `clientInfo` and
+  `clientCapabilities` fields describe the caller and never supply its scope.
 
 ## 2. Policy callbacks
 
@@ -113,15 +115,27 @@ const tools: TrackerMcpTool<Scope>[] = [
   {
     name: 'postComment',
     inputSchema: { type: 'object', properties: { body: { type: 'string' } }, required: ['body'] },
-    handler: ({ scope, args }) =>
-      core.handlers.postComment({ scope, ticketId: scope.ticketId, body: args.body }),
+    handler: ({ scope, args }) => {
+      if (typeof args.body !== 'string') {
+        throw new TrackerMcpError({
+          code: 'validation_failed',
+          publicMessage: 'body must be a string',
+        })
+      }
+      return core.handlers.postComment({ scope, ticketId: scope.ticketId, body: args.body })
+    },
   },
   // getBoard, listComments, updateComment, moveTicket follow the same shape
 ]
 ```
 
-Pass `defaultTools` instead if you want the full unscoped tool set. Policy runs
+Pass `tools: 'default'` instead if you want the full unscoped tool set. Policy runs
 inside `core.handlers.*`, so custom tools stay thin wrappers.
+
+An optional `outputSchema` validates the handler's raw return value. Tool
+discovery advertises that schema inside an object with a required `result`
+property, matching the shipped `structuredContent.result` envelope in both
+protocol eras. This also supports raw string and array result schemas.
 
 ## 4. Observability via hooks
 
@@ -138,24 +152,54 @@ don't teach the core about the host's storage:
 
 - `selfPing()` is **in-process readiness only** — it does not hit the tracker.
   A host `/ready` check should also run its own upstream provider probe.
-- `close(signal?)` stops accepting new requests and drains in-flight requests
-  and active SSE streams. Enforce a shutdown budget by passing an
-  `AbortController` signal; don't add a separate drain loop before calling it.
+- `close(signal?)` stops accepting new requests, cancels modern response streams,
+  and waits for accepted authentication and tool work in both protocol eras.
+  A modern client can receive a connection-closed error while its accepted tool
+  finishes; shutdown does not guarantee delivery of that tool's response.
+  An authentication operation that completes during shutdown cannot start a
+  tool call. Enforce a shutdown budget with an `AbortController` signal.
+- Close the host-owned provider after `close()` completes so accepted calls can
+  finish using it. The MCP wrapper does not own or close that provider.
 - Share one provider instance between the MCP host and any other consumer
   (e.g. a poll loop) in the same process.
 
 ## 6. Transport
 
-The hosted endpoint is Streamable HTTP (with SSE) only — the same endpoint for
-local and remote clients. Don't add a stdio fallback for the hosted path; stdio
-is the separate `kanban mcp` server. This is a hosted remote MCP endpoint, not a
-child process managed by an MCP client.
+The hosted endpoint serves MCP 2026-07-28 with the SDK v2 web-standard
+`createMcpHandler` entry. It accepts Bun `Request` objects and returns `Response`
+objects, using JSON or SSE as the protocol requires. Mount `server.fetch` in a
+host's `Bun.serve` handler and apply the host's Origin/Host policy before it.
+
+Modern clients send protocol metadata on each request and do not initialize a
+session. The SDK's stateless 2025 compatibility path accepts older clients'
+handshake and tool requests on the same endpoint. It does not issue session ids
+or support the old HTTP session `GET`/`DELETE` operations. The bundled
+`kanban mcp` command separately serves modern and legacy stdio clients.
+
+See [protocol revisions and client opt-in](./mcp.md#protocol-revisions) when
+migrating a host or SDK client. The underlying SDK constructors alone retain
+legacy behavior; the shipped serving entries enable modern support.
 
 ## Error codes
 
 `TrackerMcpErrorCode` is a closed set: `auth_failed`, `policy_denied`,
 `ticket_not_found`, `comment_not_found`, `validation_failed`,
 `provider_unavailable`, `internal_error`.
+
+| Tracker code                            | JSON-RPC code       |
+| --------------------------------------- | ------------------- |
+| `auth_failed`                           | `-32001` (HTTP 401) |
+| `policy_denied`                         | `-32012`            |
+| `ticket_not_found`, `comment_not_found` | `-32003`            |
+| `validation_failed`                     | `-32602`            |
+| `provider_unavailable`                  | `-32010`            |
+| `internal_error`                        | `-32603`            |
+
+Policy denial moved from `-32002` to `-32012` in the SDK v2 migration because
+the SDK reserves the old code and rewrites it. Tool errors retain
+`error.data.trackerMcpCode`, so hosts can branch on the tracker code instead of
+the wire number. Protocol-level malformed requests and unsupported revisions
+use the SDK's standard MCP errors.
 
 ## Host test checklist
 

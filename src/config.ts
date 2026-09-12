@@ -2,8 +2,6 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { BoardConfig } from './types'
 
-const DEFAULT_CONFIG: BoardConfig = { members: [], projects: [] }
-
 export function getConfigPath(dbPath: string): string {
   return join(dirname(dbPath), 'config.json')
 }
@@ -12,13 +10,14 @@ export function loadConfig(dbPath: string): BoardConfig {
   const configPath = getConfigPath(dbPath)
   try {
     const raw = readFileSync(configPath, 'utf-8')
+    // SAFETY: saveConfig owns this BoardConfig file; legacy missing/non-array fields are normalized below.
     const parsed = JSON.parse(raw) as Partial<BoardConfig>
     return {
       members: Array.isArray(parsed.members) ? parsed.members : [],
       projects: Array.isArray(parsed.projects) ? parsed.projects : [],
     }
   } catch {
-    return { ...DEFAULT_CONFIG, members: [], projects: [] }
+    return { members: [], projects: [] }
   }
 }
 

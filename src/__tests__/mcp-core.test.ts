@@ -2,12 +2,18 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { addTask, initSchema, seedDefaultColumns } from '../db'
 import { createTrackerCore } from '../mcp/core'
+import type { TrackerMcpHooks } from '../mcp/types'
 import { TrackerMcpError } from '../mcp/errors'
 import { LocalProvider } from '../providers/local'
 
 interface TestScope {
   actor: string
 }
+
+type ObservedToolResult = Pick<
+  Parameters<NonNullable<TrackerMcpHooks<TestScope>['onToolResult']>>[0],
+  'tool' | 'result'
+>
 
 let db: Database
 let provider: LocalProvider
@@ -23,7 +29,7 @@ beforeEach(() => {
 describe('createTrackerCore', () => {
   test('runs allowed handlers and reports hook metadata', async () => {
     const task = addTask(db, 'Core task')
-    const hookEvents: Array<{ tool: string; result?: Record<string, unknown> }> = []
+    const hookEvents: ObservedToolResult[] = []
     const core = createTrackerCore<TestScope>({
       provider,
       policy: {
@@ -118,7 +124,7 @@ describe('createTrackerCore', () => {
   test('filters board tasks via policy and reports the visible task count', async () => {
     const visible = addTask(db, 'visible task')
     addTask(db, 'hidden task')
-    const hookResults: Array<{ tool: string; result?: Record<string, unknown> }> = []
+    const hookResults: ObservedToolResult[] = []
 
     const core = createTrackerCore<TestScope>({
       provider,

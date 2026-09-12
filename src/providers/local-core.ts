@@ -53,7 +53,7 @@ export interface LocalStorePort {
 }
 
 function taskHasCommentCount(task: Task): boolean {
-  return typeof task.comment_count === 'number' && Number.isFinite(task.comment_count)
+  return Number.isFinite(task.comment_count)
 }
 
 export class LocalProviderCore implements KanbanProvider {
@@ -156,17 +156,16 @@ export class LocalProviderCore implements KanbanProvider {
 
   async updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task> {
     await this.initialize()
-    if (input.expectedVersion !== undefined) {
+    const { expectedVersion, ...updates } = input
+    if (expectedVersion !== undefined) {
       const currentVersion = await this.store.getTaskVersion(idOrRef)
-      if (currentVersion !== input.expectedVersion) {
+      if (currentVersion !== expectedVersion) {
         throw new KanbanError(
           ErrorCode.CONFLICT,
-          `Task ${idOrRef} was modified since you loaded it (expected version ${input.expectedVersion}, current ${currentVersion})`,
+          `Task ${idOrRef} was modified since you loaded it (expected version ${expectedVersion}, current ${currentVersion})`,
         )
       }
     }
-    const updates: Omit<UpdateTaskInput, 'expectedVersion'> = { ...input }
-    delete (updates as UpdateTaskInput).expectedVersion
     return this.enrichTaskWithCount(await this.store.updateTask(idOrRef, updates))
   }
 

@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS jira_issues (
 }
 
 function migrateJiraCacheSchema(db: Database): void {
-  const cols = db.query('PRAGMA table_info(jira_issues)').all() as { name: string }[]
+  const cols = db.query<{ name: string }, []>('PRAGMA table_info(jira_issues)').all()
   if (!cols.some((c) => c.name === 'labels')) {
     db.run("ALTER TABLE jira_issues ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
   }
@@ -216,9 +216,14 @@ function deleteMeta(db: Database, key: string): void {
 }
 
 function getMeta(db: Database, key: string): string | null {
-  const row = db.query('SELECT value FROM jira_sync_meta WHERE key = $key').get({
-    $key: key,
-  }) as { value: string } | null
+  const row = db
+    .query<
+      { value: string },
+      Record<string, string | number>
+    >('SELECT value FROM jira_sync_meta WHERE key = $key')
+    .get({
+      $key: key,
+    })
   return row?.value ?? null
 }
 
@@ -230,25 +235,20 @@ const META_KEYS = [
   'lastFullSyncAt',
   'lastWebhookAt',
 ] as const
-type MetaKey = (typeof META_KEYS)[number]
-
 export function saveJiraSyncMeta(db: Database, meta: Partial<JiraSyncMeta>): void {
   for (const key of META_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
-    const value = (meta as Record<MetaKey, unknown>)[key]
-    if (value === null) {
-      deleteMeta(db, key)
-      continue
-    }
     if (key === 'boardId') {
-      if (typeof value === 'number' && Number.isFinite(value)) {
+      const value = meta.boardId
+      if (value === null) deleteMeta(db, key)
+      else if (value !== undefined && Number.isFinite(value)) {
         setMeta(db, key, String(value))
       }
       continue
     }
-    if (typeof value === 'string') {
-      setMeta(db, key, value)
-    }
+    const value = meta[key]
+    if (value === null) deleteMeta(db, key)
+    else if (value !== undefined) setMeta(db, key, value)
   }
 }
 
@@ -464,10 +464,10 @@ export function pruneJiraIssuesMissingUpstream(
     }
 
     const placeholders = upstreamIssueIds.map((_, index) => `$id${index}`).join(', ')
-    const params: Record<string, string> = { $projectKey: projectKey }
-    upstreamIssueIds.forEach((issueId, index) => {
-      params[`$id${index}`] = issueId
-    })
+    const params = Object.fromEntries([
+      ['$projectKey', projectKey],
+      ...upstreamIssueIds.map((issueId, index) => [`$id${index}`, issueId]),
+    ])
 
     db.query(
       `DELETE FROM jira_activity
@@ -508,7 +508,7 @@ export function decodeColumnStatusIds(row: Pick<JiraColumnRow, 'status_ids'>): s
 }
 
 export function getCachedColumns(db: Database): JiraColumnRow[] {
-  return db.query('SELECT * FROM jira_columns ORDER BY position, name').all() as JiraColumnRow[]
+  return db.query<JiraColumnRow, []>('SELECT * FROM jira_columns ORDER BY position, name').all()
 }
 
 function selectIssuesByStatusIds(db: Database, statusIds: string[]): JiraIssueRow[] {
@@ -519,12 +519,12 @@ function selectIssuesByStatusIds(db: Database, statusIds: string[]): JiraIssueRo
     params[`$s${i}`] = id
   })
   return db
-    .query(
+    .query<JiraIssueRow, Record<string, string | number>>(
       `SELECT * FROM jira_issues
        WHERE status_id IN (${placeholders})
        ORDER BY updated_at DESC, summary ASC`,
     )
-    .all(params) as JiraIssueRow[]
+    .all(params)
 }
 
 export function getCachedBoard(db: Database): BoardView {
@@ -549,46 +549,46 @@ export function getCachedBoard(db: Database): BoardView {
 export function getCachedTask(db: Database, lookup: string): Task | null {
   const normalized = lookup.startsWith('jira:') ? lookup.slice('jira:'.length) : lookup
   const row = db
-    .query(
+    .query<JiraIssueRow, Record<string, string | number>>(
       `SELECT * FROM jira_issues
        WHERE id = $lookup OR key = $lookup
        LIMIT 1`,
     )
-    .get({ $lookup: normalized }) as JiraIssueRow | null
+    .get({ $lookup: normalized })
   return row ? jiraTaskFromRow(row) : null
 }
 
 export function getCachedTasks(db: Database, params?: { columnId?: string }): Task[] {
   if (params?.columnId !== undefined) {
     const columnRow = db
-      .query('SELECT status_ids FROM jira_columns WHERE id = $id')
-      .get({ $id: params.columnId }) as Pick<JiraColumnRow, 'status_ids'> | null
+      .query<
+        Pick<JiraColumnRow, 'status_ids'>,
+        Record<string, string | number>
+      >('SELECT status_ids FROM jira_columns WHERE id = $id')
+      .get({ $id: params.columnId })
     if (!columnRow) return []
     const statusIds = decodeColumnStatusIds(columnRow)
     return selectIssuesByStatusIds(db, statusIds).map(jiraTaskFromRow)
   }
-  return (
-    db
-      .query('SELECT * FROM jira_issues ORDER BY updated_at DESC, summary ASC')
-      .all() as JiraIssueRow[]
-  ).map(jiraTaskFromRow)
+  return db
+    .query<JiraIssueRow, []>('SELECT * FROM jira_issues ORDER BY updated_at DESC, summary ASC')
+    .all()
+    .map(jiraTaskFromRow)
 }
 
 export function getCachedConfig(db: Database): JiraCacheConfig {
-  const users = (
-    db
-      .query(
-        'SELECT account_id, display_name FROM jira_users WHERE active = 1 ORDER BY display_name',
-      )
-      .all() as { account_id: string; display_name: string }[]
-  ).map((row) => ({ accountId: row.account_id, displayName: row.display_name }))
-  const priorities = db.query('SELECT id, name FROM jira_priorities ORDER BY name').all() as Array<{
-    id: string
-    name: string
-  }>
+  const users = db
+    .query<{ account_id: string; display_name: string }, []>(
+      'SELECT account_id, display_name FROM jira_users WHERE active = 1 ORDER BY display_name',
+    )
+    .all()
+    .map((row) => ({ accountId: row.account_id, displayName: row.display_name }))
+  const priorities = db
+    .query<{ id: string; name: string }, []>('SELECT id, name FROM jira_priorities ORDER BY name')
+    .all()
   const issueTypes = db
-    .query('SELECT id, name FROM jira_issue_types ORDER BY name')
-    .all() as Array<{ id: string; name: string }>
+    .query<{ id: string; name: string }, []>('SELECT id, name FROM jira_issue_types ORDER BY name')
+    .all()
   return {
     projectKey: getMeta(db, 'projectKey'),
     users,
@@ -597,7 +597,7 @@ export function getCachedConfig(db: Database): JiraCacheConfig {
   }
 }
 
-export interface JiraActivityRow {
+export type JiraActivityRow = {
   issue_id: string
   history_id: string
   item_field: string
@@ -628,21 +628,21 @@ export function getCachedActivity(
   const limit = params.limit ?? 100
   if (params.issueId) {
     return db
-      .query(
+      .query<JiraActivityRow, Record<string, string | number>>(
         `SELECT issue_id, history_id, item_field, from_value, to_value, created_at
          FROM jira_activity
          WHERE issue_id = $issueId
          ORDER BY created_at DESC
          LIMIT $limit`,
       )
-      .all({ $issueId: params.issueId, $limit: limit }) as JiraActivityRow[]
+      .all({ $issueId: params.issueId, $limit: limit })
   }
   return db
-    .query(
+    .query<JiraActivityRow, Record<string, string | number>>(
       `SELECT issue_id, history_id, item_field, from_value, to_value, created_at
        FROM jira_activity
        ORDER BY created_at DESC
        LIMIT $limit`,
     )
-    .all({ $limit: limit }) as JiraActivityRow[]
+    .all({ $limit: limit })
 }

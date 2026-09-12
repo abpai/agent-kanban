@@ -1,4 +1,5 @@
 import { ErrorCode } from '../errors'
+import type { JsonObject } from '../json'
 import { providerUpstreamError } from './errors'
 
 interface GraphQLResponse<T> {
@@ -47,6 +48,16 @@ export interface LinearComment {
 export interface LinearIssueLabel {
   id: string
   name: string
+}
+
+export type LinearIssueUpdateInput = {
+  title?: string
+  description?: string
+  priority?: number
+  assigneeId?: string | null
+  projectId?: string | null
+  labelIds?: string[]
+  stateId?: string
 }
 
 interface LinearIssueNode {
@@ -129,7 +140,7 @@ export class LinearClient {
 
   constructor(private readonly apiKey: string) {}
 
-  private async query<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+  private async query<T>(query: string, variables: JsonObject = {}): Promise<T> {
     const response = await fetch(this.endpoint, {
       method: 'POST',
       headers: {
@@ -151,6 +162,8 @@ export class LinearClient {
       providerUpstreamError(`Linear API request failed with ${response.status}`)
     }
 
+    // SAFETY: Each private caller pairs its fixed GraphQL selection with T; HTTP failures
+    // are rejected above, and GraphQL errors and missing data are rejected below.
     const body = (await response.json()) as GraphQLResponse<T>
     if (body.errors?.length) {
       const first = body.errors[0]
@@ -477,10 +490,7 @@ export class LinearClient {
     }
   }
 
-  async updateIssue(
-    issueId: string,
-    input: Record<string, unknown>,
-  ): Promise<{ success: boolean }> {
+  async updateIssue(issueId: string, input: LinearIssueUpdateInput): Promise<{ success: boolean }> {
     const data = await this.query<{
       issueUpdate: { success: boolean }
     }>(

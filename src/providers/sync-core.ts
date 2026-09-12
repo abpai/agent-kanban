@@ -81,11 +81,3 @@ export async function mapWithConcurrency<T, R>(
   }
   return results
 }
-
-export async function forEachWithConcurrency<T>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T, index: number) => Promise<void>,
-): Promise<void> {
-  await mapWithConcurrency(items, concurrency, worker)
-}

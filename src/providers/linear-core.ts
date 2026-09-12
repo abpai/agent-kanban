@@ -24,6 +24,7 @@ import {
   resolveLabelIdsForUpdate,
   type LinearComment,
   type LinearIssue,
+  type LinearIssueUpdateInput,
 } from './linear-client'
 import {
   resolveLinearState,
@@ -69,6 +70,54 @@ function toLinearPriority(priority: Task['priority'] | undefined): number | unde
 }
 
 type CacheIssue = Parameters<LinearCachePort['upsertIssues']>[0][number]
+
+interface LinearWebhookIssue {
+  id: string
+  identifier?: string
+  title?: string
+  description?: string | null
+  priority?: number | null
+  url?: string | null
+  createdAt?: string
+  updatedAt?: string
+  assignee?: { id: string; name?: string | null } | null
+  assigneeId?: string | null
+  project?: { id: string; name: string } | null
+  projectId?: string | null
+  state?: { id: string; name: string; position?: number } | null
+  stateId?: string | null
+  team?: { id?: string | null; key?: string | null } | null
+  teamId?: string | null
+  labels?: Array<{ id: string; name: string }> | null
+  commentCount?: number | null
+}
+
+interface LinearWebhookBody {
+  action?: 'create' | 'update' | 'remove'
+  type?: string
+  data?: LinearWebhookIssue
+}
+
+function toWebhookCacheIssue(
+  data: LinearWebhookIssue,
+  required: Pick<CacheIssue, 'identifier' | 'title' | 'createdAt' | 'updatedAt' | 'stateId'>,
+): CacheIssue {
+  return {
+    ...required,
+    id: data.id,
+    description: data.description ?? '',
+    priority: data.priority ?? 0,
+    assigneeId: data.assignee?.id ?? data.assigneeId ?? null,
+    assigneeName: data.assignee?.name ?? null,
+    projectId: data.project?.id ?? data.projectId ?? null,
+    projectName: data.project?.name ?? null,
+    stateName: data.state?.name ?? '',
+    statePosition: data.state?.position ?? 0,
+    labels: (data.labels ?? []).map((label) => label.name),
+    commentCount: data.commentCount,
+    url: data.url ?? null,
+  }
+}
 
 // Map a Linear API issue to the cache upsert row. Shared by the bulk sync and
 // the single-issue hydrate path so a read-after-write refresh caches exactly the
@@ -480,19 +529,17 @@ export class LinearProviderCore implements KanbanProvider {
         `Linear issue ${task.externalRef ?? idOrRef} was updated remotely (expected version ${input.expectedVersion}, current ${task.version ?? 'unknown'})`,
       )
     }
-    const updateInput: Record<string, unknown> = {}
-    if (input.title !== undefined) updateInput['title'] = input.title
-    if (input.description !== undefined) updateInput['description'] = input.description
-    if (input.priority !== undefined) updateInput['priority'] = toLinearPriority(input.priority)
+    const updateInput: LinearIssueUpdateInput = {}
+    if (input.title !== undefined) updateInput.title = input.title
+    if (input.description !== undefined) updateInput.description = input.description
+    if (input.priority !== undefined) updateInput.priority = toLinearPriority(input.priority)
     if (input.assignee !== undefined)
-      updateInput['assigneeId'] = input.assignee
-        ? await this.resolveAssigneeId(input.assignee)
-        : null
+      updateInput.assigneeId = input.assignee ? await this.resolveAssigneeId(input.assignee) : null
     if (input.project !== undefined)
-      updateInput['projectId'] = input.project ? await this.resolveProjectId(input.project) : null
+      updateInput.projectId = input.project ? await this.resolveProjectId(input.project) : null
     if (input.labels !== undefined) {
       // Exact replacement: `[]` clears all labels; omit means untouched.
-      updateInput['labelIds'] = await resolveLabelIdsForUpdate(this.client, input.labels)
+      updateInput.labelIds = await resolveLabelIdsForUpdate(this.client, input.labels)
     }
     if (input.metadata !== undefined) {
       unsupportedOperation('Linear mode does not support metadata updates')
@@ -560,10 +607,9 @@ export class LinearProviderCore implements KanbanProvider {
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {
     await this.sync()
     const issueId = taskId ? ((await this.cache.resolveIssueId(taskId)) ?? undefined) : undefined
-    const rows = await this.cache.getCachedActivity({
-      ...(issueId !== undefined ? { issueId } : {}),
-      limit: limit ?? 100,
-    })
+    const params: Parameters<LinearCachePort['getCachedActivity']>[0] = { limit: limit ?? 100 }
+    if (issueId !== undefined) params.issueId = issueId
+    const rows = await this.cache.getCachedActivity(params)
     return rows.map((row) => this.activityRowToEntry(row))
   }
 
@@ -595,6 +641,47 @@ export class LinearProviderCore implements KanbanProvider {
     unsupportedOperation('Config mutation is not supported in Linear mode')
   }
 
+  private async verifyWebhookIssueTeam(data: LinearWebhookIssue): Promise<WebhookResult | null> {
+    const configuredTeam = await this.getConfiguredTeam()
+    const payloadTeamId = data.team?.id ?? data.teamId ?? null
+    if (payloadTeamId && payloadTeamId !== configuredTeam.id) {
+      return { handled: false, message: `Ignoring issue from team '${payloadTeamId}'` }
+    }
+    if (!payloadTeamId) {
+      const issueTeam = await this.client.getIssueTeam(data.id)
+      if (!issueTeam) {
+        return {
+          handled: false,
+          message: `Ignoring issue '${data.id}' because its team could not be verified`,
+        }
+      }
+      if (issueTeam.id !== configuredTeam.id) {
+        return { handled: false, message: `Ignoring issue from team '${issueTeam.key}'` }
+      }
+    }
+    return null
+  }
+
+  private async upsertWebhookIssue(data: LinearWebhookIssue): Promise<WebhookResult | null> {
+    const rejectedTeam = await this.verifyWebhookIssueTeam(data)
+    if (rejectedTeam) return rejectedTeam
+    if (!data.identifier || !data.title || !data.createdAt || !data.updatedAt) {
+      return { handled: false, message: 'Missing required issue fields' }
+    }
+    const stateId = data.state?.id ?? data.stateId ?? null
+    if (!stateId) return { handled: false, message: 'Missing state id' }
+    await this.cache.upsertIssues([
+      toWebhookCacheIssue(data, {
+        identifier: data.identifier,
+        title: data.title,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt,
+        stateId,
+      }),
+    ])
+    return null
+  }
+
   async handleWebhook(payload: WebhookRequest): Promise<WebhookResult> {
     return this.handleWebhookCore(payload)
   }
@@ -620,32 +707,11 @@ export class LinearProviderCore implements KanbanProvider {
       verify: verifyHmacSha256,
     })
     if (auth) return auth
-    let body: {
-      action?: 'create' | 'update' | 'remove'
-      type?: string
-      data?: {
-        id: string
-        identifier?: string
-        title?: string
-        description?: string | null
-        priority?: number | null
-        url?: string | null
-        createdAt?: string
-        updatedAt?: string
-        assignee?: { id: string; name?: string | null } | null
-        assigneeId?: string | null
-        project?: { id: string; name: string } | null
-        projectId?: string | null
-        state?: { id: string; name: string; position?: number } | null
-        stateId?: string | null
-        team?: { id?: string | null; key?: string | null } | null
-        teamId?: string | null
-        labels?: Array<{ id: string; name: string }> | null
-        commentCount?: number | null
-      }
-    } = {}
+    let body: LinearWebhookBody
     try {
-      body = JSON.parse(payload.rawBody) as typeof body
+      // SAFETY: Linear's webhook wire contract is narrowed by event/action dispatch;
+      // team and required issue fields are checked before the cache upsert.
+      body = JSON.parse(payload.rawBody) as LinearWebhookBody
     } catch {
       return { handled: false, message: 'Invalid JSON body' }
     }
@@ -655,68 +721,20 @@ export class LinearProviderCore implements KanbanProvider {
     const data = body.data
     if (!data) return { handled: false, message: 'No data in payload' }
 
-    if (body.action === 'remove') {
-      await this.cache.deleteIssue(data.id)
-      await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
-      return { handled: true }
+    switch (body.action) {
+      case 'remove':
+        await this.cache.deleteIssue(data.id)
+        break
+      case 'create':
+      case 'update': {
+        const rejectedIssue = await this.upsertWebhookIssue(data)
+        if (rejectedIssue) return rejectedIssue
+        break
+      }
+      default:
+        return { handled: false, message: `Unsupported action: ${body.action}` }
     }
-
-    if (body.action === 'create' || body.action === 'update') {
-      const configuredTeam = await this.getConfiguredTeam()
-      const payloadTeamId = data.team?.id ?? data.teamId ?? null
-      if (payloadTeamId && payloadTeamId !== configuredTeam.id) {
-        return {
-          handled: false,
-          message: `Ignoring issue from team '${payloadTeamId}'`,
-        }
-      }
-
-      if (!payloadTeamId) {
-        const issueTeam = await this.client.getIssueTeam(data.id)
-        if (!issueTeam) {
-          return {
-            handled: false,
-            message: `Ignoring issue '${data.id}' because its team could not be verified`,
-          }
-        }
-        if (issueTeam.id !== configuredTeam.id) {
-          return {
-            handled: false,
-            message: `Ignoring issue from team '${issueTeam.key}'`,
-          }
-        }
-      }
-
-      if (!data.identifier || !data.title || !data.createdAt || !data.updatedAt) {
-        return { handled: false, message: 'Missing required issue fields' }
-      }
-      const stateId = data.state?.id ?? data.stateId ?? null
-      if (!stateId) return { handled: false, message: 'Missing state id' }
-      await this.cache.upsertIssues([
-        {
-          id: data.id,
-          identifier: data.identifier,
-          title: data.title,
-          description: data.description ?? '',
-          priority: data.priority ?? 0,
-          assigneeId: data.assignee?.id ?? data.assigneeId ?? null,
-          assigneeName: data.assignee?.name ?? null,
-          projectId: data.project?.id ?? data.projectId ?? null,
-          projectName: data.project?.name ?? null,
-          stateId,
-          stateName: data.state?.name ?? '',
-          statePosition: data.state?.position ?? 0,
-          labels: (data.labels ?? []).map((l) => l.name),
-          commentCount: data.commentCount,
-          url: data.url ?? null,
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt,
-        },
-      ])
-      await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
-      return { handled: true }
-    }
-
-    return { handled: false, message: `Unsupported action: ${body.action}` }
+    await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
+    return { handled: true }
   }
 }

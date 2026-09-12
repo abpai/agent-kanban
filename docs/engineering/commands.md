@@ -1,7 +1,11 @@
 # Engineering commands
 
-Agent Kanban uses Bun as its runtime and package manager. CI pins Bun 1.3.11;
-the local package manager field currently names Bun 1.3.3.
+Agent Kanban uses Bun as its runtime and package manager. CI and the
+`packageManager` field both pin Bun 1.4.2; the CLI requires Bun >=1.4.2, and both
+Docker stages use the same version. `@types/bun` matches the runtime.
+`@types/node` is pinned to 22.20.2 for Bun's Node-compatible APIs: Bun 1.4.2's
+`memoryPressure` declarations otherwise hide the signal-event overloads in
+Node 25 types. Recheck `process.on`/`off` typing before changing that pin.
 
 ## Bootstrap
 
@@ -34,7 +38,46 @@ Run this before handing off a normal code change:
 bun run check
 ```
 
-This expands to lint, root TypeScript, and UI TypeScript checks.
+This expands to lint, root TypeScript (including `scripts/`), and UI TypeScript
+checks. TypeScript and Prettier cache successful work under the ignored
+`.cache/` directory.
+
+### Lint and formatting
+
+`bun run lint:oxlint` checks JavaScript and TypeScript, including the existing
+type-aware `no-floating-promises` rule. `.oxlintrc.json` spells out the migrated
+ESLint rules so the migration preserves the quality gate. TypeScript catches
+undefined names in TypeScript; Oxlint retains `no-undef` for JavaScript.
+
+`bun run lint:format` checks the same JavaScript/TypeScript formatting surface
+as the previous ESLint setup, with a content-based Prettier cache. Run
+`bun run format` to format the full repository, or pass changed paths directly
+to `bun x --no-install prettier --write` for a focused fix.
+
+This adopts the separate Oxlint/Prettier checks, incremental TypeScript, and
+15 generic deslop rules from [templates.bun](https://github.com/abpai/templates.bun).
+The vendored plugin's pinned source, license, and local changes are recorded in
+[`tools/oxlint/anti-slop/UPSTREAM.md`](../../tools/oxlint/anti-slop/UPSTREAM.md).
+Effect-specific rules are excluded because this repository does not use Effect.
+
+The template's eleven hard rules are errors: they reject chained assertions,
+unexplained casts, type widening, unparsed unknown contracts, unsafe dictionary
+contracts, and reflective property access/calls. Its four advisory rules remain
+warnings (conditional empty-object spreads, module mocks, runtime `typeof`, and
+shape-based symbol names). Modified cyclomatic complexity warns above **22**.
+Unused disable directives are errors, so a stale exception cannot silently linger.
+
+Prefer query generics, inferred types or `satisfies`, and decoding at external
+boundaries. A retained assertion needs an adjacent `SAFETY:` comment explaining
+the invariant. A required unknown input or extensible public contract needs a
+local rule exception with a concrete reason; do not replace `unknown` with an
+unchecked generic or weaker type just to make lint pass. `src/json.ts` describes
+actual JSON values used by provider APIs, separately from arbitrary MCP values.
+
+Native type-aware linting is provided by the paired `oxlint-tsgolint` dependency;
+custom rules use the matching `@oxlint/plugins` version. Keep these dependencies
+aligned when updating Oxlint. Plugin fixtures run with `bun test` and can be run
+alone with `bun test tools/oxlint/anti-slop/rules.test.ts`.
 
 ## Dead-code / unused-export scan
 
@@ -44,8 +87,9 @@ bun run knip
 
 `knip` (config in `knip.json`) reports unused files, dependencies, and exports
 across both the root package and the `ui` workspace. It treats the published
-`exports`-map subpaths and `bin` as the public API surface, so it flags only
-genuinely internal dead code — prefer un-exporting a flagged symbol (making it
+`exports`-map subpaths and `bin` as the public API surface, plus the documented
+`src/mcp/index.ts` entry used by embedding hosts. It flags internal dead code —
+prefer un-exporting a flagged symbol (making it
 module-private) over deleting it when it is still used within its own file. CI
 runs this as a gate, so keep it green.
 
@@ -55,9 +99,26 @@ Done means the full lane is green, or every skipped/blocked command is explained
 
 ```bash
 bun run check
+bun run knip
 bun test
 bun run build
 bun run ui:build
+bun run test:ui
+```
+
+### Dashboard browser proof
+
+`bun run test:ui` starts the built dashboard against a temporary SQLite database
+and drives it in headless Chrome. It checks the main task workflow at desktop
+and mobile sizes and exits after cleaning up the server and temporary data.
+Build `ui/dist/` first. The smoke uses an existing Chrome/Chromium installation;
+set `CHROME_PATH` if its executable is outside the standard locations. CI uses
+the runner's `/usr/bin/google-chrome`.
+
+To retain screenshots for visual review:
+
+```bash
+bun run test:ui --screenshots=/tmp/kanban-ui-proof
 ```
 
 ### Postgres parity proof

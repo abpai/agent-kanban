@@ -1,4 +1,4 @@
-import { McpError, ErrorCode as JsonRpcErrorCode } from '@modelcontextprotocol/sdk/types.js'
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server'
 import { ErrorCode, type ErrorCodeValue, KanbanError } from '../errors'
 
 export type TrackerMcpErrorCode =
@@ -55,29 +55,29 @@ function providerError(code: ErrorCodeValue): TrackerMcpErrorCode {
   }
 }
 
-export function toTrackerMcpError(error: unknown): TrackerMcpError {
-  if (error instanceof TrackerMcpError) return error
-  if (error instanceof KanbanError) {
+export function toTrackerMcpError(cause: unknown): TrackerMcpError {
+  if (cause instanceof TrackerMcpError) return cause
+  if (cause instanceof KanbanError) {
     return new TrackerMcpError({
-      code: providerError(error.code),
-      message: error.message,
-      publicMessage: error.message,
-      cause: error,
+      code: providerError(cause.code),
+      message: cause.message,
+      publicMessage: cause.message,
+      cause,
     })
   }
-  if (error instanceof Error) {
+  if (cause instanceof Error) {
     return new TrackerMcpError({
       code: 'internal_error',
-      message: error.message,
-      publicMessage: error.message,
-      cause: error,
+      message: cause.message,
+      publicMessage: cause.message,
+      cause,
     })
   }
   return new TrackerMcpError({
     code: 'internal_error',
-    message: String(error),
-    publicMessage: String(error),
-    cause: error,
+    message: String(cause),
+    publicMessage: String(cause),
+    cause,
   })
 }
 
@@ -86,23 +86,23 @@ export function trackerMcpJsonRpcCode(code: TrackerMcpErrorCode): number {
     case 'auth_failed':
       return -32001
     case 'policy_denied':
-      return -32002
+      return -32012
     case 'ticket_not_found':
     case 'comment_not_found':
       return -32003
     case 'validation_failed':
-      return JsonRpcErrorCode.InvalidParams
+      return ProtocolErrorCode.InvalidParams
     case 'provider_unavailable':
       return -32010
     case 'internal_error':
     default:
-      return JsonRpcErrorCode.InternalError
+      return ProtocolErrorCode.InternalError
   }
 }
 
-export function toMcpError(error: unknown): McpError {
-  const trackerError = toTrackerMcpError(error)
-  return new McpError(
+export function toMcpError(cause: unknown): ProtocolError {
+  const trackerError = toTrackerMcpError(cause)
+  return new ProtocolError(
     trackerMcpJsonRpcCode(trackerError.code),
     trackerError.publicMessage ?? trackerError.message,
     { trackerMcpCode: trackerError.code },

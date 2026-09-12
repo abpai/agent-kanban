@@ -36,6 +36,21 @@ contract.
    agents; host-owned MCP servers can reuse `src/mcp/` with their own auth and
    policy.
 
+## Dashboard implementation
+
+The dashboard keeps its bundled React/Zustand state and Vite development proxy:
+optimistic edits, conflict recovery, provider capabilities, authentication, and
+WebSocket/polling fallback are shared behavior worth preserving. A single HTML
+file would merge those concerns without removing them. The UI instead uses plain
+CSS tokens, system fonts, one responsive column/task renderer, and native dialogs.
+Store selectors limit unrelated renders; search filtering is deferred and computed
+once for both desktop and mobile. No font or UI dependency is fetched from a CDN
+at runtime.
+
+`bun run test:ui` exercises the built assets against an isolated local provider
+in Chromium. See [testing](./engineering/testing.md) for the proof boundary and
+[commands](./engineering/commands.md) for browser setup.
+
 ## Boundaries
 
 - Public terminology comes from `UBIQUITOUS_LANGUAGE.md`.

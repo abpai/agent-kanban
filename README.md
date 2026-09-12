@@ -34,7 +34,7 @@ That buys you a few things that are easy to miss at first:
 bun install -g @andypai/agent-kanban
 ```
 
-`agent-kanban` targets the Bun runtime. Install Bun first if it is not already available on your machine.
+`agent-kanban` requires **Bun 1.4.2 or newer**. CI and the Docker image use Bun 1.4.2. Install or upgrade Bun before installing the CLI.
 
 ### Local development
 
@@ -138,8 +138,8 @@ surface.
 
 Unsupported operations return error code `UNSUPPORTED_OPERATION` with exit code 1.
 
-Task comments are exposed through the CLI, REST API, MCP, and dashboard task
-detail flows.
+Task comments are exposed through the CLI, REST API, and MCP. Dashboard task
+details show the comment count.
 
 In Linear and Jira modes, webhooks update the cache immediately when configured,
 and the normal poll loop still runs as a fallback so missed deliveries and

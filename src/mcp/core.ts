@@ -31,12 +31,19 @@ export interface TrackerCore<TScope> {
   }
 }
 
+type ToolResultMeta = {
+  commentCount?: number
+  taskCount?: number
+  commentId?: string
+  movedTo?: string
+}
+
 interface RunToolInput<TScope, TResult> {
   scope: TScope
   tool: string
   ticketId?: string
   execute(): Promise<TResult>
-  resultMeta?: Record<string, unknown> | ((result: TResult) => Record<string, unknown> | undefined)
+  resultMeta?: ToolResultMeta | ((result: TResult) => ToolResultMeta | undefined)
 }
 
 async function filterComments<TScope>(

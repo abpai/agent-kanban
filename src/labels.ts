@@ -1,3 +1,4 @@
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Decodes external and legacy stored labels, ignoring non-string values.
 export function normalizeLabels(input: unknown): string[] {
   const labels: string[] = []
   const seen = new Set<string>()
@@ -7,6 +8,7 @@ export function normalizeLabels(input: unknown): string[] {
   return labels
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Decodes external and legacy stored labels, ignoring non-string values.
 export function parseStoredLabels(raw: unknown): string[] {
   if (typeof raw !== 'string') return normalizeLabels(raw)
 
@@ -17,6 +19,7 @@ export function parseStoredLabels(raw: unknown): string[] {
   }
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Decodes external and legacy stored labels, ignoring non-string values.
 function collectLabels(input: unknown, labels: string[], seen: Set<string>): void {
   if (Array.isArray(input)) {
     for (const item of input) collectLabels(item, labels, seen)

@@ -1,6 +1,7 @@
+import { assertKanbanError } from './helpers/errors'
 import { describe, expect, test } from 'bun:test'
 
-import { ErrorCode, KanbanError } from '../errors'
+import { ErrorCode } from '../errors'
 import { LOCAL_CAPABILITIES } from '../providers/capabilities'
 import {
   LocalProviderCore,
@@ -182,6 +183,9 @@ class FakeLocalStore implements LocalStorePort {
 describe('LocalProviderCore', () => {
   test('normalizes local task identity, comment count, labels, and version fields', async () => {
     const store = new FakeLocalStore()
+    // SAFETY: this malformed fake intentionally emulates legacy storage rows;
+    // the normalization under test must repair each omitted field below.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- Inject an invalid persisted row to verify normalization at the storage boundary.
     store.task = {
       ...localTask({ revision: 3 }),
       assignees: undefined,
@@ -236,8 +240,8 @@ describe('LocalProviderCore', () => {
       err = caught
     }
 
-    expect(err).toBeInstanceOf(KanbanError)
-    expect((err as KanbanError).code).toBe(ErrorCode.CONFLICT)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.CONFLICT)
     expect(store.updates).toEqual([])
     expect(store.getTaskVersionCalls).toBe(1)
     expect(store.getTaskCalls).toBe(0)

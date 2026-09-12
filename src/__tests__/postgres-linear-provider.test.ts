@@ -5,6 +5,7 @@ import { run } from '../index'
 import type { Task, TaskComment } from '../types'
 import { PostgresLinearProvider } from '../providers/postgres-linear'
 import { PostgresLinearCache } from '../providers/postgres-linear-cache'
+import type { LinearClient } from '../providers/linear-client'
 
 const databaseUrl = process.env['KANBAN_PG_TEST_URL'] ?? process.env['DATABASE_URL']
 const pgTest = databaseUrl ? test : test.skip
@@ -33,12 +34,26 @@ type StubComment = {
   user: { id: string; name: string; displayName: string }
 }
 
-type LinearStubCall = { query: string; variables: Record<string, unknown> }
+type LinearStubInput = Partial<Parameters<LinearClient['createIssue']>[0]> & {
+  issueId?: string
+  body?: string
+}
+type LinearStubVariables = { id?: string; issueId?: string; input?: LinearStubInput }
+type LinearStubCall = { query: string; variables: LinearStubVariables }
+
+interface TestEnvironment {
+  KANBAN_STORAGE: string | undefined
+  KANBAN_DATABASE_URL: string | undefined
+  KANBAN_PROVIDER: string | undefined
+  LINEAR_API_KEY: string | undefined
+  LINEAR_TEAM_ID: string | undefined
+}
 
 function expectOk<T>(result: Awaited<ReturnType<typeof run>>): T {
   expect(result.exitCode).toBe(0)
   expect(result.output.ok).toBe(true)
   if (!result.output.ok) throw new Error('expected successful CLI output')
+  // SAFETY: Callers select T from the command's response contract and assert its task/comment fields.
   return result.output.data as T
 }
 
@@ -94,155 +109,165 @@ function linearFetchStub(calls: LinearStubCall[] = []): typeof fetch {
     ],
   }
 
-  return (async (_input: string | URL | Request, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body ?? '{}')) as {
-      query: string
-      variables?: Record<string, unknown>
-    }
-    const query = body.query
-    const variables = body.variables ?? {}
-    calls.push({ query, variables })
+  const createIssue = (input: LinearStubInput) => {
+    if (input.title === undefined) throw new Error('CreateIssue requires a title')
+    const state = states.find((candidate) => candidate.id === input.stateId) ?? states[0]!
+    const issueLabels = labels.nodes.filter((label) => input.labelIds?.includes(label.id))
+    const issue = makeIssue({
+      id: 'lin-2',
+      identifier: 'GB-2',
+      title: input.title,
+      description: input.description ?? '',
+      priority: input.priority ?? 0,
+      state,
+      assignee: users.nodes.find((user) => user.id === input.assigneeId) ?? null,
+      project: projects.nodes.find((project) => project.id === input.projectId) ?? null,
+      labels: { nodes: issueLabels },
+      updatedAt: '2026-01-03T00:00:00.000Z',
+    })
+    issues.push(issue)
+    return Response.json({ data: { issueCreate: { success: true, issue } } })
+  }
 
-    if (query.includes('query TeamSnapshot')) {
-      return Response.json({ data: { team } })
-    }
-    if (query.includes('query Users')) {
-      return Response.json({
-        data: { users: { ...users, pageInfo: { hasNextPage: false, endCursor: null } } },
-      })
-    }
-    if (query.includes('query Projects')) {
-      return Response.json({
-        data: { projects: { ...projects, pageInfo: { hasNextPage: false, endCursor: null } } },
-      })
-    }
-    if (query.includes('query IssueLabels')) {
-      return Response.json({
-        data: {
-          issueLabels: {
-            ...labels,
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
-        },
-      })
-    }
-    if (query.includes('query IssueById')) {
-      const issue = issues.find((candidate) => candidate.id === variables.id) ?? null
-      return Response.json({ data: { issue } })
-    }
-    if (query.includes('query Issues')) {
-      return Response.json({
-        data: {
-          issues: {
-            nodes: issues,
-            pageInfo: { hasNextPage: false, endCursor: null },
-          },
-        },
-      })
-    }
-    if (query.includes('mutation CreateIssue')) {
-      const input = variables.input as {
-        title: string
-        description?: string
-        priority?: number
-        stateId?: string
-        assigneeId?: string
-        projectId?: string
-        labelIds?: string[]
+  const updateIssue = (variables: LinearStubVariables) => {
+    const issue = issues.find((candidate) => candidate.id === variables.id)
+    const input = variables.input
+    if (issue && input) {
+      if (input.stateId) {
+        const state = states.find((candidate) => candidate.id === input.stateId)
+        if (state) issue.state = state
       }
-      const state = states.find((candidate) => candidate.id === input.stateId) ?? states[0]!
-      const issueLabels = labels.nodes.filter((label) => input.labelIds?.includes(label.id))
-      const issue = makeIssue({
-        id: 'lin-2',
-        identifier: 'GB-2',
-        title: input.title,
-        description: input.description ?? '',
-        priority: input.priority ?? 0,
-        state,
-        assignee: users.nodes.find((user) => user.id === input.assigneeId) ?? null,
-        project: projects.nodes.find((project) => project.id === input.projectId) ?? null,
-        labels: { nodes: issueLabels },
-        updatedAt: '2026-01-03T00:00:00.000Z',
-      })
-      issues.push(issue)
-      return Response.json({ data: { issueCreate: { success: true, issue } } })
+      if (input.title) issue.title = input.title
+      issue.updatedAt = '2026-01-04T00:00:00.000Z'
     }
-    if (query.includes('mutation UpdateIssue')) {
-      const issue = issues.find((candidate) => candidate.id === variables.id)
-      const input = variables.input as { stateId?: string; title?: string }
-      if (issue) {
-        if (input.stateId) {
-          const state = states.find((candidate) => candidate.id === input.stateId)
-          if (state) issue.state = state
+    return Response.json({ data: { issueUpdate: { success: true } } })
+  }
+
+  return Object.assign(
+    async (_input: string | URL | Request, init?: RequestInit) => {
+      // SAFETY: LinearClient serializes this GraphQL envelope; this stub reads only its declared variables.
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        query: string
+        variables?: LinearStubVariables
+      }
+      const query = body.query
+      const variables = body.variables ?? {}
+      calls.push({ query, variables })
+
+      const operation = query.match(/\b(?:query|mutation)\s+(\w+)/)?.[1]
+      switch (operation) {
+        case 'TeamSnapshot': {
+          return Response.json({ data: { team } })
         }
-        if (input.title) issue.title = input.title
-        issue.updatedAt = '2026-01-04T00:00:00.000Z'
-      }
-      return Response.json({ data: { issueUpdate: { success: true } } })
-    }
-    if (query.includes('query IssueComments')) {
-      const issueId = String(variables.issueId)
-      return Response.json({
-        data: {
-          issue: {
-            comments: {
-              nodes: commentsByIssue.get(issueId) ?? [],
-              pageInfo: { hasNextPage: false, endCursor: null },
+        case 'Users': {
+          return Response.json({
+            data: { users: { ...users, pageInfo: { hasNextPage: false, endCursor: null } } },
+          })
+        }
+        case 'Projects': {
+          return Response.json({
+            data: { projects: { ...projects, pageInfo: { hasNextPage: false, endCursor: null } } },
+          })
+        }
+        case 'IssueLabels': {
+          return Response.json({
+            data: {
+              issueLabels: {
+                ...labels,
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
             },
-          },
-        },
-      })
-    }
-    if (query.includes('query Comment')) {
-      const comment = [...commentsByIssue.values()]
-        .flat()
-        .find((candidate) => candidate.id === variables.id)
-      return Response.json({ data: { comment: comment ?? null } })
-    }
-    if (query.includes('mutation CommentCreate')) {
-      const input = variables.input as { issueId: string; body: string }
-      const row: StubComment = {
-        id: `comment-${(commentsByIssue.get(input.issueId)?.length ?? 0) + 1}`,
-        body: input.body,
-        createdAt: '2026-01-05T00:00:00.000Z',
-        updatedAt: '2026-01-05T00:00:00.000Z',
-        user: { id: 'user-1', name: 'Alice', displayName: 'Alice' },
-      }
-      commentsByIssue.set(input.issueId, [...(commentsByIssue.get(input.issueId) ?? []), row])
-      return Response.json({ data: { commentCreate: { success: true, comment: row } } })
-    }
-    if (query.includes('mutation CommentUpdate')) {
-      const row = [...commentsByIssue.values()]
-        .flat()
-        .find((candidate) => candidate.id === variables.id)
-      if (row) {
-        row.body = (variables.input as { body: string }).body
-        row.updatedAt = '2026-01-06T00:00:00.000Z'
-      }
-      return Response.json({ data: { commentUpdate: { success: true, comment: row ?? null } } })
-    }
-    if (query.includes('query IssueHistory')) {
-      return Response.json({
-        data: {
-          issue: {
-            history: {
-              nodes: [],
-              pageInfo: { hasNextPage: false, endCursor: null },
+          })
+        }
+        case 'IssueById': {
+          const issue = issues.find((candidate) => candidate.id === variables.id) ?? null
+          return Response.json({ data: { issue } })
+        }
+        case 'Issues': {
+          return Response.json({
+            data: {
+              issues: {
+                nodes: issues,
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
             },
-          },
-        },
-      })
-    }
-    if (query.includes('query IssueTeam')) {
-      return Response.json({ data: { issue: { team: { id: 'team-1', key: 'GB' } } } })
-    }
+          })
+        }
+        case 'CreateIssue':
+          return createIssue(variables.input ?? {})
+        case 'UpdateIssue':
+          return updateIssue(variables)
+        case 'IssueComments': {
+          const issueId = String(variables.issueId)
+          return Response.json({
+            data: {
+              issue: {
+                comments: {
+                  nodes: commentsByIssue.get(issueId) ?? [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          })
+        }
+        case 'Comment': {
+          const comment = [...commentsByIssue.values()]
+            .flat()
+            .find((candidate) => candidate.id === variables.id)
+          return Response.json({ data: { comment: comment ?? null } })
+        }
+        case 'CommentCreate': {
+          const input = variables.input
+          if (input?.issueId === undefined || input.body === undefined) {
+            throw new Error('CommentCreate requires an issueId and body')
+          }
+          const row: StubComment = {
+            id: `comment-${(commentsByIssue.get(input.issueId)?.length ?? 0) + 1}`,
+            body: input.body,
+            createdAt: '2026-01-05T00:00:00.000Z',
+            updatedAt: '2026-01-05T00:00:00.000Z',
+            user: { id: 'user-1', name: 'Alice', displayName: 'Alice' },
+          }
+          commentsByIssue.set(input.issueId, [...(commentsByIssue.get(input.issueId) ?? []), row])
+          return Response.json({ data: { commentCreate: { success: true, comment: row } } })
+        }
+        case 'CommentUpdate': {
+          const row = [...commentsByIssue.values()]
+            .flat()
+            .find((candidate) => candidate.id === variables.id)
+          if (row) {
+            if (variables.input?.body === undefined)
+              throw new Error('CommentUpdate requires a body')
+            row.body = variables.input.body
+            row.updatedAt = '2026-01-06T00:00:00.000Z'
+          }
+          return Response.json({ data: { commentUpdate: { success: true, comment: row ?? null } } })
+        }
+        case 'IssueHistory': {
+          return Response.json({
+            data: {
+              issue: {
+                history: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          })
+        }
+        case 'IssueTeam': {
+          return Response.json({ data: { issue: { team: { id: 'team-1', key: 'GB' } } } })
+        }
+      }
 
-    return Response.json({ errors: [{ message: 'unhandled Linear query' }] }, { status: 500 })
-  }) as typeof fetch
+      return Response.json({ errors: [{ message: 'unhandled Linear query' }] }, { status: 500 })
+    },
+    { preconnect() {} },
+  )
 }
 
 describe('postgres linear provider', () => {
-  let previousEnv: Record<string, string | undefined>
+  let previousEnv: TestEnvironment
   let previousFetch: typeof fetch
   let sql: postgres.Sql | null = null
 
@@ -355,10 +380,7 @@ describe('postgres linear provider', () => {
     expect(created.labels).toEqual(['garage-smoke', 'garage-owner-local'])
     const createCall = calls.find((call) => call.query.includes('mutation CreateIssue'))
     expect(createCall).toBeDefined()
-    expect((createCall?.variables.input as { labelIds?: string[] })?.labelIds).toEqual([
-      'label-smoke',
-      'label-owner',
-    ])
+    expect(createCall?.variables.input?.labelIds).toEqual(['label-smoke', 'label-owner'])
   })
 
   pgTest('rolls back description activity when Linear issue upsert fails', async () => {
@@ -393,6 +415,8 @@ describe('postgres linear provider', () => {
           ...issue,
           title: 'Should roll back',
           description: 'new description',
+          // SAFETY: Deliberately violate NOT NULL to prove the entire cache write rolls back.
+          // oxlint-disable-next-line anti-slop/no-chained-type-assertions
           stateId: null as unknown as string,
           updatedAt: '2026-01-03T00:00:00.000Z',
         },

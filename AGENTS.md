@@ -10,8 +10,8 @@ you to the right code and validation path.
   through end-to-end proof.
 - Identify the validation command before editing. Escalate per the spec
   contract; otherwise execute the change end to end.
-- Use Bun, not Node.js. CI pins Bun 1.3.11 and `package.json` requires
-  Bun >=1.1.0.
+- Use Bun, not Node.js. CI pins Bun 1.4.2 and `package.json` requires
+  Bun >=1.4.2.
 
 ## Where to look
 

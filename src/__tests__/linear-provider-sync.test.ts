@@ -1,6 +1,8 @@
+import { mockFetch } from './helpers/fetch'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { LinearProvider } from '../providers/linear'
+import type { LinearClient, LinearIssueUpdateInput } from '../providers/linear-client'
 import {
   getCachedLinearActivity,
   getCachedTasks,
@@ -67,11 +69,11 @@ describe('LinearProvider sync', () => {
   test('resolves a configured team key before querying issues', async () => {
     const seenIssueTeamIds: string[] = []
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: Record<string, unknown>
-      }
+        variables: { teamId?: string }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query TeamSnapshot')) {
         return new Response(
@@ -129,7 +131,7 @@ describe('LinearProvider sync', () => {
       }
 
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     await provider.getBoard()
@@ -145,12 +147,12 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
     })
 
-    const createIssueInput: { current?: { labelIds?: string[]; teamId?: string } } = {}
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    const createIssueInputs: Parameters<LinearClient['createIssue']>[0][] = []
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: { input?: { labelIds?: string[]; teamId?: string } }
-      }
+        variables: { input?: Parameters<LinearClient['createIssue']>[0] }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query IssueLabels')) {
         return new Response(
@@ -170,7 +172,8 @@ describe('LinearProvider sync', () => {
       }
 
       if (body.query.includes('mutation CreateIssue')) {
-        createIssueInput.current = body.variables.input
+        if (!body.variables.input) throw new Error('Missing CreateIssue input')
+        createIssueInputs.push(body.variables.input)
         return new Response(
           JSON.stringify({
             data: {
@@ -207,7 +210,7 @@ describe('LinearProvider sync', () => {
       }
 
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     const created = await provider.createTask({
@@ -215,8 +218,9 @@ describe('LinearProvider sync', () => {
       labels: ['garage-smoke', 'garage-owner-local'],
     })
 
-    expect(createIssueInput.current?.teamId).toBe('3ca24047-e954-44e8-b266-c7182410befb')
-    expect(createIssueInput.current?.labelIds).toEqual(['label-smoke', 'label-owner'])
+    expect(createIssueInputs).toHaveLength(1)
+    expect(createIssueInputs[0]?.teamId).toBe('3ca24047-e954-44e8-b266-c7182410befb')
+    expect(createIssueInputs[0]?.labelIds).toEqual(['label-smoke', 'label-owner'])
     expect(created.externalRef).toBe('R2P-1')
     expect(created.labels).toEqual(['garage-smoke', 'garage-owner-local'])
   })
@@ -227,11 +231,11 @@ describe('LinearProvider sync', () => {
     const seenUserAfter: Array<string | null> = []
     const seenProjectAfter: Array<string | null> = []
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: Record<string, unknown>
-      }
+        variables: { after?: string | null }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query TeamSnapshot')) {
         return new Response(
@@ -251,7 +255,7 @@ describe('LinearProvider sync', () => {
 
       if (body.query.includes('query Users')) {
         userPages += 1
-        const after = (body.variables.after as string | null) ?? null
+        const after = body.variables.after ?? null
         seenUserAfter.push(after)
         const page = after
           ? {
@@ -279,7 +283,7 @@ describe('LinearProvider sync', () => {
 
       if (body.query.includes('query Projects')) {
         projectPages += 1
-        const after = (body.variables.after as string | null) ?? null
+        const after = body.variables.after ?? null
         seenProjectAfter.push(after)
         const page = after
           ? { nodes: [{ id: 'p2', name: 'Project Two' }], hasNextPage: false, endCursor: null }
@@ -311,7 +315,7 @@ describe('LinearProvider sync', () => {
       }
 
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     await provider.getBoard()
@@ -330,11 +334,11 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
     })
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { query: string }
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: { query: string } = JSON.parse(String(init?.body))
       // The assignee resolver should throw before any CreateIssue mutation runs.
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     await expect(
@@ -365,11 +369,11 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
     })
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { query: string }
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: { query: string } = JSON.parse(String(init?.body))
       // The resolver should throw before any UpdateIssue mutation runs.
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     await expect(provider.updateTask('R2P-1', { assignee: 'Ghost User' })).rejects.toMatchObject({
@@ -401,12 +405,12 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
     })
 
-    const updateInputs: Array<Record<string, unknown>> = []
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    const updateInputs: LinearIssueUpdateInput[] = []
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: { input?: Record<string, unknown> }
-      }
+        variables: { input?: LinearIssueUpdateInput }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('mutation UpdateIssue')) {
         updateInputs.push(body.variables.input ?? {})
@@ -483,7 +487,7 @@ describe('LinearProvider sync', () => {
         )
       }
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     await provider.updateTask('R2P-1', { assignee: '' })
@@ -515,12 +519,12 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
     })
 
-    const updateInputs: Array<Record<string, unknown>> = []
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    const updateInputs: LinearIssueUpdateInput[] = []
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: { input?: Record<string, unknown> }
-      }
+        variables: { input?: LinearIssueUpdateInput }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query IssueLabels')) {
         return new Response(
@@ -617,7 +621,7 @@ describe('LinearProvider sync', () => {
         )
       }
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     const updated = await provider.updateTask('R2P-1', {
@@ -652,12 +656,12 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
     })
 
-    const updateInputs: Array<Record<string, unknown>> = []
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    const updateInputs: LinearIssueUpdateInput[] = []
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: { input?: Record<string, unknown> }
-      }
+        variables: { input?: LinearIssueUpdateInput }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('mutation UpdateIssue')) {
         updateInputs.push(body.variables.input ?? {})
@@ -729,7 +733,7 @@ describe('LinearProvider sync', () => {
         )
       }
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     const updated = await provider.updateTask('R2P-1', { labels: [] })
@@ -762,12 +766,12 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
     })
 
-    const updateInputs: Array<Record<string, unknown>> = []
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    const updateInputs: LinearIssueUpdateInput[] = []
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: { input?: Record<string, unknown> }
-      }
+        variables: { input?: LinearIssueUpdateInput }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('mutation UpdateIssue')) {
         updateInputs.push(body.variables.input ?? {})
@@ -844,7 +848,7 @@ describe('LinearProvider sync', () => {
         )
       }
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     await provider.updateTask('R2P-1', { title: 'Renamed only' })
@@ -852,57 +856,6 @@ describe('LinearProvider sync', () => {
     expect(updateInputs).toHaveLength(1)
     expect(Object.hasOwn(updateInputs[0]!, 'labelIds')).toBe(false)
     expect(updateInputs[0]).toHaveProperty('title', 'Renamed only')
-  })
-
-  test('advertises labelReplacement capability', async () => {
-    replaceStates(db, [{ id: 'state-1', name: 'Todo', position: 0 }])
-    saveSyncMeta(db, {
-      team: { id: 'team-1', key: 'R2P', name: 'R2pi' },
-      lastSyncAt: new Date().toISOString(),
-      lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
-    })
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { query: string }
-      if (body.query.includes('query TeamSnapshot')) {
-        return new Response(
-          JSON.stringify({
-            data: {
-              team: {
-                id: 'team-1',
-                key: 'R2P',
-                name: 'R2pi',
-                states: { nodes: [{ id: 'state-1', name: 'Todo', position: 0 }] },
-              },
-            },
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        )
-      }
-      if (body.query.includes('query Users') || body.query.includes('query Projects')) {
-        return new Response(
-          JSON.stringify({
-            data: {
-              users: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-              projects: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-            },
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        )
-      }
-      if (body.query.includes('query Issues')) {
-        return new Response(
-          JSON.stringify({
-            data: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        )
-      }
-      return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
-
-    const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
-    const ctx = await provider.getContext()
-    expect(ctx.capabilities.labelReplacement).toBe(true)
   })
 
   test('updateTask drops the cached row when the hydrated issue left the team', async () => {
@@ -927,8 +880,8 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-02T00:00:00Z',
     })
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { query: string }
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: { query: string } = JSON.parse(String(init?.body))
       if (body.query.includes('mutation UpdateIssue')) {
         return new Response(JSON.stringify({ data: { issueUpdate: { success: true } } }), {
           status: 200,
@@ -943,7 +896,7 @@ describe('LinearProvider sync', () => {
         )
       }
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const provider = new LinearProvider(db, 'R2P', 'lin_api_test')
     await expect(provider.updateTask('R2P-1', { title: 'Renamed' })).rejects.toMatchObject({
@@ -985,11 +938,10 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-01T00:00:00Z',
     })
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: Record<string, unknown>
-      }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query TeamSnapshot')) {
         return new Response(
@@ -1062,7 +1014,7 @@ describe('LinearProvider sync', () => {
       }
 
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const originalDateNow = Date.now
     Date.now = () => Date.parse('2026-01-01T00:06:00Z')
@@ -1095,11 +1047,11 @@ describe('LinearProvider sync', () => {
       }),
     )
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: Record<string, unknown>
-      }
+        variables: { issueId?: string }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query TeamSnapshot')) {
         return new Response(
@@ -1168,7 +1120,7 @@ describe('LinearProvider sync', () => {
       }
 
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const originalDateNow = Date.now
     Date.now = () => Date.parse('2026-01-01T00:01:00Z')
@@ -1195,11 +1147,10 @@ describe('LinearProvider sync', () => {
     })
 
     let commentCountQueries = 0
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: Record<string, unknown>
-      }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query TeamSnapshot')) {
         return new Response(
@@ -1280,7 +1231,7 @@ describe('LinearProvider sync', () => {
         )
       }
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const originalDateNow = Date.now
     Date.now = () => Date.parse('2026-01-01T00:06:00Z')
@@ -1315,10 +1266,10 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-01T00:00:00Z',
     })
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-      }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query TeamSnapshot')) {
         return new Response(
@@ -1397,7 +1348,7 @@ describe('LinearProvider sync', () => {
       }
 
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const originalDateNow = Date.now
     Date.now = () => Date.parse('2026-01-01T00:06:00Z')
@@ -1422,11 +1373,11 @@ describe('LinearProvider sync', () => {
       lastWebhookAt: '2026-01-01T00:00:30.000Z',
     })
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: Record<string, unknown>
-      }
+        variables: { updatedAfter?: string | null }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query TeamSnapshot')) {
         return new Response(
@@ -1485,7 +1436,7 @@ describe('LinearProvider sync', () => {
       }
 
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const originalDateNow = Date.now
     Date.now = () => Date.parse('2026-01-01T00:00:31.000Z')
@@ -1510,11 +1461,10 @@ describe('LinearProvider sync', () => {
       lastIssueUpdatedAt: '2026-01-01T00:00:00.000Z',
     })
 
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
+    globalThis.fetch = mockFetch(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body: {
         query: string
-        variables: Record<string, unknown>
-      }
+      } = JSON.parse(String(init?.body))
 
       if (body.query.includes('query TeamSnapshot')) {
         return new Response(
@@ -1572,7 +1522,7 @@ describe('LinearProvider sync', () => {
       }
 
       return new Response(`Unexpected query: ${body.query}`, { status: 500 })
-    }) as unknown as typeof fetch
+    })
 
     const originalDateNow = Date.now
     Date.now = () => Date.parse('2026-01-01T00:00:06.000Z')

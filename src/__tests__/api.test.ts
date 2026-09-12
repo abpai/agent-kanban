@@ -48,15 +48,12 @@ describe('handleRequest', () => {
       body: '{ not valid json',
     })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as {
-      ok: boolean
-      error: { code: string; message: string }
-    }
+    const body = await result.response.json()
 
     expect(result.response.status).toBe(400)
     expect(result.mutated).toBe(false)
-    expect(body.ok).toBe(false)
-    expect(body.error.code).toBe('INVALID_REQUEST_BODY')
+    expect(body).toHaveProperty('ok', false)
+    expect(body).toHaveProperty('error.code', 'INVALID_REQUEST_BODY')
   })
 
   test('still returns MISSING_ARGUMENT when a valid body omits a required field', async () => {
@@ -66,27 +63,21 @@ describe('handleRequest', () => {
       body: JSON.stringify({ description: 'no title' }),
     })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as {
-      ok: boolean
-      error: { code: string }
-    }
+    const body = await result.response.json()
 
     expect(result.response.status).toBe(400)
     expect(result.mutated).toBe(false)
-    expect(body.error.code).toBe('MISSING_ARGUMENT')
+    expect(body).toHaveProperty('error.code', 'MISSING_ARGUMENT')
   })
 
   test('rejects an invalid limit query parameter through the envelope', async () => {
     const req = new Request('http://localhost/api/tasks?limit=-5', { method: 'GET' })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as {
-      ok: boolean
-      error: { code: string }
-    }
+    const body = await result.response.json()
 
     expect(result.response.status).toBe(400)
-    expect(body.ok).toBe(false)
-    expect(body.error.code).toBe('INVALID_ARGUMENT')
+    expect(body).toHaveProperty('ok', false)
+    expect(body).toHaveProperty('error.code', 'INVALID_ARGUMENT')
   })
 
   test('marks successful task creation as mutated', async () => {
@@ -96,15 +87,12 @@ describe('handleRequest', () => {
       body: JSON.stringify({ title: 'Created via API', labels: ['garage-smoke', 'api-smoke'] }),
     })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as {
-      ok: boolean
-      data: { labels: string[] }
-    }
+    const body = await result.response.json()
 
     expect(result.response.status).toBe(200)
     expect(result.mutated).toBe(true)
-    expect(body.ok).toBe(true)
-    expect(body.data.labels).toEqual(['garage-smoke', 'api-smoke'])
+    expect(body).toHaveProperty('ok', true)
+    expect(body).toHaveProperty('data.labels', ['garage-smoke', 'api-smoke'])
   })
 
   test('marks successful task delete as mutated', async () => {
@@ -124,15 +112,12 @@ describe('handleRequest', () => {
       body: JSON.stringify({ body: 'hello from api' }),
     })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as {
-      ok: boolean
-      data: { id: string; body: string }
-    }
+    const body = await result.response.json()
 
     expect(result.response.status).toBe(200)
     expect(result.mutated).toBe(true)
-    expect(body.ok).toBe(true)
-    expect(body.data.body).toBe('hello from api')
+    expect(body).toHaveProperty('ok', true)
+    expect(body).toHaveProperty('data.body', 'hello from api')
   })
 
   test('lists comments without marking the request as mutated', async () => {
@@ -144,18 +129,14 @@ describe('handleRequest', () => {
       method: 'GET',
     })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as {
-      ok: boolean
-      data: Array<{ id: string; body: string }>
-    }
+    const body = await result.response.json()
 
     expect(result.response.status).toBe(200)
     expect(result.mutated).toBe(false)
-    expect(body.ok).toBe(true)
-    expect(body.data.map((comment) => comment.body)).toEqual([
-      'hello from api',
-      'second api comment',
-    ])
+    expect(body).toHaveProperty('ok', true)
+    expect(body).toMatchObject({
+      data: [{ body: 'hello from api' }, { body: 'second api comment' }],
+    })
   })
 
   test('marks successful comment update as mutated', async () => {
@@ -217,57 +198,51 @@ describe('handleRequest', () => {
   test('returns bootstrap payload', async () => {
     const req = new Request('http://localhost/api/bootstrap', { method: 'GET' })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as {
-      ok: boolean
-      data: { provider: string; capabilities: { taskDelete: boolean } }
-    }
+    const body = await result.response.json()
 
     expect(result.response.status).toBe(200)
-    expect(body.ok).toBe(true)
-    expect(body.data.provider).toBe('local')
-    expect(body.data.capabilities.taskDelete).toBe(true)
+    expect(body).toHaveProperty('ok', true)
+    expect(body).toHaveProperty('data.provider', 'local')
+    expect(body).toHaveProperty('data.capabilities.taskDelete', true)
   })
 
   test('F22: GET /api/activity returns an ok envelope wrapping an array', async () => {
     addTask(db, 'Generates activity')
     const req = new Request('http://localhost/api/activity?limit=5', { method: 'GET' })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as { ok: boolean; data: unknown[] }
+    const body = await result.response.json()
     expect(result.response.status).toBe(200)
     expect(result.mutated).toBe(false)
-    expect(body.ok).toBe(true)
-    expect(Array.isArray(body.data)).toBe(true)
+    expect(body).toHaveProperty('ok', true)
+    expect(body).toHaveProperty('data', expect.any(Array))
   })
 
   test('F22: GET /api/activity rejects an invalid limit through the envelope', async () => {
     const req = new Request('http://localhost/api/activity?limit=0', { method: 'GET' })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    const body = await result.response.json()
     expect(result.response.status).toBe(400)
-    expect(body.error.code).toBe('INVALID_ARGUMENT')
+    expect(body).toHaveProperty('error.code', 'INVALID_ARGUMENT')
   })
 
   test('F23: GET /api/metrics returns the metrics envelope', async () => {
     const req = new Request('http://localhost/api/metrics', { method: 'GET' })
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as {
-      ok: boolean
-      data: { totalTasks: number; tasksByColumn: unknown[] }
-    }
+    const body = await result.response.json()
     expect(result.response.status).toBe(200)
     expect(result.mutated).toBe(false)
-    expect(body.ok).toBe(true)
-    expect(typeof body.data.totalTasks).toBe('number')
-    expect(Array.isArray(body.data.tasksByColumn)).toBe(true)
+    expect(body).toHaveProperty('ok', true)
+    expect(body).toHaveProperty('data.totalTasks', expect.any(Number))
+    expect(body).toHaveProperty('data.tasksByColumn', expect.any(Array))
   })
 
   test('F24: GET /api/config returns config', async () => {
     const getReq = new Request('http://localhost/api/config', { method: 'GET' })
     const getRes = await handleRequest(provider, getReq)
-    const getBody = (await getRes.response.json()) as { ok: boolean; data: { provider: string } }
+    const getBody = await getRes.response.json()
     expect(getRes.response.status).toBe(200)
     expect(getRes.mutated).toBe(false)
-    expect(getBody.data.provider).toBe('local')
+    expect(getBody).toHaveProperty('data.provider', 'local')
   })
 
   test('F24: PATCH /api/config mutates without a precise WsEvent', async () => {
@@ -287,15 +262,15 @@ describe('handleRequest', () => {
         body: JSON.stringify({ members: [{ name: 'alice', role: 'human' }] }),
       })
       const patchRes = await handleRequest(cfgProvider, patchReq)
-      const patchBody = (await patchRes.response.json()) as {
-        ok: boolean
-        data: { members: { name: string }[] }
-      }
+      const patchBody = await patchRes.response.json()
       expect(patchRes.response.status).toBe(200)
       expect(patchRes.mutated).toBe(true)
       // No precise WsEvent → the server falls back to a 'refresh' broadcast.
       expect(patchRes.event).toBeUndefined()
-      expect(patchBody.data.members.map((m) => m.name)).toContain('alice')
+      expect(patchBody).toHaveProperty(
+        'data.members',
+        expect.arrayContaining([expect.objectContaining({ name: 'alice' })]),
+      )
     } finally {
       cfgDb.close()
       rmSync(dir, { recursive: true, force: true })
@@ -306,11 +281,13 @@ describe('handleRequest', () => {
 // Minimal provider whose only relevant field is `type` plus an overridable
 // handleWebhook — the webhook branch of handleRequest is the surface under test.
 function webhookProvider(
-  type: string,
+  type: KanbanProvider['type'],
   handleWebhook?: KanbanProvider['handleWebhook'],
 ): KanbanProvider {
-  const p: Partial<KanbanProvider> = { type: type as KanbanProvider['type'] }
+  const p: Partial<KanbanProvider> = { type }
   if (handleWebhook) p.handleWebhook = handleWebhook
+  // SAFETY: these /webhooks requests access only provider.type and handleWebhook;
+  // all other provider methods remain deliberately absent to detect route drift.
   return p as KanbanProvider
 }
 
@@ -328,18 +305,18 @@ describe('handleRequest webhook route (F25)', () => {
       webhookProvider('local', async () => ({ handled: true })),
       webhookRequest('jira'),
     )
-    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    const body = await result.response.json()
     expect(result.response.status).toBe(400)
     expect(result.mutated).toBe(false)
-    expect(body.error.code).toBe('UNSUPPORTED_OPERATION')
+    expect(body).toHaveProperty('error.code', 'UNSUPPORTED_OPERATION')
   })
 
   test('provider without handleWebhook → 400 UNSUPPORTED_OPERATION', async () => {
     const result = await handleRequest(webhookProvider('local'), webhookRequest('local'))
-    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    const body = await result.response.json()
     expect(result.response.status).toBe(400)
     expect(result.mutated).toBe(false)
-    expect(body.error.code).toBe('UNSUPPORTED_OPERATION')
+    expect(body).toHaveProperty('error.code', 'UNSUPPORTED_OPERATION')
   })
 
   test('unauthorized result → 401 PROVIDER_AUTH_FAILED, not mutated', async () => {
@@ -347,10 +324,10 @@ describe('handleRequest webhook route (F25)', () => {
       webhookProvider('local', async () => ({ handled: false, unauthorized: true })),
       webhookRequest('local'),
     )
-    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    const body = await result.response.json()
     expect(result.response.status).toBe(401)
     expect(result.mutated).toBe(false)
-    expect(body.error.code).toBe('PROVIDER_AUTH_FAILED')
+    expect(body).toHaveProperty('error.code', 'PROVIDER_AUTH_FAILED')
   })
 
   test('handled result → 200, mutated true', async () => {
@@ -358,10 +335,10 @@ describe('handleRequest webhook route (F25)', () => {
       webhookProvider('local', async () => ({ handled: true, message: 'ok' })),
       webhookRequest('local'),
     )
-    const body = (await result.response.json()) as { ok: boolean; data: { handled: boolean } }
+    const body = await result.response.json()
     expect(result.response.status).toBe(200)
     expect(result.mutated).toBe(true)
-    expect(body.data.handled).toBe(true)
+    expect(body).toHaveProperty('data.handled', true)
   })
 
   test('handled result calls the accepted hook with the trusted delivery', async () => {
@@ -434,15 +411,12 @@ describe('handleRequest webhook route error containment (F55 regression)', () =>
     })
     // Must NOT reject — before the fix this threw out of handleRequest.
     const result = await handleRequest(provider, webhookRequest('local'))
-    const body = (await result.response.json()) as {
-      ok: boolean
-      error: { code: string; message: string }
-    }
+    const body = await result.response.json()
     expect(result.response.status).toBe(500)
     expect(result.mutated).toBe(false)
-    expect(body.ok).toBe(false)
-    expect(body.error.code).toBe('INTERNAL_ERROR')
-    expect(body.error.message).toContain('boom')
+    expect(body).toHaveProperty('ok', false)
+    expect(body).toHaveProperty('error.code', 'INTERNAL_ERROR')
+    expect(body).toHaveProperty('error.message', expect.stringContaining('boom'))
   })
 
   test('a thrown KanbanError keeps its mapped status + code through the envelope', async () => {
@@ -450,10 +424,10 @@ describe('handleRequest webhook route error containment (F55 regression)', () =>
       throw new KanbanError(ErrorCode.CONFLICT, 'version conflict during webhook apply')
     })
     const result = await handleRequest(provider, webhookRequest('local'))
-    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    const body = await result.response.json()
     expect(result.response.status).toBe(409)
     expect(result.mutated).toBe(false)
-    expect(body.error.code).toBe('CONFLICT')
+    expect(body).toHaveProperty('error.code', 'CONFLICT')
   })
 })
 
@@ -463,18 +437,18 @@ describe('handleRequest malformed path encoding (D2 regression)', () => {
     // Must not reject — before the fix decodeURIComponent threw a URIError that
     // escaped handleRequest.
     const result = await handleRequest(provider, req)
-    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    const body = await result.response.json()
     expect(result.response.status).toBe(400)
     expect(result.mutated).toBe(false)
-    expect(body.error.code).toBe('INVALID_ARGUMENT')
+    expect(body).toHaveProperty('error.code', 'INVALID_ARGUMENT')
   })
 
   test('malformed %-encoding in a webhook target → 400 INVALID_ARGUMENT', async () => {
     const result = await handleRequest(webhookProvider('local'), webhookRequest('%E0%A4%A'))
-    const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+    const body = await result.response.json()
     expect(result.response.status).toBe(400)
     expect(result.mutated).toBe(false)
-    expect(body.error.code).toBe('INVALID_ARGUMENT')
+    expect(body).toHaveProperty('error.code', 'INVALID_ARGUMENT')
   })
 })
 
@@ -490,9 +464,9 @@ describe('statusForCode server-side mapping (D3 regression)', () => {
         throw new KanbanError(ErrorCode[code], `${code} from provider`)
       })
       const result = await handleRequest(provider, webhookRequest('local'))
-      const body = (await result.response.json()) as { ok: boolean; error: { code: string } }
+      const body = await result.response.json()
       expect(result.response.status).toBe(status)
-      expect(body.error.code).toBe(code)
+      expect(body).toHaveProperty('error.code', code)
       expect(result.mutated).toBe(false)
     })
   }

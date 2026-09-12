@@ -1,4 +1,4 @@
-import type { CliOutput, BoardView, Task, TaskWithColumn, TaskComment, Column } from './types'
+import type { CliOutput, BoardView, Task, TaskComment, Column } from './types'
 
 export function success<T>(data: T): CliOutput<T> {
   return { ok: true, data }
@@ -10,18 +10,12 @@ export function error(code: string, message: string): CliOutput<never> {
 
 export function formatOutput(result: CliOutput, pretty: boolean): string {
   if (!pretty) return JSON.stringify(result)
-  if (!result.ok) return formatError(result.error)
+  if (!result.ok) return `Error [${result.error.code}]: ${result.error.message}`
   return formatPrettyData(result.data)
 }
 
-function formatError(err: { code: string; message: string }): string {
-  return `Error [${err.code}]: ${err.message}`
-}
-
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- CLI commands share one polymorphic output envelope; formatting selects its domain view here.
 function formatPrettyData(data: unknown): string {
-  if (data && typeof data === 'object' && 'columns' in data) {
-    return formatBoard(data as BoardView)
-  }
   if (Array.isArray(data)) {
     if (data.length === 0) return 'No items found.'
     if ('column_id' in data[0]) return data.map(formatTaskLine).join('\n')
@@ -29,36 +23,38 @@ function formatPrettyData(data: unknown): string {
     if ('position' in data[0]) return data.map(formatColumnLine).join('\n')
     return JSON.stringify(data, null, 2)
   }
-  if (data && typeof data === 'object' && 'column_id' in data) {
-    return formatTaskDetail(data as TaskWithColumn)
+  if (!data || typeof data !== 'object') return JSON.stringify(data, null, 2)
+  if ('columns' in data) {
+    // SAFETY: The board command produces BoardView; columns distinguishes it from other CLI results.
+    return formatBoard(data as BoardView)
   }
-  if (data && typeof data === 'object' && 'task_id' in data) {
+  if ('column_id' in data) {
+    // SAFETY: Task commands return the Task contract, identified by its column_id field.
+    return formatTaskDetail(data as Task)
+  }
+  if ('task_id' in data) {
+    // SAFETY: Comment commands return TaskComment, identified by its parent task_id field.
     return formatCommentDetail(data as TaskComment)
   }
-  if (data && typeof data === 'object' && 'moved' in data) {
-    return `Moved ${(data as { moved: number }).moved} task(s).`
-  }
-  if (data && typeof data === 'object' && 'deleted' in data) {
-    return `Deleted ${(data as { deleted: number }).deleted} task(s).`
-  }
-  if (data && typeof data === 'object' && 'position' in data && 'name' in data) {
+  if ('moved' in data) return `Moved ${data.moved} task(s).`
+  if ('deleted' in data) return `Deleted ${data.deleted} task(s).`
+  if ('position' in data && 'name' in data) {
+    // SAFETY: Column commands return Column; position and name distinguish it from task/comment results.
     return formatColumnLine(data as Column)
   }
-  if (data && typeof data === 'object' && 'message' in data) {
-    return (data as { message: string }).message
-  }
+  if ('message' in data && typeof data.message === 'string') return data.message
   return JSON.stringify(data, null, 2)
 }
 
-const PRIORITY_ICONS: Record<string, string> = {
-  urgent: '!!!',
-  high: '!! ',
-  medium: '!  ',
-  low: '.  ',
-}
+const PRIORITY_ICONS = new Map([
+  ['urgent', '!!!'],
+  ['high', '!! '],
+  ['medium', '!  '],
+  ['low', '.  '],
+])
 
 function formatTaskLine(task: Task): string {
-  const pri = PRIORITY_ICONS[task.priority] ?? '   '
+  const pri = PRIORITY_ICONS.get(task.priority) ?? '   '
   const assignee = task.assignee ? ` @${task.assignee}` : ''
   const project = task.project ? ` [${task.project}]` : ''
   const ref = task.externalRef && task.externalRef !== task.id ? ` (${task.externalRef})` : ''
@@ -114,7 +110,7 @@ function formatBoard(board: BoardView): string {
       lines.push('  (empty)')
     } else {
       for (const task of col.tasks) {
-        const pri = PRIORITY_ICONS[task.priority] ?? '   '
+        const pri = PRIORITY_ICONS.get(task.priority) ?? '   '
         const assignee = task.assignee ? ` @${task.assignee}` : ''
         const project = task.project ? ` [${task.project}]` : ''
         lines.push(`  [${pri}] ${task.id}  ${task.title}${assignee}${project}`)

@@ -1,6 +1,8 @@
+import { assertKanbanError } from './helpers/errors'
+import { mockFetch } from './helpers/fetch'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { Buffer } from 'node:buffer'
-import { ErrorCode, KanbanError } from '../errors'
+import { ErrorCode } from '../errors'
 import { JiraClient, decideJiraPagination } from '../providers/jira-client'
 import type { JiraIssue } from '../providers/jira-client'
 
@@ -13,16 +15,9 @@ afterEach(() => {
 })
 
 function stub(response: Response): void {
-  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
-    lastRequest = { url: String(url), init }
+  globalThis.fetch = mockFetch(async (url, init) => {
+    lastRequest = { url: url instanceof Request ? url.url : url.toString(), init }
     return response
-  }) as unknown as typeof fetch
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
   })
 }
 
@@ -36,15 +31,15 @@ function makeClient(): JiraClient {
 
 describe('JiraClient', () => {
   test('auth header format', async () => {
-    stub(jsonResponse({ id: '10000', key: 'ABC', name: 'Alpha' }))
+    stub(Response.json({ id: '10000', key: 'ABC', name: 'Alpha' }))
     const client = makeClient()
     await client.getProject('ABC')
     expect(lastRequest).not.toBeNull()
-    const headers = (lastRequest!.init!.headers ?? {}) as Record<string, string>
+    const headers = new Headers(lastRequest!.init!.headers)
     const expected = `Basic ${Buffer.from('user@example.com:tok123').toString('base64')}`
-    expect(headers.Authorization).toBe(expected)
-    expect(headers.Accept).toBe('application/json')
-    expect(headers['Content-Type']).toBe('application/json')
+    expect(headers.get('Authorization')).toBe(expected)
+    expect(headers.get('Accept')).toBe('application/json')
+    expect(headers.get('Content-Type')).toBe('application/json')
     expect(lastRequest!.url).toBe('https://example.atlassian.net/rest/api/3/project/ABC')
   })
 
@@ -60,7 +55,7 @@ describe('JiraClient', () => {
         updated: '2026-01-02T00:00:00.000Z',
       },
     }
-    stub(jsonResponse(body))
+    stub(Response.json(body))
     const client = makeClient()
     const issue = await client.getIssue('ABC-1')
     expect(issue.key).toBe('ABC-1')
@@ -77,8 +72,8 @@ describe('JiraClient', () => {
     } catch (e) {
       err = e
     }
-    expect(err).toBeInstanceOf(KanbanError)
-    expect((err as KanbanError).code).toBe(ErrorCode.PROVIDER_AUTH_FAILED)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.PROVIDER_AUTH_FAILED)
   })
 
   test('403 maps to PROVIDER_AUTH_FAILED', async () => {
@@ -90,8 +85,8 @@ describe('JiraClient', () => {
     } catch (e) {
       err = e
     }
-    expect(err).toBeInstanceOf(KanbanError)
-    expect((err as KanbanError).code).toBe(ErrorCode.PROVIDER_AUTH_FAILED)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.PROVIDER_AUTH_FAILED)
   })
 
   test('429 maps to PROVIDER_RATE_LIMITED', async () => {
@@ -103,18 +98,18 @@ describe('JiraClient', () => {
     } catch (e) {
       err = e
     }
-    expect(err).toBeInstanceOf(KanbanError)
-    expect((err as KanbanError).code).toBe(ErrorCode.PROVIDER_RATE_LIMITED)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.PROVIDER_RATE_LIMITED)
   })
 
   test('400 with errorMessages and errors maps to PROVIDER_UPSTREAM_ERROR', async () => {
     stub(
-      jsonResponse(
+      Response.json(
         {
           errorMessages: ['Field required'],
           errors: { summary: 'is required' },
         },
-        400,
+        { status: 400 },
       ),
     )
     const client = makeClient()
@@ -124,8 +119,8 @@ describe('JiraClient', () => {
     } catch (e) {
       err = e
     }
-    expect(err).toBeInstanceOf(KanbanError)
-    const ke = err as KanbanError
+    assertKanbanError(err)
+    const ke = err
     expect(ke.code).toBe(ErrorCode.PROVIDER_UPSTREAM_ERROR)
     expect(ke.message).toContain('Field required')
     expect(ke.message).toContain('summary')
@@ -133,7 +128,7 @@ describe('JiraClient', () => {
   })
 
   test('listIssues pagination passes startAt and maxResults as query params', async () => {
-    stub(jsonResponse({ startAt: 50, maxResults: 100, total: 0, issues: [] }))
+    stub(Response.json({ startAt: 50, maxResults: 100, total: 0, issues: [] }))
     const client = makeClient()
     await client.listIssues({
       jql: 'project = ABC',
@@ -173,7 +168,17 @@ describe('decideJiraPagination', () => {
   const MAX = 100
   // Only issues.length matters to the decision; build a right-sized stub array.
   const issuesOfLength = (n: number): JiraIssue[] =>
-    Array.from({ length: n }, () => ({})) as unknown as JiraIssue[]
+    Array.from({ length: n }, (_, index) => ({
+      id: String(index),
+      key: `ABC-${index}`,
+      fields: {
+        summary: 'Pagination fixture',
+        status: { id: '1', name: 'To Do' },
+        issuetype: { id: '10000', name: 'Task' },
+        created: '2026-01-01T00:00:00.000Z',
+        updated: '2026-01-02T00:00:00.000Z',
+      },
+    }))
 
   test('isLast=false with a fresh cursor advances', () => {
     const d = decideJiraPagination(

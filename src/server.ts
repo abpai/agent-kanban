@@ -3,21 +3,21 @@ import { join } from 'node:path'
 import { Buffer } from 'node:buffer'
 import { timingSafeEqual } from 'node:crypto'
 import { handleRequest, type WebhookAcceptedEvent } from './api'
-import type { ServerWebSocket } from 'bun'
 import type { KanbanProvider } from './providers/types'
+import type { CliOutput } from './types'
 import { DEFAULT_POLLING_SYNC_INTERVAL_MS } from './sync-config'
 
 // CORS is origin hygiene for cross-origin browser clients, never an auth control.
 // When no allowed origin is configured we emit no CORS headers (same-origin only),
 // which covers the bundled UI (served from this server) and the vite dev proxy.
-function buildCorsHeaders(allowedOrigin?: string): Record<string, string> {
-  if (!allowedOrigin) return {}
-  return {
+function buildCorsHeaders(allowedOrigin?: string): Headers {
+  if (!allowedOrigin) return new Headers()
+  return new Headers({
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     Vary: 'Origin',
-  }
+  })
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -56,20 +56,29 @@ export interface StartedServer {
   stop(closeActiveConnections?: boolean): void
 }
 
-function applyCorsHeaders(response: Response, corsHeaders: Record<string, string>): void {
-  for (const [header, value] of Object.entries(corsHeaders)) {
+function applyCorsHeaders(response: Response, corsHeaders: Headers): void {
+  for (const [header, value] of corsHeaders.entries()) {
     response.headers.set(header, value)
   }
 }
 
-function jsonWithCors(body: unknown, corsHeaders: Record<string, string>, status = 200): Response {
+interface ReadinessOutput {
+  ok: boolean
+  data: { ready: boolean; provider: KanbanProvider['type']; backgroundSync: BackgroundSyncState }
+}
+
+function jsonWithCors(
+  body: CliOutput | ReadinessOutput,
+  corsHeaders: Headers,
+  status = 200,
+): Response {
   const response = Response.json(body, { status })
   applyCorsHeaders(response, corsHeaders)
   return response
 }
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
 }
 
 function nowIso(): string {
@@ -89,20 +98,8 @@ export function startServer(
   const corsHeaders = buildCorsHeaders(opts.allowedOrigin)
   const authToken = opts.authToken
 
-  // Per-instance so multiple servers (e.g. in tests) don't share or cross-broadcast
-  // to each other's sockets.
-  const wsClients = new Set<ServerWebSocket<unknown>>()
-  const broadcast = (data: unknown): void => {
-    const msg = JSON.stringify(data)
-    for (const ws of wsClients) {
-      // A dead/closing socket must not abort the fan-out to the rest.
-      try {
-        ws.send(msg)
-      } catch {
-        wsClients.delete(ws)
-      }
-    }
-  }
+  // Bun scopes topic subscriptions and broadcasts to each server instance.
+  const boardEventsTopic = 'board-events'
 
   const isAuthorized = (req: Request, url: URL, allowQueryToken: boolean): boolean => {
     if (!authToken) return true
@@ -129,9 +126,9 @@ export function startServer(
   }
 
   const backgroundSync: BackgroundSyncState = {
-    enabled: typeof syncCache === 'function',
+    enabled: syncCache !== undefined,
     inFlight: false,
-    warm: typeof syncCache !== 'function',
+    warm: syncCache === undefined,
     lastAttemptAt: null,
     lastSuccessAt: null,
     lastError: null,
@@ -182,10 +179,7 @@ export function startServer(
     idleTimeout: 255,
     websocket: {
       open(ws) {
-        wsClients.add(ws)
-      },
-      close(ws) {
-        wsClients.delete(ws)
+        ws.subscribe(boardEventsTopic)
       },
       message() {
         /* server-push only */
@@ -215,7 +209,7 @@ export function startServer(
       // WebSocket upgrade
       if (pathname === '/ws') {
         const upgraded = server.upgrade(req)
-        if (upgraded) return undefined as unknown as Response
+        if (upgraded) return
         return new Response('WebSocket upgrade failed', { status: 400 })
       }
 
@@ -223,7 +217,11 @@ export function startServer(
         return jsonWithCors(
           {
             ok: true,
-            data: { status: 'running', wsClients: wsClients.size, provider: provider.type },
+            data: {
+              status: 'running',
+              wsClients: server.pendingWebSockets,
+              provider: provider.type,
+            },
           },
           corsHeaders,
         )
@@ -253,7 +251,7 @@ export function startServer(
             data: {
               status: 'running',
               provider: provider.type,
-              wsClients: wsClients.size,
+              wsClients: server.pendingWebSockets,
               backgroundSync,
               providerSync,
             },
@@ -267,21 +265,17 @@ export function startServer(
         forwardedUrl.pathname = pathname
         const forwardedReq = new Request(forwardedUrl.toString(), req)
         const result = await handleRequest(provider, forwardedReq, {
-          ...(opts.onWebhookAccepted ? { onWebhookAccepted: opts.onWebhookAccepted } : {}),
+          onWebhookAccepted: opts.onWebhookAccepted,
         })
         applyCorsHeaders(result.response, corsHeaders)
-        if (result.mutated && result.response.ok) {
-          broadcast(result.event ?? { type: 'refresh' })
+        if (!closed && result.mutated && result.response.ok) {
+          server.publish(boardEventsTopic, JSON.stringify(result.event ?? { type: 'refresh' }))
         }
         return result.response
       }
 
       if (hasStatic) {
-        const assetPath = pathname === '/' ? '/index.html' : pathname
-        const filePath = join(distDir, assetPath.replace(/^\//, ''))
-        const file = Bun.file(filePath)
-        if (await file.exists()) return new Response(file)
-        return new Response(Bun.file(join(distDir, 'index.html')))
+        return serveDashboard(distDir, pathname)
       }
 
       return new Response('Dashboard not built. Run: cd ui && bun run build', {
@@ -301,8 +295,15 @@ export function startServer(
         clearTimeout(syncTimer)
         syncTimer = null
       }
-      wsClients.clear()
       void server.stop(closeActiveConnections)
     },
   }
+}
+
+async function serveDashboard(distDir: string, pathname: string): Promise<Response> {
+  const assetPath = pathname === '/' ? '/index.html' : pathname
+  const filePath = join(distDir, assetPath.replace(/^\//, ''))
+  const file = Bun.file(filePath)
+  if (await file.exists()) return new Response(file)
+  return new Response(Bun.file(join(distDir, 'index.html')))
 }

@@ -122,8 +122,11 @@ describe('upsertIssues description activity', () => {
     ])
 
     const row = db
-      .query('SELECT comment_count, title FROM linear_issues WHERE id = $id')
-      .get({ $id: 'issue-1' }) as { comment_count: number; title: string } | null
+      .query<
+        { comment_count: number; title: string },
+        { $id: string }
+      >('SELECT comment_count, title FROM linear_issues WHERE id = $id')
+      .get({ $id: 'issue-1' })
 
     expect(row?.title).toBe('Task renamed')
     expect(row?.comment_count).toBe(4)

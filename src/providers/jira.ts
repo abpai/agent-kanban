@@ -138,48 +138,57 @@ class SqliteJiraCache implements JiraCachePort {
   }
 
   async getDiscoveredAssignees(): Promise<string[]> {
-    return (
-      this.db
-        .query("SELECT DISTINCT assignee_name FROM jira_issues WHERE assignee_name != ''")
-        .all() as { assignee_name: string }[]
-    )
+    return this.db
+      .query<{ assignee_name: string }, []>(
+        "SELECT DISTINCT assignee_name FROM jira_issues WHERE assignee_name != ''",
+      )
+      .all()
       .map((r) => r.assignee_name)
       .sort()
   }
 
   async findPriorityName(wanted: string): Promise<string | null> {
     const row = this.db
-      .query('SELECT name FROM jira_priorities WHERE LOWER(name) = LOWER($name) LIMIT 1')
-      .get({ $name: wanted }) as { name: string } | null
+      .query<
+        { name: string },
+        Record<string, string | number>
+      >('SELECT name FROM jira_priorities WHERE LOWER(name) = LOWER($name) LIMIT 1')
+      .get({ $name: wanted })
     return row?.name ?? null
   }
 
   async getPriorityNames(): Promise<string[]> {
-    return (
-      this.db.query('SELECT name FROM jira_priorities ORDER BY name').all() as { name: string }[]
-    ).map((r) => r.name)
+    return this.db
+      .query<{ name: string }, []>('SELECT name FROM jira_priorities ORDER BY name')
+      .all()
+      .map((r) => r.name)
   }
 
   async findActiveAssigneeAccountId(displayName: string): Promise<string | null> {
     const row = this.db
-      .query(
-        'SELECT account_id FROM jira_users WHERE active = 1 AND LOWER(display_name) = LOWER($name) LIMIT 1',
-      )
-      .get({ $name: displayName }) as { account_id: string } | null
+      .query<
+        { account_id: string },
+        Record<string, string | number>
+      >('SELECT account_id FROM jira_users WHERE active = 1 AND LOWER(display_name) = LOWER($name) LIMIT 1')
+      .get({ $name: displayName })
     return row?.account_id ?? null
   }
 
   async findIssueTypeId(name: string): Promise<string | null> {
     const row = this.db
-      .query('SELECT id FROM jira_issue_types WHERE LOWER(name) = LOWER($name) LIMIT 1')
-      .get({ $name: name }) as { id: string } | null
+      .query<
+        { id: string },
+        Record<string, string | number>
+      >('SELECT id FROM jira_issue_types WHERE LOWER(name) = LOWER($name) LIMIT 1')
+      .get({ $name: name })
     return row?.id ?? null
   }
 
   async getIssueTypeNames(): Promise<string[]> {
-    return (
-      this.db.query('SELECT name FROM jira_issue_types ORDER BY name').all() as { name: string }[]
-    ).map((r) => r.name)
+    return this.db
+      .query<{ name: string }, []>('SELECT name FROM jira_issue_types ORDER BY name')
+      .all()
+      .map((r) => r.name)
   }
 
   async resolveIssueId(lookup: string): Promise<string | null> {

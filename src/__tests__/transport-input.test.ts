@@ -53,7 +53,7 @@ describe('parseBoundedInt', () => {
     try {
       parseBoundedInt(value, opts)
     } catch (err) {
-      expect((err as KanbanError).code).toBe(ErrorCode.INVALID_ARGUMENT)
+      expect(err).toMatchObject({ code: ErrorCode.INVALID_ARGUMENT })
     }
   })
 

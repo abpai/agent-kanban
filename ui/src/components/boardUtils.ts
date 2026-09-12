@@ -1,26 +1,43 @@
-import type { BoardView, Task } from '../types'
+import { selectDoneColumnIds, selectInProgressColumnIds } from '../../../src/column-roles'
+import type { BoardMetrics, BoardView, Task } from '../types'
 
-const COLUMN_COLORS: Record<string, string> = {
-  recurring: 'var(--col-recurring)',
-  backlog: 'var(--col-backlog)',
-  'in-progress': 'var(--col-in-progress)',
-  review: 'var(--col-review)',
-  done: 'var(--col-done)',
-}
+const COLUMN_COLORS = new Map([
+  ['recurring', 'var(--col-recurring)'],
+  ['backlog', 'var(--col-backlog)'],
+  ['in-progress', 'var(--col-in-progress)'],
+  ['review', 'var(--col-review)'],
+  ['done', 'var(--col-done)'],
+])
 
 export function filterVisibleTasks(
   tasks: Task[],
   filterAssignee: string | null,
   filterProject: string | null,
   filterActivityDays: number | null = null,
+  searchQuery = '',
 ): Task[] {
+  const query = searchQuery.trim().toLowerCase()
+  if (!filterAssignee && !filterProject && filterActivityDays === null && !query) return tasks
+  const cutoffMs = filterActivityDays === null ? null : Date.now() - filterActivityDays * 86_400_000
   return tasks.filter((task) => {
     if (filterAssignee && task.assignee !== filterAssignee) return false
     if (filterProject && task.project !== filterProject) return false
-    if (filterActivityDays !== null) {
+    if (
+      query &&
+      ![
+        task.id,
+        task.externalRef,
+        task.title,
+        task.description,
+        task.assignee,
+        task.project,
+        ...task.labels,
+      ].some((value) => value?.toLowerCase().includes(query))
+    )
+      return false
+    if (cutoffMs !== null) {
       const updatedAtMs = Date.parse(task.updated_at)
       if (!Number.isNaN(updatedAtMs)) {
-        const cutoffMs = Date.now() - filterActivityDays * 24 * 60 * 60 * 1000
         if (updatedAtMs < cutoffMs) return false
       }
     }
@@ -29,13 +46,61 @@ export function filterVisibleTasks(
 }
 
 export function getColumnColor(name: string): string {
-  return COLUMN_COLORS[name.toLowerCase()] ?? 'var(--text-secondary)'
+  return COLUMN_COLORS.get(name.toLowerCase()) ?? 'var(--text-secondary)'
 }
 
-export function findTask(board: BoardView, id: string): { task: Task; columnId: string } | null {
+const PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const
+
+/** Keep the bootstrap metrics coherent with optimistic and realtime board mutations. */
+export function reconcileMetricsWithBoard(
+  metrics: BoardMetrics | null,
+  board: BoardView,
+): BoardMetrics | null {
+  if (!metrics) return null
+  const tasks = board.columns.flatMap((column) => column.tasks)
+  const doneColumnIds = new Set(selectDoneColumnIds(board.columns))
+  const inProgressColumnIds = new Set(selectInProgressColumnIds(board.columns))
+  const completedTasks = board.columns
+    .filter((column) => doneColumnIds.has(column.id))
+    .reduce((count, column) => count + column.tasks.length, 0)
+  const inProgressCount = board.columns
+    .filter((column) => inProgressColumnIds.has(column.id))
+    .reduce((count, column) => count + column.tasks.length, 0)
+  const totalTasks = tasks.length
+  const cutoffMs = Date.now() - 7 * 86_400_000
+
+  return {
+    ...metrics,
+    tasksByColumn: board.columns.map((column) => ({
+      column_name: column.name,
+      count: column.tasks.length,
+    })),
+    tasksByPriority: PRIORITIES.map((priority) => ({
+      priority,
+      count: tasks.filter((task) => task.priority === priority).length,
+    })).filter(({ count }) => count > 0),
+    totalTasks,
+    completedTasks,
+    tasksCreatedThisWeek: tasks.filter((task) => {
+      const createdAt = Date.parse(
+        task.created_at + (/Z$|[+-]\d{2}:\d{2}$/.test(task.created_at) ? '' : 'Z'),
+      )
+      return !Number.isNaN(createdAt) && createdAt >= cutoffMs
+    }).length,
+    inProgressCount,
+    completionPercent: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+    assignees: [...new Set(tasks.map((task) => task.assignee).filter(Boolean))].sort(),
+    projects: [...new Set(tasks.map((task) => task.project).filter(Boolean))].sort(),
+  }
+}
+
+export function findTask(
+  board: BoardView,
+  id: string,
+): { task: Task; columnId: string; columnName: string } | null {
   for (const column of board.columns) {
     const task = column.tasks.find((t) => t.id === id)
-    if (task) return { task, columnId: column.id }
+    if (task) return { task, columnId: column.id, columnName: column.name }
   }
   return null
 }

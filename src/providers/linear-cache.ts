@@ -131,7 +131,7 @@ export function initLinearCacheSchema(db: Database): void {
   migrateLinearCacheSchema(db)
 }
 
-export interface LinearActivityRow {
+export type LinearActivityRow = {
   issue_id: string
   history_id: string
   item_field: string
@@ -162,27 +162,27 @@ export function getCachedLinearActivity(
   const limit = params.limit ?? 100
   if (params.issueId) {
     return db
-      .query(
+      .query<LinearActivityRow, Record<string, string | number>>(
         `SELECT issue_id, history_id, item_field, from_value, to_value, created_at
          FROM linear_activity
          WHERE issue_id = $issueId
          ORDER BY created_at DESC
          LIMIT $limit`,
       )
-      .all({ $issueId: params.issueId, $limit: limit }) as LinearActivityRow[]
+      .all({ $issueId: params.issueId, $limit: limit })
   }
   return db
-    .query(
+    .query<LinearActivityRow, Record<string, string | number>>(
       `SELECT issue_id, history_id, item_field, from_value, to_value, created_at
        FROM linear_activity
        ORDER BY created_at DESC
        LIMIT $limit`,
     )
-    .all({ $limit: limit }) as LinearActivityRow[]
+    .all({ $limit: limit })
 }
 
 function migrateLinearCacheSchema(db: Database): void {
-  const cols = db.query('PRAGMA table_info(linear_issues)').all() as { name: string }[]
+  const cols = db.query<{ name: string }, []>('PRAGMA table_info(linear_issues)').all()
   if (!cols.some((c) => c.name === 'labels')) {
     db.run("ALTER TABLE linear_issues ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
   }
@@ -203,9 +203,14 @@ function deleteMeta(db: Database, key: string): void {
 }
 
 function getMeta(db: Database, key: string): string | null {
-  const row = db.query('SELECT value FROM linear_sync_meta WHERE key = $key').get({
-    $key: key,
-  }) as { value: string } | null
+  const row = db
+    .query<
+      { value: string },
+      Record<string, string | number>
+    >('SELECT value FROM linear_sync_meta WHERE key = $key')
+    .get({
+      $key: key,
+    })
   return row?.value ?? null
 }
 
@@ -216,23 +221,17 @@ const META_KEYS = [
   'lastIssueUpdatedAt',
   'lastWebhookAt',
 ] as const
-type MetaKey = (typeof META_KEYS)[number]
-
 export function saveSyncMeta(db: Database, meta: Partial<LinearSyncMeta>): void {
   for (const key of META_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
-    const value = (meta as Record<MetaKey, unknown>)[key]
-    if (value === null) {
-      deleteMeta(db, key)
-      continue
-    }
     if (key === 'team') {
-      setMeta(db, key, JSON.stringify(value))
+      if (meta.team === null) deleteMeta(db, key)
+      else setMeta(db, key, JSON.stringify(meta.team))
       continue
     }
-    if (typeof value === 'string') {
-      setMeta(db, key, value)
-    }
+    const value = meta[key]
+    if (value === null) deleteMeta(db, key)
+    else if (value !== undefined) setMeta(db, key, value)
   }
 }
 
@@ -382,7 +381,7 @@ export function upsertIssues(
       created_at = excluded.created_at,
       updated_at = excluded.updated_at`,
   )
-  const existingDescStmt = db.prepare(
+  const existingDescStmt = db.prepare<{ description: string }, { $id: string }>(
     'SELECT description FROM linear_issues WHERE id = $id LIMIT 1',
   )
   const activityStmt = db.prepare(
@@ -394,7 +393,7 @@ export function upsertIssues(
     for (const issue of issues) {
       const nextDescription = issue.description ?? ''
       const hasCommentCount = issue.commentCount !== undefined && issue.commentCount !== null
-      const prior = existingDescStmt.get({ $id: issue.id }) as { description: string } | null
+      const prior = existingDescStmt.get({ $id: issue.id })
       if (prior && prior.description !== nextDescription) {
         activityStmt.run({
           $issue_id: issue.id,
@@ -445,7 +444,9 @@ export function deleteLinearIssue(db: Database, idOrIdentifier: string): void {
 
 export function pruneLinearIssues(db: Database, liveIssueIds: string[]): void {
   const keep = new Set(liveIssueIds)
-  const staleIssueIds = (db.query('SELECT id FROM linear_issues').all() as { id: string }[])
+  const staleIssueIds = db
+    .query<{ id: string }, []>('SELECT id FROM linear_issues')
+    .all()
     .map((row) => row.id)
     .filter((issueId) => !keep.has(issueId))
   if (staleIssueIds.length === 0) return
@@ -475,7 +476,7 @@ export function adjustLinearIssueCommentCount(
 }
 
 export function getCachedColumns(db: Database): LinearStateRow[] {
-  return db.query('SELECT * FROM linear_states ORDER BY position, name').all() as LinearStateRow[]
+  return db.query<LinearStateRow, []>('SELECT * FROM linear_states ORDER BY position, name').all()
 }
 
 type LinearIssueRow = LinearTaskRow
@@ -485,15 +486,14 @@ export function getCachedBoard(db: Database): BoardView {
   return {
     columns: columns.map((column) => ({
       ...column,
-      tasks: (
-        db
-          .query(
-            `SELECT * FROM linear_issues
+      tasks: db
+        .query<LinearIssueRow, Record<string, string | number>>(
+          `SELECT * FROM linear_issues
              WHERE state_id = $state_id
              ORDER BY updated_at DESC, title ASC`,
-          )
-          .all({ $state_id: column.id }) as LinearIssueRow[]
-      ).map(linearTaskFromRow),
+        )
+        .all({ $state_id: column.id })
+        .map(linearTaskFromRow),
     })),
   }
 }
@@ -501,34 +501,38 @@ export function getCachedBoard(db: Database): BoardView {
 export function getCachedTask(db: Database, lookup: string): Task | null {
   const normalized = lookup.startsWith('linear:') ? lookup.slice('linear:'.length) : lookup
   const row = db
-    .query(
+    .query<LinearIssueRow, Record<string, string | number>>(
       `SELECT * FROM linear_issues
        WHERE id = $lookup OR identifier = $lookup
        LIMIT 1`,
     )
-    .get({ $lookup: normalized }) as LinearIssueRow | null
+    .get({ $lookup: normalized })
   return row ? linearTaskFromRow(row) : null
 }
 
 export function getCachedTasks(db: Database): Task[] {
-  return (
-    db
-      .query('SELECT * FROM linear_issues ORDER BY updated_at DESC, title ASC')
-      .all() as LinearIssueRow[]
-  ).map(linearTaskFromRow)
+  return db
+    .query<LinearIssueRow, []>('SELECT * FROM linear_issues ORDER BY updated_at DESC, title ASC')
+    .all()
+    .map(linearTaskFromRow)
 }
 
 export function getCachedConfig(db: Database): BoardConfig {
-  const members = (
-    db
-      .query("SELECT name FROM linear_users WHERE active = 1 AND name != '' ORDER BY name")
-      .all() as { name: string }[]
-  ).map((row) => ({ name: row.name, role: 'human' as const }))
-  const projects = (
-    db.query("SELECT name FROM linear_projects WHERE name != '' ORDER BY name").all() as {
-      name: string
-    }[]
-  ).map((row) => row.name)
+  const members = db
+    .query<{ name: string }, []>(
+      "SELECT name FROM linear_users WHERE active = 1 AND name != '' ORDER BY name",
+    )
+    .all()
+    .map((row) => ({ name: row.name, role: 'human' as const }))
+  const projects = db
+    .query<
+      {
+        name: string
+      },
+      []
+    >("SELECT name FROM linear_projects WHERE name != '' ORDER BY name")
+    .all()
+    .map((row) => row.name)
   return {
     members,
     projects,

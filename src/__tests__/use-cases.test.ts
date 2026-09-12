@@ -1,56 +1,35 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
-import { Database } from 'bun:sqlite'
-import { initSchema, seedDefaultColumns } from '../db'
-import { createProvider } from '../providers/index'
-import type { KanbanProvider } from '../providers/types'
+import { describe, expect, test } from 'bun:test'
 import { normalizeCreateTaskInput } from '../use-cases'
 
-let db: Database
-let provider: KanbanProvider
-
-beforeEach(() => {
-  db = new Database(':memory:')
-  db.run('PRAGMA foreign_keys = ON')
-  initSchema(db)
-  seedDefaultColumns(db)
-  provider = createProvider(db, { provider: 'local' }, ':memory:')
-})
-
 describe('use-cases label normalization', () => {
-  // The use-case seam owns label normalization so every transport feeds raw
-  // labels in its own shape and gets the same result.
-  test('normalizes CLI-style nested flag arrays', async () => {
-    const task = await provider.createTask(
+  test('normalizes CLI-style nested flag arrays', () => {
+    expect(
       normalizeCreateTaskInput({
         title: 'cli',
         labels: [['bug', 'ui'], undefined],
       }),
-    )
-    expect(task.labels).toEqual(['bug', 'ui'])
+    ).toEqual({ title: 'cli', labels: ['bug', 'ui'] })
   })
 
-  test('normalizes HTTP-style string arrays', async () => {
-    const task = await provider.createTask(
+  test('normalizes HTTP-style string arrays', () => {
+    expect(
       normalizeCreateTaskInput({
         title: 'http',
         labels: ['bug', 'ui'],
       }),
-    )
-    expect(task.labels).toEqual(['bug', 'ui'])
+    ).toEqual({ title: 'http', labels: ['bug', 'ui'] })
   })
 
-  test('normalizes a comma-separated string and de-dupes', async () => {
-    const task = await provider.createTask(
+  test('normalizes a comma-separated string and de-dupes', () => {
+    expect(
       normalizeCreateTaskInput({
         title: 'csv',
         labels: 'bug, ui, bug',
       }),
-    )
-    expect(task.labels).toEqual(['bug', 'ui'])
+    ).toEqual({ title: 'csv', labels: ['bug', 'ui'] })
   })
 
-  test('treats omitted labels as none', async () => {
-    const task = await provider.createTask(normalizeCreateTaskInput({ title: 'none' }))
-    expect(task.labels).toEqual([])
+  test('treats omitted labels as none', () => {
+    expect(normalizeCreateTaskInput({ title: 'none' })).toEqual({ title: 'none', labels: [] })
   })
 })

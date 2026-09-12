@@ -6,6 +6,7 @@ import {
   makeTempId,
   moveTaskInBoard,
   patchTask,
+  reconcileMetricsWithBoard,
   removeTaskById,
   replaceTask,
   upsertTaskInColumn,
@@ -21,10 +22,6 @@ import type {
 } from '../types'
 import type { AppState } from '../store'
 import { defaultCapabilities } from './capabilities'
-
-function getErrorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback
-}
 
 interface PendingConflict {
   taskId: string
@@ -114,7 +111,7 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
         error: null,
       })
     } catch (err) {
-      set({ error: getErrorMessage(err, 'Failed to fetch board') })
+      set({ error: err instanceof Error ? err.message : 'Failed to fetch board' })
     }
   },
 
@@ -155,13 +152,21 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
       source_updated_at: null,
     }
     const snapshot = board
-    set({ board: insertTask(board, optimistic, columnName) })
+    const snapshotMetrics = get().metrics
+    const optimisticBoard = insertTask(board, optimistic, columnName)
+    set({
+      board: optimisticBoard,
+      metrics: reconcileMetricsWithBoard(snapshotMetrics, optimisticBoard),
+    })
     try {
       const created = await api.createTask(data)
       const current = get().board
-      if (current) set({ board: replaceTask(current, tempId, created) })
+      if (current) {
+        const next = replaceTask(current, tempId, created)
+        set({ board: next, metrics: reconcileMetricsWithBoard(get().metrics, next) })
+      }
     } catch (err) {
-      set({ board: snapshot })
+      set({ board: snapshot, metrics: snapshotMetrics })
       throw err
     }
   },
@@ -169,15 +174,22 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
   updateTask: async (id, data, opts) => {
     const board = get().board
     const snapshot = board
-    if (board) set({ board: patchTask(board, id, data) })
+    const snapshotMetrics = get().metrics
+    if (board) {
+      const next = patchTask(board, id, data)
+      set({ board: next, metrics: reconcileMetricsWithBoard(snapshotMetrics, next) })
+    }
     const payload: Parameters<typeof api.updateTask>[1] = { ...data }
     if (opts?.expectedVersion) payload.expectedVersion = opts.expectedVersion
     try {
       const updated = await api.updateTask(id, payload)
       const current = get().board
-      if (current) set({ board: replaceTask(current, id, updated) })
+      if (current) {
+        const next = replaceTask(current, id, updated)
+        set({ board: next, metrics: reconcileMetricsWithBoard(get().metrics, next) })
+      }
     } catch (err) {
-      if (snapshot) set({ board: snapshot })
+      if (snapshot) set({ board: snapshot, metrics: snapshotMetrics })
       if (err instanceof ApiError && err.code === 'CONFLICT') {
         set({ pendingConflict: { taskId: id, attemptedUpdates: data, message: err.message } })
         return
@@ -189,13 +201,20 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
   moveTask: async (id, column) => {
     const board = get().board
     const snapshot = board
-    if (board) set({ board: moveTaskInBoard(board, id, column) })
+    const snapshotMetrics = get().metrics
+    if (board) {
+      const next = moveTaskInBoard(board, id, column)
+      set({ board: next, metrics: reconcileMetricsWithBoard(snapshotMetrics, next) })
+    }
     try {
       const moved = await api.moveTask(id, column)
       const current = get().board
-      if (current) set({ board: replaceTask(current, id, moved) })
+      if (current) {
+        const next = replaceTask(current, id, moved)
+        set({ board: next, metrics: reconcileMetricsWithBoard(get().metrics, next) })
+      }
     } catch (err) {
-      if (snapshot) set({ board: snapshot })
+      if (snapshot) set({ board: snapshot, metrics: snapshotMetrics })
       throw err
     }
   },
@@ -203,12 +222,24 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
   removeTask: async (id) => {
     const board = get().board
     const snapshot = board
+    const snapshotMetrics = get().metrics
     const found = board ? findTask(board, id) : null
-    if (board) set({ board: removeTaskById(board, id), selectedTaskId: null })
+    if (board) {
+      const next = removeTaskById(board, id)
+      set({
+        board: next,
+        metrics: reconcileMetricsWithBoard(snapshotMetrics, next),
+        selectedTaskId: null,
+        error: null,
+      })
+    }
     try {
       await api.deleteTask(id)
     } catch (err) {
-      if (snapshot) set({ board: snapshot, selectedTaskId: found ? id : null })
+      if (snapshot) {
+        set({ board: snapshot, metrics: snapshotMetrics, selectedTaskId: found ? id : null })
+      }
+      set({ error: err instanceof Error ? err.message : 'Failed to delete task' })
       throw err
     }
   },
@@ -216,8 +247,8 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
   resolveConflictKeepLocal: async () => {
     const conflict = get().pendingConflict
     if (!conflict) return
-    set({ pendingConflict: null })
     await api.updateTask(conflict.taskId, conflict.attemptedUpdates)
+    set({ pendingConflict: null })
     await get().fetchAll()
   },
 
@@ -234,12 +265,15 @@ export const createBoardSlice: StateCreator<AppState, [], [], BoardSlice> = (set
     // or a newly-added column); signal the caller to do a full refresh so the
     // update is not silently dropped.
     if (!next) return false
-    set({ board: next })
+    set({ board: next, metrics: reconcileMetricsWithBoard(get().metrics, next) })
     return true
   },
 
   applyRealtimeDelete: (id) => {
     const current = get().board
-    if (current) set({ board: removeTaskById(current, id) })
+    if (current) {
+      const next = removeTaskById(current, id)
+      set({ board: next, metrics: reconcileMetricsWithBoard(get().metrics, next) })
+    }
   },
 })

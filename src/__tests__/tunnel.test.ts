@@ -5,7 +5,7 @@ import { startCloudflareTunnel } from '../tunnel'
 // binary is needed; stdout/stderr from a tiny shell script drive URL detection,
 // and the injected log/warn/onUrl sinks let us assert behaviour deterministically.
 
-function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+function deferred<T>() {
   let resolve!: (v: T) => void
   const promise = new Promise<T>((r) => {
     resolve = r

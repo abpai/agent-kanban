@@ -19,11 +19,11 @@ interface CommentBody {
   body?: string
 }
 
-function json(data: unknown, status = 200): Response {
+function json(data: CliOutput, status = 200): Response {
   return Response.json(data, { status })
 }
 
-function requireArgument(value: unknown, field: string): void {
+function requireArgument(value: string | undefined, field: string): void {
   if (!value) {
     throw new KanbanError(ErrorCode.MISSING_ARGUMENT, `${field} is required`)
   }
@@ -34,6 +34,7 @@ function requireArgument(value: unknown, field: string): void {
 // envelope as every other validation failure instead of escaping as a raw 500.
 async function parseJsonBody<T>(req: Request): Promise<T> {
   try {
+    // oxlint-disable-next-line anti-slop/require-safety-comment-for-type-assertion -- Retains the existing HTTP trust boundary; complete request schemas are tracked in docs/todos/http-input-validation.md.
     return (await req.json()) as T
   } catch {
     throw new KanbanError(ErrorCode.INVALID_REQUEST_BODY, 'Request body must be valid JSON')
@@ -79,14 +80,14 @@ function toResponse(result: CliOutput): Response {
 // Map any thrown error to the `{ ok:false, error }` envelope with the right
 // status. Shared by wrapHandler (per-handler) and handleRequest's top-level
 // guard so the two error paths can never drift apart.
-function errorResponse(err: unknown): Response {
-  if (err instanceof KanbanError) {
+function errorResponse(cause: unknown): Response {
+  if (cause instanceof KanbanError) {
     return json(
-      { ok: false, error: { code: err.code, message: err.message } },
-      statusForCode(err.code),
+      { ok: false, error: { code: cause.code, message: cause.message } },
+      statusForCode(cause.code),
     )
   }
-  const msg = err instanceof Error ? err.message : String(err)
+  const msg = cause instanceof Error ? cause.message : String(cause)
   return json({ ok: false, error: { code: 'INTERNAL_ERROR', message: msg } }, 500)
 }
 
@@ -191,6 +192,55 @@ async function dispatchApiRequest(
     return readResult(() => provider.listColumns())
   }
 
+  const taskResult = await dispatchTaskRequest(provider, req, url)
+  if (taskResult) return taskResult
+  const commentResult = await dispatchCommentRequest(provider, req, path)
+  if (commentResult) return commentResult
+
+  if (path === '/api/activity' && method === 'GET') {
+    return readResult(() => {
+      const taskId = url.searchParams.get('taskId') ?? undefined
+      const limit = parsePositiveInt(url.searchParams.get('limit'))
+      return provider.getActivity(limit, taskId)
+    })
+  }
+
+  if (path === '/api/metrics' && method === 'GET') {
+    return readResult(() => provider.getMetrics())
+  }
+
+  if (path === '/api/config' && method === 'GET') {
+    return readResult(() => provider.getConfig())
+  }
+
+  if (path === '/api/config' && method === 'PATCH') {
+    return mutationResult(async () => {
+      const body = await parseJsonBody<Partial<BoardConfig>>(req)
+      return provider.patchConfig(body)
+    })
+  }
+
+  const webhookMatch = path.match(/^\/api\/webhooks\/([^/]+)$/)
+  if (webhookMatch && method === 'POST') {
+    return dispatchWebhook(provider, req, decodePathParam(webhookMatch[1]!), opts)
+  }
+
+  return {
+    response: json(
+      { ok: false, error: { code: ErrorCode.NOT_FOUND, message: `No route: ${method} ${path}` } },
+      404,
+    ),
+    mutated: false,
+  }
+}
+
+async function dispatchTaskRequest(
+  provider: KanbanProvider,
+  req: Request,
+  url: URL,
+): Promise<ApiResult | undefined> {
+  const path = url.pathname
+  const method = req.method
   if (path === '/api/tasks' && method === 'GET') {
     return readResult(() => {
       const column = url.searchParams.get('column') ?? undefined
@@ -255,6 +305,15 @@ async function dispatchApiRequest(
     }, upsertEvent)
   }
 
+  return undefined
+}
+
+async function dispatchCommentRequest(
+  provider: KanbanProvider,
+  req: Request,
+  path: string,
+): Promise<ApiResult | undefined> {
+  const method = req.method
   const commentsMatch = path.match(/^\/api\/tasks\/([^/]+)\/comments$/)
   if (commentsMatch) {
     const id = decodePathParam(commentsMatch[1]!)
@@ -285,104 +344,78 @@ async function dispatchApiRequest(
     }
   }
 
-  if (path === '/api/activity' && method === 'GET') {
-    return readResult(() => {
-      const taskId = url.searchParams.get('taskId') ?? undefined
-      const limit = parsePositiveInt(url.searchParams.get('limit'))
-      return provider.getActivity(limit, taskId)
-    })
-  }
+  return undefined
+}
 
-  if (path === '/api/metrics' && method === 'GET') {
-    return readResult(() => provider.getMetrics())
-  }
-
-  if (path === '/api/config' && method === 'GET') {
-    return readResult(() => provider.getConfig())
-  }
-
-  if (path === '/api/config' && method === 'PATCH') {
-    return mutationResult(async () => {
-      const body = await parseJsonBody<Partial<BoardConfig>>(req)
-      return provider.patchConfig(body)
-    })
-  }
-
-  const webhookMatch = path.match(/^\/api\/webhooks\/([^/]+)$/)
-  if (webhookMatch && method === 'POST') {
-    const target = decodePathParam(webhookMatch[1]!)
-    if (target !== provider.type) {
-      return {
-        response: json(
-          {
-            ok: false,
-            error: {
-              code: 'UNSUPPORTED_OPERATION',
-              message: `Webhook target '${target}' does not match active provider '${provider.type}'`,
-            },
-          },
-          400,
-        ),
-        mutated: false,
-      }
-    }
-    if (!provider.handleWebhook) {
-      return {
-        response: json(
-          {
-            ok: false,
-            error: {
-              code: 'UNSUPPORTED_OPERATION',
-              message: `Provider '${provider.type}' does not accept webhooks`,
-            },
-          },
-          400,
-        ),
-        mutated: false,
-      }
-    }
-    const rawBody = await req.text()
-    const headers: Record<string, string> = {}
-    req.headers.forEach((value, key) => {
-      headers[key] = value
-    })
-    // A throwing provider.handleWebhook is contained by the top-level guard in
-    // handleRequest, which envelopes it as a 500 (or KanbanError status) and
-    // leaves mutated:false.
-    const result = await provider.handleWebhook({ headers, rawBody })
-    if (result.unauthorized) {
-      return {
-        response: json(
-          {
-            ok: false,
-            error: { code: 'PROVIDER_AUTH_FAILED', message: result.message ?? 'Unauthorized' },
-          },
-          401,
-        ),
-        mutated: false,
-      }
-    }
-    if (result.handled && opts.onWebhookAccepted) {
-      try {
-        opts.onWebhookAccepted({ provider: target, rawBody, headers })
-      } catch {
-        // A consumer hook cannot make an accepted provider webhook fail.
-      }
-    }
+async function dispatchWebhook(
+  provider: KanbanProvider,
+  req: Request,
+  target: string,
+  opts: DispatchApiRequestOptions,
+): Promise<ApiResult> {
+  if (target !== provider.type) {
     return {
-      response: json({
-        ok: true,
-        data: { handled: result.handled, message: result.message ?? null },
-      }),
-      mutated: result.handled,
+      response: json(
+        {
+          ok: false,
+          error: {
+            code: 'UNSUPPORTED_OPERATION',
+            message: `Webhook target '${target}' does not match active provider '${provider.type}'`,
+          },
+        },
+        400,
+      ),
+      mutated: false,
     }
   }
-
+  if (!provider.handleWebhook) {
+    return {
+      response: json(
+        {
+          ok: false,
+          error: {
+            code: 'UNSUPPORTED_OPERATION',
+            message: `Provider '${provider.type}' does not accept webhooks`,
+          },
+        },
+        400,
+      ),
+      mutated: false,
+    }
+  }
+  const rawBody = await req.text()
+  const headers: Record<string, string> = {}
+  req.headers.forEach((value, key) => {
+    headers[key] = value
+  })
+  // A throwing provider.handleWebhook is contained by the top-level guard in
+  // handleRequest, which envelopes it as a 500 (or KanbanError status) and
+  // leaves mutated:false.
+  const result = await provider.handleWebhook({ headers, rawBody })
+  if (result.unauthorized) {
+    return {
+      response: json(
+        {
+          ok: false,
+          error: { code: 'PROVIDER_AUTH_FAILED', message: result.message ?? 'Unauthorized' },
+        },
+        401,
+      ),
+      mutated: false,
+    }
+  }
+  if (result.handled && opts.onWebhookAccepted) {
+    try {
+      opts.onWebhookAccepted({ provider: target, rawBody, headers })
+    } catch {
+      // A consumer hook cannot make an accepted provider webhook fail.
+    }
+  }
   return {
-    response: json(
-      { ok: false, error: { code: ErrorCode.NOT_FOUND, message: `No route: ${method} ${path}` } },
-      404,
-    ),
-    mutated: false,
+    response: json({
+      ok: true,
+      data: { handled: result.handled, message: result.message ?? null },
+    }),
+    mutated: result.handled,
   }
 }

@@ -2,10 +2,21 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["src/**/*.test.ts", "src/__tests__/**/*.ts", "scripts/**/*.ts"],
-      "project": ["src/**/*.ts", "scripts/**/*.ts"]
+      "entry": [
+        "src/mcp/index.ts",
+        "src/**/*.test.ts",
+        "src/__tests__/**/*.ts",
+        "scripts/**/*.ts",
+        "tools/**/*.test.ts",
+        "tools/oxlint/anti-slop/fixtures.config.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "scripts/**/*.ts",
+        "tools/**/*.ts",
+        "!tools/oxlint/anti-slop/__fixtures__/**"
+      ]
     },
     "ui": {}
-  },
-  "ignoreUnresolved": ["bun-types"]
+  }
 }

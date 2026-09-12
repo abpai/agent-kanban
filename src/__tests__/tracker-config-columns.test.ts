@@ -18,6 +18,6 @@ describe('trackerConfigFromEnv default columns', () => {
   test('leaves default columns unset when the variable is absent', () => {
     const config = trackerConfigFromEnv({})
     expect(config).toMatchObject({ provider: 'local' })
-    expect((config as { defaultColumns?: string[] }).defaultColumns).toBeUndefined()
+    expect(config).not.toHaveProperty('defaultColumns')
   })
 })

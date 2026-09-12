@@ -25,20 +25,16 @@ export function listActivity(
   db: Database,
   opts: { limit?: number; taskId?: string } = {},
 ): ActivityEntry[] {
-  const conditions: string[] = []
-  const params: Record<string, string | number> = {}
-
-  if (opts.taskId) {
-    conditions.push('task_id = $task_id')
-    params['$task_id'] = opts.taskId
-  }
-
-  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  const where = opts.taskId ? 'WHERE task_id = ?' : ''
+  const params = opts.taskId ? [opts.taskId] : []
   const limit = opts.limit ? `LIMIT ${opts.limit}` : 'LIMIT 50'
 
   return db
-    .query(`SELECT * FROM activity_log ${where} ORDER BY timestamp DESC, rowid DESC ${limit}`)
-    .all(params as Record<string, string>) as ActivityEntry[]
+    .query<
+      ActivityEntry,
+      string[]
+    >(`SELECT * FROM activity_log ${where} ORDER BY timestamp DESC, rowid DESC ${limit}`)
+    .all(...params)
 }
 
 export function enterColumn(db: Database, taskId: string, columnId: string): void {

@@ -1,3 +1,4 @@
+import { assertKanbanError } from './helpers/errors'
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -24,7 +25,7 @@ const ENV_KEYS = [
 const tempRoot = mkdtempSync(join(tmpdir(), 'jira-wiring-'))
 const dbs: Database[] = []
 
-function makeDb(): { db: Database; dbPath: string } {
+function makeDb() {
   const dir = mkdtempSync(join(tempRoot, 'case-'))
   const dbPath = join(dir, 'board.db')
   const db = new Database(dbPath)
@@ -88,9 +89,10 @@ describe('jira-wiring', () => {
     try {
       trackerConfigFromEnv()
     } catch (err) {
-      expect((err as KanbanError).code).toBe(ErrorCode.PROVIDER_NOT_CONFIGURED)
-      expect((err as Error).message).toContain('JIRA_API_TOKEN')
-      expect((err as Error).message).toContain('KANBAN_PROVIDER=jira')
+      assertKanbanError(err)
+      expect(err.code).toBe(ErrorCode.PROVIDER_NOT_CONFIGURED)
+      expect(err.message).toContain('JIRA_API_TOKEN')
+      expect(err.message).toContain('KANBAN_PROVIDER=jira')
     }
   })
 
@@ -106,8 +108,9 @@ describe('jira-wiring', () => {
     try {
       trackerConfigFromEnv()
     } catch (err) {
-      msg = (err as Error).message
-      code = (err as KanbanError).code
+      assertKanbanError(err)
+      msg = err.message
+      code = err.code
     }
     expect(code).toBe(ErrorCode.PROVIDER_NOT_CONFIGURED)
     expect(msg).toContain('JIRA_EMAIL')
@@ -144,7 +147,7 @@ describe('jira-wiring', () => {
     process.env['JIRA_BOARD_ID'] = '  42  '
     const config = trackerConfigFromEnv()
     expect(config.provider).toBe('jira')
-    expect((config as { boardId?: number }).boardId).toBe(42)
+    expect(config).toHaveProperty('boardId', 42)
   })
 
   test('JIRA_BOARD_ID rejects malformed values as INVALID_CONFIG (no silent wrong board)', () => {
@@ -157,7 +160,8 @@ describe('jira-wiring', () => {
       try {
         trackerConfigFromEnv()
       } catch (err) {
-        code = (err as KanbanError).code
+        assertKanbanError(err)
+        code = err.code
       }
       expect(code).toBe(ErrorCode.INVALID_CONFIG)
     }
@@ -182,12 +186,10 @@ describe('jira-wiring', () => {
   test('kanban column add under KANBAN_PROVIDER=jira exits with UNSUPPORTED_OPERATION', async () => {
     const { dbPath } = makeDb()
     setJiraRequiredEnv()
-    const result = await run(['--db', dbPath, 'column', 'add', 'NewColumn']).catch(
-      (err: unknown) => ({ error: err as KanbanError }),
+    const err = await run(['--db', dbPath, 'column', 'add', 'NewColumn']).catch(
+      (cause: unknown) => cause,
     )
-    expect('error' in result).toBe(true)
-    const err = (result as { error: KanbanError }).error
-    expect(err).toBeInstanceOf(KanbanError)
+    assertKanbanError(err)
     expect(err.code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
     expect(err.message).toContain('Column commands')
   })
@@ -195,12 +197,10 @@ describe('jira-wiring', () => {
   test('kanban bulk move-all under KANBAN_PROVIDER=jira exits with UNSUPPORTED_OPERATION', async () => {
     const { dbPath } = makeDb()
     setJiraRequiredEnv()
-    const result = await run(['--db', dbPath, 'bulk', 'move-all', 'a', 'b']).catch(
-      (err: unknown) => ({ error: err as KanbanError }),
+    const err = await run(['--db', dbPath, 'bulk', 'move-all', 'a', 'b']).catch(
+      (cause: unknown) => cause,
     )
-    expect('error' in result).toBe(true)
-    const err = (result as { error: KanbanError }).error
-    expect(err).toBeInstanceOf(KanbanError)
+    assertKanbanError(err)
     expect(err.code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
     expect(err.message).toContain('Bulk commands')
   })
@@ -208,12 +208,8 @@ describe('jira-wiring', () => {
   test('kanban board init under KANBAN_PROVIDER=jira keeps the SQLite remote local-only error', async () => {
     const { dbPath } = makeDb()
     setJiraRequiredEnv()
-    const result = await run(['--db', dbPath, 'board', 'init']).catch((err: unknown) => ({
-      error: err as KanbanError,
-    }))
-    expect('error' in result).toBe(true)
-    const err = (result as { error: KanbanError }).error
-    expect(err).toBeInstanceOf(KanbanError)
+    const err = await run(['--db', dbPath, 'board', 'init']).catch((cause: unknown) => cause)
+    assertKanbanError(err)
     expect(err.code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
     expect(err.message).toContain('Board initialization is only available in local mode')
     expect(err.message).not.toContain('KANBAN_STORAGE=postgres')
@@ -222,12 +218,8 @@ describe('jira-wiring', () => {
   test('kanban board reset under KANBAN_PROVIDER=jira keeps the SQLite remote local-only error', async () => {
     const { dbPath } = makeDb()
     setJiraRequiredEnv()
-    const result = await run(['--db', dbPath, 'board', 'reset']).catch((err: unknown) => ({
-      error: err as KanbanError,
-    }))
-    expect('error' in result).toBe(true)
-    const err = (result as { error: KanbanError }).error
-    expect(err).toBeInstanceOf(KanbanError)
+    const err = await run(['--db', dbPath, 'board', 'reset']).catch((cause: unknown) => cause)
+    assertKanbanError(err)
     expect(err.code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
     expect(err.message).toContain('Board reset is only available in local mode')
     expect(err.message).not.toContain('KANBAN_STORAGE=postgres')
@@ -236,12 +228,8 @@ describe('jira-wiring', () => {
   test('kanban unknown board action under KANBAN_PROVIDER=jira remains an unknown command', async () => {
     const { dbPath } = makeDb()
     setJiraRequiredEnv()
-    const result = await run(['--db', dbPath, 'board', 'nope']).catch((err: unknown) => ({
-      error: err as KanbanError,
-    }))
-    expect('error' in result).toBe(true)
-    const err = (result as { error: KanbanError }).error
-    expect(err).toBeInstanceOf(KanbanError)
+    const err = await run(['--db', dbPath, 'board', 'nope']).catch((cause: unknown) => cause)
+    assertKanbanError(err)
     expect(err.code).toBe(ErrorCode.UNKNOWN_COMMAND)
     expect(err.message).toContain("Unknown board command 'nope'")
   })
@@ -249,7 +237,7 @@ describe('jira-wiring', () => {
   test('kanban config set-member under KANBAN_PROVIDER=jira exits with UNSUPPORTED_OPERATION', async () => {
     const { dbPath } = makeDb()
     setJiraRequiredEnv()
-    const result = await run([
+    const err = await run([
       '--db',
       dbPath,
       'config',
@@ -257,10 +245,8 @@ describe('jira-wiring', () => {
       'alice',
       '--role',
       'human',
-    ]).catch((err: unknown) => ({ error: err as KanbanError }))
-    expect('error' in result).toBe(true)
-    const err = (result as { error: KanbanError }).error
-    expect(err).toBeInstanceOf(KanbanError)
+    ]).catch((cause: unknown) => cause)
+    assertKanbanError(err)
     expect(err.code).toBe(ErrorCode.UNSUPPORTED_OPERATION)
     expect(err.message).toContain('Config mutation')
   })

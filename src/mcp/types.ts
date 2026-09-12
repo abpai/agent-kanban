@@ -1,5 +1,4 @@
-import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js'
-import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation'
+import type { JsonSchemaType, ToolAnnotations } from '@modelcontextprotocol/server'
 import type { Task, TaskComment } from '../types'
 import type { TrackerMcpError, TrackerMcpErrorCode } from './errors'
 
@@ -48,6 +47,7 @@ export interface TrackerMcpHooks<TScope> {
     tool: string
     ticketId?: string
     durationMs: number
+    // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Hook metadata is an extensible public contract supplied by custom tool implementations.
     result?: Record<string, unknown>
   }): Promise<void> | void
 
@@ -61,17 +61,20 @@ export interface TrackerMcpHooks<TScope> {
   }): Promise<void> | void
 }
 
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Custom tool argument keys and values are defined by each registered JSON Schema.
 interface TrackerMcpToolHandlerContext<TScope, TArgs = Record<string, unknown>> {
   scope: TScope
   args: TArgs
   request?: Request
 }
 
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Custom tool argument keys and values are defined by each registered JSON Schema.
 export interface TrackerMcpTool<TScope, TArgs = Record<string, unknown>, TResult = unknown> {
   name: string
   description?: string
   inputSchema: JsonSchemaType
   annotations?: ToolAnnotations
+  /** Validates the raw handler result; discovery wraps it under structuredContent.result. */
   outputSchema?: JsonSchemaType
   handler(input: TrackerMcpToolHandlerContext<TScope, TArgs>): Promise<TResult> | TResult
 }

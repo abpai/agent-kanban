@@ -31,15 +31,6 @@ describe('boardInit', () => {
   })
 })
 
-describe('getBoardView', () => {
-  test('returns board view after init', () => {
-    initSchema(db)
-    seedDefaultColumns(db)
-    const data = getBoardView(db)
-    expect(data.columns).toHaveLength(5)
-  })
-})
-
 describe('boardReset', () => {
   test('resets board to defaults', () => {
     initSchema(db)

@@ -1,5 +1,5 @@
 # ── Builder ──────────────────────────────────────────────
-FROM oven/bun:1 AS builder
+FROM oven/bun:1.4.2 AS builder
 WORKDIR /app
 
 # Install root deps
@@ -15,7 +15,7 @@ COPY tsconfig.json ./
 RUN cd ui && bun run build
 
 # ── Runtime ──────────────────────────────────────────────
-FROM oven/bun:1-slim
+FROM oven/bun:1.4.2-slim
 WORKDIR /app
 
 COPY package.json bun.lock ./

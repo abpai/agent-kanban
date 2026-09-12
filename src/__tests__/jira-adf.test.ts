@@ -1,32 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import {
-  adfToPlainText,
-  plainTextToAdf,
-  type AdfBulletListNode,
-  type AdfCodeBlockNode,
-  type AdfDocument,
-  type AdfExpandNode,
-  type AdfInlineNode,
-  type AdfParagraphNode,
-} from '../providers/jira-adf'
-
-function firstParagraphContent(doc: AdfDocument): AdfInlineNode[] {
-  const paragraph = doc.content[0] as AdfParagraphNode
-  expect(paragraph.type).toBe('paragraph')
-  return paragraph.content ?? []
-}
-
-function firstCodeBlock(doc: AdfDocument): AdfCodeBlockNode {
-  const code = doc.content[0] as AdfCodeBlockNode
-  expect(code.type).toBe('codeBlock')
-  return code
-}
-
-function firstBulletList(doc: AdfDocument): AdfBulletListNode {
-  const list = doc.content[0] as AdfBulletListNode
-  expect(list.type).toBe('bulletList')
-  return list
-}
+import { adfToPlainText, plainTextToAdf, type AdfDocument } from '../providers/jira-adf'
 
 describe('plainTextToAdf / adfToPlainText', () => {
   test('empty doc round-trip', () => {
@@ -61,9 +34,9 @@ describe('plainTextToAdf / adfToPlainText', () => {
     const input = '- one\n* two\n- three'
     const doc = plainTextToAdf(input)
     expect(doc.content).toHaveLength(1)
-    const list = doc.content[0] as { type: string; content: unknown[] }
-    expect(list.type).toBe('bulletList')
-    expect(list.content).toHaveLength(3)
+    const list = doc.content[0]
+    expect(list?.type).toBe('bulletList')
+    expect(list?.content).toHaveLength(3)
     // Output always uses `- `.
     expect(adfToPlainText(doc)).toBe('- one\n- two\n- three')
   })
@@ -71,50 +44,37 @@ describe('plainTextToAdf / adfToPlainText', () => {
   test('ordered list round-trip starting at 1', () => {
     const input = '1. first\n2. second\n3. third'
     const doc = plainTextToAdf(input)
-    const list = doc.content[0] as {
-      type: string
-      attrs?: { order?: number }
-      content: unknown[]
-    }
-    expect(list.type).toBe('orderedList')
-    expect(list.attrs).toBeUndefined()
-    expect(list.content).toHaveLength(3)
+    const list = doc.content[0]
+    expect(list?.type).toBe('orderedList')
+    expect(list?.attrs).toBeUndefined()
+    expect(list?.content).toHaveLength(3)
     expect(adfToPlainText(doc)).toBe(input)
   })
 
   test('ordered list preserves non-default attrs.order', () => {
     const input = '5. fifth\n6. sixth'
     const doc = plainTextToAdf(input)
-    const list = doc.content[0] as {
-      type: string
-      attrs?: { order?: number }
-    }
-    expect(list.type).toBe('orderedList')
-    expect(list.attrs?.order).toBe(5)
+    const list = doc.content[0]
+    expect(list?.type).toBe('orderedList')
+    expect(list).toHaveProperty('attrs.order', 5)
     expect(adfToPlainText(doc)).toBe(input)
   })
 
   test('fenced code block round-trip without language', () => {
     const input = '```\nconst x = 1\nconst y = 2\n```'
     const doc = plainTextToAdf(input)
-    const code = doc.content[0] as {
-      type: string
-      attrs?: { language?: string }
-    }
-    expect(code.type).toBe('codeBlock')
-    expect(code.attrs).toBeUndefined()
+    const code = doc.content[0]
+    expect(code?.type).toBe('codeBlock')
+    expect(code?.attrs).toBeUndefined()
     expect(adfToPlainText(doc)).toBe(input)
   })
 
   test('fenced code block round-trip with language tag', () => {
     const input = '```ts\nconst x: number = 1\n```'
     const doc = plainTextToAdf(input)
-    const code = doc.content[0] as {
-      type: string
-      attrs?: { language?: string }
-    }
-    expect(code.type).toBe('codeBlock')
-    expect(code.attrs?.language).toBe('ts')
+    const code = doc.content[0]
+    expect(code?.type).toBe('codeBlock')
+    expect(code).toHaveProperty('attrs.language', 'ts')
     expect(adfToPlainText(doc)).toBe(input)
   })
 
@@ -122,11 +82,9 @@ describe('plainTextToAdf / adfToPlainText', () => {
     const input =
       'garage-triage: ✅ Accepted — abpai/garage-band\n\nIncrement SMOKE_TEST_TASK.md from current_count=1 to 2.\n\n```garage-baton\n{"v":1,"accepted":true,"repo":{"owner":"abpai","name":"garage-band"},"questions":[],"summary":"Increment smoke counter."}\n```'
     const doc = plainTextToAdf(input)
-    const code = doc.content.find((node) => node.type === 'codeBlock') as
-      | { type: string; attrs?: { language?: string } }
-      | undefined
+    const code = doc.content.find((node) => node.type === 'codeBlock')
 
-    expect(code?.attrs?.language).toBe('garage-baton')
+    expect(code).toHaveProperty('attrs.language', 'garage-baton')
     expect(adfToPlainText(doc)).toBe(input)
   })
 
@@ -213,7 +171,8 @@ describe('plainTextToAdf / adfToPlainText', () => {
   test('write path emits **bold** as a strong mark', () => {
     const input = 'hello **world**'
     const doc = plainTextToAdf(input)
-    expect(firstParagraphContent(doc)).toEqual([
+    expect(doc.content[0]?.type).toBe('paragraph')
+    expect(doc.content[0]?.content).toEqual([
       { type: 'text', text: 'hello ' },
       { type: 'text', text: 'world', marks: [{ type: 'strong' }] },
     ])
@@ -223,7 +182,8 @@ describe('plainTextToAdf / adfToPlainText', () => {
   test('write path emits [label](https://...) as a link mark', () => {
     const input = 'see [docs](https://example.com/x)'
     const doc = plainTextToAdf(input)
-    expect(firstParagraphContent(doc)).toEqual([
+    expect(doc.content[0]?.type).toBe('paragraph')
+    expect(doc.content[0]?.content).toEqual([
       { type: 'text', text: 'see ' },
       {
         type: 'text',
@@ -237,7 +197,8 @@ describe('plainTextToAdf / adfToPlainText', () => {
   test('write path emits side-by-side bold and link as adjacent text nodes', () => {
     const input = '**PR opened** — [repo#1](https://github.com/o/r/pull/1)'
     const doc = plainTextToAdf(input)
-    expect(firstParagraphContent(doc)).toEqual([
+    expect(doc.content[0]?.type).toBe('paragraph')
+    expect(doc.content[0]?.content).toEqual([
       { type: 'text', text: 'PR opened', marks: [{ type: 'strong' }] },
       { type: 'text', text: ' — ' },
       {
@@ -252,10 +213,9 @@ describe('plainTextToAdf / adfToPlainText', () => {
   test('write path bolds bullet item field-name prefix', () => {
     const input = '- **Marker:** drift:HUMAN REVIEW:516652'
     const doc = plainTextToAdf(input)
-    const list = firstBulletList(doc)
-    const itemParagraph = list.content[0]!.content[0] as AdfParagraphNode
-    const itemContent = itemParagraph.content ?? []
-    expect(itemContent).toEqual([
+    const list = doc.content[0]
+    expect(list?.type).toBe('bulletList')
+    expect(list).toHaveProperty('content.0.content.0.content', [
       { type: 'text', text: 'Marker:', marks: [{ type: 'strong' }] },
       { type: 'text', text: ' drift:HUMAN REVIEW:516652' },
     ])
@@ -265,11 +225,11 @@ describe('plainTextToAdf / adfToPlainText', () => {
   test('inline tokenizer does NOT run inside fenced code blocks', () => {
     const input = '```ts\nconst s = "**not bold** [x](https://e.com)"\n```'
     const doc = plainTextToAdf(input)
-    const code = firstCodeBlock(doc)
-    const codeContent = code.content ?? []
-    expect(codeContent).toHaveLength(1)
-    expect(codeContent[0]?.text).toBe('const s = "**not bold** [x](https://e.com)"')
-    expect(codeContent[0]?.marks).toBeUndefined()
+    const code = doc.content[0]
+    expect(code?.type).toBe('codeBlock')
+    expect(code?.content).toEqual([
+      { type: 'text', text: 'const s = "**not bold** [x](https://e.com)"' },
+    ])
     expect(adfToPlainText(doc)).toBe(input)
   })
 
@@ -297,7 +257,8 @@ describe('plainTextToAdf / adfToPlainText', () => {
   test('non-http link target is left as literal text (no link mark)', () => {
     const input = 'see [docs](mailto:dev@example.com)'
     const doc = plainTextToAdf(input)
-    expect(firstParagraphContent(doc)).toEqual([{ type: 'text', text: input }])
+    expect(doc.content[0]?.type).toBe('paragraph')
+    expect(doc.content[0]?.content).toEqual([{ type: 'text', text: input }])
   })
 
   test('read: paragraph containing inlineCard emits the URL inline', () => {
@@ -451,14 +412,13 @@ describe('jira-adf expand block', () => {
       ':::'
     const doc = plainTextToAdf(input)
     expect(doc.content).toHaveLength(1)
-    const expand = doc.content[0] as AdfExpandNode
-    expect(expand.type).toBe('expand')
-    expect(expand.attrs?.title).toBe('garage-baton (machine-readable)')
-    expect(expand.content).toHaveLength(1)
-    const code = expand.content[0] as AdfCodeBlockNode
-    expect(code.type).toBe('codeBlock')
-    expect(code.attrs?.language).toBe('garage-baton')
-    expect(code.content?.[0]).toEqual({ type: 'text', text: '{"v":1}' })
+    const expand = doc.content[0]
+    expect(expand?.type).toBe('expand')
+    expect(expand).toHaveProperty('attrs.title', 'garage-baton (machine-readable)')
+    expect(expand?.content).toHaveLength(1)
+    expect(expand).toHaveProperty('content.0.type', 'codeBlock')
+    expect(expand).toHaveProperty('content.0.attrs.language', 'garage-baton')
+    expect(expand).toHaveProperty('content.0.content.0', { type: 'text', text: '{"v":1}' })
   })
 
   test('read: ADF expand wrapping a codeBlock renders back to the wire format', () => {
@@ -491,10 +451,10 @@ describe('jira-adf expand block', () => {
   test('write: bare ::: expand emits empty title', () => {
     const input = '::: expand\nbody paragraph\n:::'
     const doc = plainTextToAdf(input)
-    const expand = doc.content[0] as AdfExpandNode
-    expect(expand.type).toBe('expand')
-    expect(expand.attrs?.title).toBe('')
-    expect(expand.content[0]?.type).toBe('paragraph')
+    const expand = doc.content[0]
+    expect(expand?.type).toBe('expand')
+    expect(expand).toHaveProperty('attrs.title', '')
+    expect(expand).toHaveProperty('content.0.type', 'paragraph')
   })
 
   test('read: bare ::: expand renders without title attribute', () => {
@@ -564,8 +524,8 @@ describe('jira-adf expand block', () => {
   test('write: expand title preserves escaped quote', () => {
     const input = '::: expand title="quoted \\"title\\""\nx\n:::'
     const doc = plainTextToAdf(input)
-    const expand = doc.content[0] as AdfExpandNode
-    expect(expand.attrs?.title).toBe('quoted "title"')
+    const expand = doc.content[0]
+    expect(expand).toHaveProperty('attrs.title', 'quoted "title"')
     // Round-trip emits the same escaping.
     expect(adfToPlainText(doc)).toBe(input)
   })

@@ -18,11 +18,8 @@ export type { LinearActivityRow, LinearStateRow, LinearSyncMeta } from './linear
 type LinearIssueRow = LinearTaskRow
 
 /**
- * Postgres-backed cache/repository for the Linear provider. Mirrors the role of
- * the SQLite-side `linear-cache.ts` free functions, but as an instance that owns
- * the async `postgres.js` client and its own schema-readiness promise. Holds only
- * cache I/O (persistence + materialization, including description-change activity
- * synthesis on write); API sync and business logic stay in `PostgresLinearProvider`.
+ * Postgres cache I/O, schema readiness, and description-change activity synthesis
+ * for the shared LinearProviderCore.
  */
 export class PostgresLinearCache implements LinearCachePort {
   readonly ready: Promise<void>
@@ -141,20 +138,20 @@ export class PostgresLinearCache implements LinearCachePort {
     await this.sql.begin(async (tx) => {
       for (const key of keys) {
         if (!Object.prototype.hasOwnProperty.call(meta, key)) continue
-        const value = meta[key]
-        if (value === null) {
-          await tx`DELETE FROM linear_sync_meta WHERE key = ${key}`
-          continue
-        }
         if (key === 'team') {
-          await tx`
-            INSERT INTO linear_sync_meta (key, value)
-            VALUES (${key}, ${JSON.stringify(value)})
-            ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
-          `
+          if (meta.team === null) await tx`DELETE FROM linear_sync_meta WHERE key = ${key}`
+          else {
+            await tx`
+              INSERT INTO linear_sync_meta (key, value)
+              VALUES (${key}, ${JSON.stringify(meta.team)})
+              ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+            `
+          }
           continue
         }
-        if (typeof value === 'string') {
+        const value = meta[key]
+        if (value === null) await tx`DELETE FROM linear_sync_meta WHERE key = ${key}`
+        else if (value !== undefined) {
           await tx`
             INSERT INTO linear_sync_meta (key, value)
             VALUES (${key}, ${value})
