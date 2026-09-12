@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test'
 
 import { defaultCapabilities } from './capabilities'
-import type { BoardBootstrap, Task } from '../types'
+import type { BoardBootstrap, BoardMetrics, Task } from '../types'
 
 let useStore: typeof import('../store').useStore
 let api: typeof import('../api').api
@@ -67,8 +67,49 @@ const bootstrap: BoardBootstrap = {
   activity: [],
   team: null,
 }
+const metrics: BoardMetrics = {
+  tasksByColumn: [{ column_name: 'backlog', count: 1 }],
+  tasksByPriority: [{ priority: 'medium', count: 1 }],
+  totalTasks: 1,
+  completedTasks: 1,
+  avgCompletionHours: null,
+  recentActivity: [],
+  tasksCreatedThisWeek: 0,
+  inProgressCount: 0,
+  completionPercent: 100,
+  assignees: [],
+  projects: [],
+}
 
 describe('UI mutation recovery', () => {
+  test('optimistic creation keeps board metrics coherent without a reload', async () => {
+    const created: Task = {
+      ...task,
+      id: 't_created',
+      assignee: 'Andy',
+      assignees: ['Andy'],
+      project: 'Agent Kanban',
+    }
+    useStore.setState({ board: bootstrap.board, metrics })
+    spyOn(api, 'createTask').mockResolvedValue(created)
+
+    await useStore.getState().createTask({
+      title: created.title,
+      assignee: created.assignee,
+      project: created.project,
+    })
+
+    expect(useStore.getState().metrics).toMatchObject({
+      totalTasks: 2,
+      completedTasks: 2,
+      completionPercent: 100,
+      assignees: ['Andy'],
+      projects: ['Agent Kanban'],
+      tasksByColumn: [{ column_name: 'backlog', count: 2 }],
+      tasksByPriority: [{ priority: 'medium', count: 2 }],
+    })
+  })
+
   test('failed conflict overwrite preserves the dialog and edits for a successful retry', async () => {
     const conflict = {
       taskId: task.id,

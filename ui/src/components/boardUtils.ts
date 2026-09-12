@@ -1,4 +1,5 @@
-import type { BoardView, Task } from '../types'
+import { selectDoneColumnIds, selectInProgressColumnIds } from '../../../src/column-roles'
+import type { BoardMetrics, BoardView, Task } from '../types'
 
 const COLUMN_COLORS = new Map([
   ['recurring', 'var(--col-recurring)'],
@@ -46,6 +47,51 @@ export function filterVisibleTasks(
 
 export function getColumnColor(name: string): string {
   return COLUMN_COLORS.get(name.toLowerCase()) ?? 'var(--text-secondary)'
+}
+
+const PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const
+
+/** Keep the bootstrap metrics coherent with optimistic and realtime board mutations. */
+export function reconcileMetricsWithBoard(
+  metrics: BoardMetrics | null,
+  board: BoardView,
+): BoardMetrics | null {
+  if (!metrics) return null
+  const tasks = board.columns.flatMap((column) => column.tasks)
+  const doneColumnIds = new Set(selectDoneColumnIds(board.columns))
+  const inProgressColumnIds = new Set(selectInProgressColumnIds(board.columns))
+  const completedTasks = board.columns
+    .filter((column) => doneColumnIds.has(column.id))
+    .reduce((count, column) => count + column.tasks.length, 0)
+  const inProgressCount = board.columns
+    .filter((column) => inProgressColumnIds.has(column.id))
+    .reduce((count, column) => count + column.tasks.length, 0)
+  const totalTasks = tasks.length
+  const cutoffMs = Date.now() - 7 * 86_400_000
+
+  return {
+    ...metrics,
+    tasksByColumn: board.columns.map((column) => ({
+      column_name: column.name,
+      count: column.tasks.length,
+    })),
+    tasksByPriority: PRIORITIES.map((priority) => ({
+      priority,
+      count: tasks.filter((task) => task.priority === priority).length,
+    })).filter(({ count }) => count > 0),
+    totalTasks,
+    completedTasks,
+    tasksCreatedThisWeek: tasks.filter((task) => {
+      const createdAt = Date.parse(
+        task.created_at + (/Z$|[+-]\d{2}:\d{2}$/.test(task.created_at) ? '' : 'Z'),
+      )
+      return !Number.isNaN(createdAt) && createdAt >= cutoffMs
+    }).length,
+    inProgressCount,
+    completionPercent: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+    assignees: [...new Set(tasks.map((task) => task.assignee).filter(Boolean))].sort(),
+    projects: [...new Set(tasks.map((task) => task.project).filter(Boolean))].sort(),
+  }
 }
 
 export function findTask(

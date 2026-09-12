@@ -183,6 +183,11 @@ try {
   const createdBody: { data: Task } = await createdResponse.json()
   const created = createdBody.data
   await dialog.waitFor({ state: 'hidden' })
+  assert.equal(
+    await page.locator('.boardSummary strong').first().innerText(),
+    String(taskCount + 1),
+    'Board-wide task count updates immediately after create',
+  )
   assert.equal(getTask(db, created.id).column_name, 'in-progress')
   assert.deepEqual(getTask(db, created.id).labels, ['smoke', 'browser'])
   assert.equal(getTask(db, created.id).assignee, 'Alex')
@@ -278,6 +283,11 @@ try {
   assert(deletedResponse.ok())
   await dialog.waitFor({ state: 'hidden' })
   assert.equal(listTasks(db).length, taskCount)
+  assert.equal(
+    await page.locator('.boardSummary strong').first().innerText(),
+    String(taskCount),
+    'Board-wide task count updates immediately after delete',
+  )
 
   // Block polling after initial coverage so only the live event can reveal this task.
   await page.route('**/api/bootstrap', (route) => route.abort())
@@ -292,6 +302,11 @@ try {
   assert(liveResponse.ok)
   await liveFrame
   await page.getByRole('button', { name: /WebSocket smoke task/ }).waitFor()
+  assert.equal(
+    await page.locator('.boardSummary strong').first().innerText(),
+    String(taskCount + 1),
+    'Board-wide task count updates immediately after a WebSocket create',
+  )
   await checkLayout(page)
   assert.deepEqual(pageErrors, [], 'No browser runtime errors')
   assert.deepEqual(externalRequests, [], 'Dashboard loads without external requests')
@@ -303,6 +318,7 @@ try {
           'desktop/mobile layout',
           'search and combined filters',
           'create/edit/move/delete persisted in SQLite',
+          'live board metrics after local and WebSocket mutations',
           'dialog Escape, Tab containment and focus restoration',
           'real version conflict and failed retry recovery',
           'failed delete feedback and retry',
