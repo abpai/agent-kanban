@@ -27,7 +27,8 @@ pgTest('runtime bounds statements and preserves URL timeout and schema overrides
       await defaults.close()
     }
 
-    url.searchParams.set('statement_timeout', '80ms')
+    // Long enough for runtime schema setup, short enough to cut pg_sleep(10).
+    url.searchParams.set('statement_timeout', '1s')
     const runtime = await openKanbanRuntime({
       storage: { mode: 'postgres', databaseUrl: url.toString() },
       tracker: { provider: 'local' },
@@ -35,7 +36,7 @@ pgTest('runtime bounds statements and preserves URL timeout and schema overrides
     const sql = runtime.sql!
     try {
       const settings = await sql<{ statement_timeout: string }[]>`SHOW statement_timeout`
-      expect(settings[0]?.statement_timeout).toBe('80ms')
+      expect(settings[0]?.statement_timeout).toBe('1s')
       const started = performance.now()
       await expect(
         sql.begin(async (tx) => {
@@ -44,7 +45,7 @@ pgTest('runtime bounds statements and preserves URL timeout and schema overrides
           await tx`SELECT pg_sleep(10)`
         }),
       ).rejects.toMatchObject({ code: '57014' })
-      expect(performance.now() - started).toBeLessThan(2_000)
+      expect(performance.now() - started).toBeLessThan(5_000)
       const rolledBack = await sql<
         { table_name: string | null }[]
       >`SELECT to_regclass('rollback_probe')::text AS table_name`

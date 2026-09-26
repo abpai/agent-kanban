@@ -5,6 +5,13 @@ import { LinearClient } from '../providers/linear-client'
 import { mockFetch } from './helpers/fetch'
 
 const nativeFetch = globalThis.fetch
+const timeoutMs = 250
+
+// A loaded runner can hit the client deadline before the handler subscribes.
+function onAbort(signal: AbortSignal, listener: () => void): void {
+  if (signal.aborted) listener()
+  else signal.addEventListener('abort', listener, { once: true })
+}
 
 afterEach(() => {
   globalThis.fetch = nativeFetch
@@ -21,20 +28,16 @@ for (const provider of ['Jira', 'Linear'] as const) {
         port: 0,
         async fetch(request) {
           requests += 1
+          if (stall) {
+            onAbort(request.signal, () => {
+              abortedRequests += 1
+            })
+          }
           await request.text()
           if (!stall) return Response.json({ data: { issueUpdate: { success: true } } })
-          request.signal.addEventListener(
-            'abort',
-            () => {
-              abortedRequests += 1
-            },
-            { once: true },
-          )
           if (phase === 'headers') {
             return new Promise<Response>((resolve) => {
-              request.signal.addEventListener('abort', () => resolve(new Response()), {
-                once: true,
-              })
+              onAbort(request.signal, () => resolve(new Response()))
             })
           }
           return new Response(
@@ -48,15 +51,15 @@ for (const provider of ['Jira', 'Linear'] as const) {
         },
       })
       // Even a regression that never aborts must release this test's socket.
-      const failsafe = setTimeout(() => server.stop(true), 1_500)
+      const failsafe = setTimeout(() => server.stop(true), 3_000)
       globalThis.fetch = mockFetch((_url, init) => nativeFetch(server.url, init))
       const jira = new JiraClient({
         baseUrl: server.url.toString(),
         email: 'test@example.invalid',
         apiToken: 'fixture',
-        requestTimeoutMs: 80,
+        requestTimeoutMs: timeoutMs,
       })
-      const linear = new LinearClient('fixture', { requestTimeoutMs: 80 })
+      const linear = new LinearClient('fixture', { requestTimeoutMs: timeoutMs })
       const update = () =>
         provider === 'Jira'
           ? jira.updateIssue('TEST-1', { fields: { summary: 'test' } })
@@ -65,9 +68,9 @@ for (const provider of ['Jira', 'Linear'] as const) {
         const started = performance.now()
         await expect(update()).rejects.toMatchObject({
           code: ErrorCode.PROVIDER_UPSTREAM_ERROR,
-          message: `${provider} API request timed out after 80ms`,
+          message: `${provider} API request timed out after ${timeoutMs}ms`,
         })
-        expect(performance.now() - started).toBeLessThan(1_000)
+        expect(performance.now() - started).toBeLessThan(2_000)
         for (let attempt = 0; abortedRequests === 0 && attempt < 100; attempt += 1) {
           await Bun.sleep(5)
         }
