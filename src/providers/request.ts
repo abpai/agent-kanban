@@ -1,4 +1,21 @@
+import { ErrorCode, KanbanError } from '../errors'
 import { providerUpstreamError } from './errors'
+
+const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 30_000
+// setTimeout fires immediately for delays above a signed 32-bit integer.
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+
+export function resolveProviderRequestTimeoutMs(
+  value = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
+): number {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TIMER_DELAY_MS) {
+    throw new KanbanError(
+      ErrorCode.INVALID_CONFIG,
+      `requestTimeoutMs must be an integer between 1 and ${MAX_TIMER_DELAY_MS}`,
+    )
+  }
+  return value
+}
 
 /** One deadline covers both response headers and body consumption. */
 export async function providerRequest<T>(
@@ -6,11 +23,8 @@ export async function providerRequest<T>(
   url: string,
   init: RequestInit,
   read: (response: Response) => Promise<T>,
-  timeoutMs = 30_000,
+  timeoutMs: number,
 ): Promise<T> {
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
-    throw new RangeError('Provider request timeout must be a positive timer duration')
-  }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {

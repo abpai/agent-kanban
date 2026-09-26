@@ -83,3 +83,29 @@ for (const provider of ['Jira', 'Linear'] as const) {
     })
   }
 }
+
+test('provider clients reject request timeouts that are not positive timer delays', () => {
+  for (const requestTimeoutMs of [
+    0,
+    -1,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    2_147_483_648,
+  ]) {
+    const invalid = { code: ErrorCode.INVALID_CONFIG }
+    expect(
+      () =>
+        new JiraClient({
+          baseUrl: 'https://jira.invalid',
+          email: 'e',
+          apiToken: 't',
+          requestTimeoutMs,
+        }),
+    ).toThrow(expect.objectContaining(invalid))
+    expect(() => new LinearClient('fixture', { requestTimeoutMs })).toThrow(
+      expect.objectContaining(invalid),
+    )
+  }
+  expect(() => new LinearClient('fixture', { requestTimeoutMs: 2_147_483_647 })).not.toThrow()
+})

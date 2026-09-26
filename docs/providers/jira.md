@@ -58,8 +58,7 @@ base64 encoded in the `Authorization` header on every request.
 
 Provider requests have a 30-second deadline covering response headers and body
 consumption. A timeout aborts the request and returns `PROVIDER_UPSTREAM_ERROR`;
-the client does not automatically retry a task mutation. Programmatic client
-construction accepts `requestTimeoutMs` when a different deadline is needed.
+the client does not automatically retry a task mutation.
 
 ## Capabilities
 

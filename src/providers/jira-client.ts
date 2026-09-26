@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { ErrorCode } from '../errors'
 import type { JsonObject } from '../json'
 import { providerUpstreamError } from './errors'
-import { providerRequest } from './request'
+import { providerRequest, resolveProviderRequestTimeoutMs } from './request'
 import type { AdfDocument } from './jira-adf'
 
 export interface JiraProject {
@@ -214,10 +214,10 @@ export interface JiraClientOptions {
 export class JiraClient {
   private readonly baseUrl: string
   private readonly authHeader: string
-  private readonly requestTimeoutMs: number | undefined
+  private readonly requestTimeoutMs: number
 
   constructor(opts: JiraClientOptions) {
-    this.requestTimeoutMs = opts.requestTimeoutMs
+    this.requestTimeoutMs = resolveProviderRequestTimeoutMs(opts.requestTimeoutMs)
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '')
     const encoded = Buffer.from(`${opts.email}:${opts.apiToken}`).toString('base64')
     this.authHeader = `Basic ${encoded}`

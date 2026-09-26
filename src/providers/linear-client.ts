@@ -1,7 +1,7 @@
 import { ErrorCode } from '../errors'
 import type { JsonObject } from '../json'
 import { providerUpstreamError } from './errors'
-import { providerRequest } from './request'
+import { providerRequest, resolveProviderRequestTimeoutMs } from './request'
 
 interface GraphQLResponse<T> {
   data?: T
@@ -139,10 +139,14 @@ const ISSUE_NODE_FIELDS = `
 export class LinearClient {
   private readonly endpoint = 'https://api.linear.app/graphql'
 
+  private readonly requestTimeoutMs: number
+
   constructor(
     private readonly apiKey: string,
-    private readonly options: { requestTimeoutMs?: number } = {},
-  ) {}
+    options: { requestTimeoutMs?: number } = {},
+  ) {
+    this.requestTimeoutMs = resolveProviderRequestTimeoutMs(options.requestTimeoutMs)
+  }
 
   private async query<T>(query: string, variables: JsonObject = {}): Promise<T> {
     return providerRequest(
@@ -186,7 +190,7 @@ export class LinearClient {
 
         return body.data
       },
-      this.options.requestTimeoutMs,
+      this.requestTimeoutMs,
     )
   }
 
