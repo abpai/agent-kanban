@@ -145,6 +145,10 @@ In Linear and Jira modes, webhooks update the cache immediately when configured,
 and the normal poll loop still runs as a fallback so missed deliveries and
 remote deletions are eventually reconciled.
 
+The Postgres runtime defaults `statement_timeout` to 60 seconds for every
+connection. An explicit `statement_timeout` in `KANBAN_DATABASE_URL` takes
+precedence; other startup parameters such as `search_path` remain unchanged.
+
 ## Commands
 
 ### board

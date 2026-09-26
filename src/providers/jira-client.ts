@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 import { ErrorCode } from '../errors'
 import type { JsonObject } from '../json'
 import { providerUpstreamError } from './errors'
+import { providerRequest, resolveProviderRequestTimeoutMs } from './request'
 import type { AdfDocument } from './jira-adf'
 
 export interface JiraProject {
@@ -207,13 +208,16 @@ export interface JiraClientOptions {
   baseUrl: string
   email: string
   apiToken: string
+  requestTimeoutMs?: number
 }
 
 export class JiraClient {
   private readonly baseUrl: string
   private readonly authHeader: string
+  private readonly requestTimeoutMs: number
 
   constructor(opts: JiraClientOptions) {
+    this.requestTimeoutMs = resolveProviderRequestTimeoutMs(opts.requestTimeoutMs)
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '')
     const encoded = Buffer.from(`${opts.email}:${opts.apiToken}`).toString('base64')
     this.authHeader = `Basic ${encoded}`
@@ -247,52 +251,58 @@ export class JiraClient {
       init.body = JSON.stringify(body)
     }
 
-    const response = await fetch(url, init)
-
-    if (response.status === 401 || response.status === 403) {
-      providerUpstreamError('Jira authentication failed', ErrorCode.PROVIDER_AUTH_FAILED)
-    }
-    if (response.status === 429) {
-      providerUpstreamError('Jira API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
-    }
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => '')
-      let parsed: JiraErrorBody = {}
-      if (text.length > 0) {
-        try {
-          // SAFETY: Jira's error response contract supplies message strings and field errors;
-          // malformed JSON falls back to the HTTP status message below.
-          parsed = JSON.parse(text) as JiraErrorBody
-        } catch {
-          parsed = {}
+    return providerRequest(
+      'Jira',
+      url,
+      init,
+      async (response) => {
+        if (response.status === 401 || response.status === 403) {
+          providerUpstreamError('Jira authentication failed', ErrorCode.PROVIDER_AUTH_FAILED)
         }
-      }
-      const parts: string[] = []
-      if (parsed.errorMessages && parsed.errorMessages.length > 0) {
-        parts.push(parsed.errorMessages.join('; '))
-      }
-      if (parsed.errors && Object.keys(parsed.errors).length > 0) {
-        const entries = Object.entries(parsed.errors)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join('; ')
-        parts.push(entries)
-      }
-      const message =
-        parts.length > 0 ? parts.join(' | ') : `Jira API request failed with ${response.status}`
-      providerUpstreamError(message)
-    }
+        if (response.status === 429) {
+          providerUpstreamError('Jira API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
+        }
 
-    const contentLength = response.headers.get('content-length')
-    const text = response.status === 204 || contentLength === '0' ? '' : await response.text()
-    if (text.length === 0) {
-      // SAFETY: Jira mutation endpoints return an empty success body; their private callers
-      // request void, while read endpoints are expected to return the documented JSON body.
-      return undefined as TResponse
-    }
-    // SAFETY: Each private caller pairs a fixed Jira REST endpoint with its documented
-    // response type; unsuccessful HTTP responses have already been rejected above.
-    return JSON.parse(text) as TResponse
+        if (!response.ok) {
+          const text = await response.text().catch(() => '')
+          let parsed: JiraErrorBody = {}
+          if (text.length > 0) {
+            try {
+              // SAFETY: Jira's error response contract supplies message strings and field errors;
+              // malformed JSON falls back to the HTTP status message below.
+              parsed = JSON.parse(text) as JiraErrorBody
+            } catch {
+              parsed = {}
+            }
+          }
+          const parts: string[] = []
+          if (parsed.errorMessages && parsed.errorMessages.length > 0) {
+            parts.push(parsed.errorMessages.join('; '))
+          }
+          if (parsed.errors && Object.keys(parsed.errors).length > 0) {
+            const entries = Object.entries(parsed.errors)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join('; ')
+            parts.push(entries)
+          }
+          const message =
+            parts.length > 0 ? parts.join(' | ') : `Jira API request failed with ${response.status}`
+          providerUpstreamError(message)
+        }
+
+        const contentLength = response.headers.get('content-length')
+        const text = response.status === 204 || contentLength === '0' ? '' : await response.text()
+        if (text.length === 0) {
+          // SAFETY: Jira mutation endpoints return an empty success body; their private callers
+          // request void, while read endpoints are expected to return the documented JSON body.
+          return undefined as TResponse
+        }
+        // SAFETY: Each private caller pairs a fixed Jira REST endpoint with its documented
+        // response type; unsuccessful HTTP responses have already been rejected above.
+        return JSON.parse(text) as TResponse
+      },
+      this.requestTimeoutMs,
+    )
   }
 
   getProject(key: string): Promise<JiraProject> {

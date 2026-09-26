@@ -29,6 +29,10 @@ Set `KANBAN_SYNC_INTERVAL_MS` to tune the polling sync interval for Linear remot
 reads and `kanban serve` background sync. It defaults to 30000 milliseconds and
 must be an integer >= 1000.
 
+Provider requests have a 30-second deadline covering response headers and body
+consumption. A timeout aborts the request and returns `PROVIDER_UPSTREAM_ERROR`;
+the client does not automatically retry a task mutation.
+
 ## What shipped
 
 Provider support lives in `src/providers/`:

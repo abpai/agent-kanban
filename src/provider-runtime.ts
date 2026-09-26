@@ -35,7 +35,12 @@ export async function openKanbanRuntime(
   const trackerConfig = opts.tracker ?? trackerConfigFromEnv(process.env)
 
   if (storage.mode === 'postgres') {
-    const sql = postgres(storage.databaseUrl, { max: 5, onnotice: () => {} })
+    const sql = postgres(storage.databaseUrl, {
+      max: 5,
+      // postgres.js applies URL parameters after these startup defaults.
+      connection: { statement_timeout: 60_000 },
+      onnotice: () => {},
+    })
     try {
       const { provider, capabilities } = createPostgresProvider(sql, trackerConfig)
       await provider.initialize()
