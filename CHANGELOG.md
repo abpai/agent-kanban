@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+### Patch Changes
+
+- [#99](https://github.com/abpai/agent-kanban/pull/99) [`735b986`](https://github.com/abpai/agent-kanban/commit/735b9869b60403f3e124ed69ce849f9982f68a70) Thanks [@abpai](https://github.com/abpai)! - Bound Jira and Linear requests to 30 seconds, including response bodies, and abort stalled requests without retrying mutations. Give the Postgres runtime a 60-second statement timeout while preserving explicit connection URL settings.
+
 ## 1.0.0
 
 ### Major Changes
