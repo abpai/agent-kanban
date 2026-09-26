@@ -1,6 +1,7 @@
 import { ErrorCode } from '../errors'
 import type { JsonObject } from '../json'
 import { providerUpstreamError } from './errors'
+import { providerRequest } from './request'
 
 interface GraphQLResponse<T> {
   data?: T
@@ -138,46 +139,55 @@ const ISSUE_NODE_FIELDS = `
 export class LinearClient {
   private readonly endpoint = 'https://api.linear.app/graphql'
 
-  constructor(private readonly apiKey: string) {}
+  constructor(
+    private readonly apiKey: string,
+    private readonly options: { requestTimeoutMs?: number } = {},
+  ) {}
 
   private async query<T>(query: string, variables: JsonObject = {}): Promise<T> {
-    const response = await fetch(this.endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: this.apiKey,
+    return providerRequest(
+      'Linear',
+      this.endpoint,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: this.apiKey,
+        },
+        body: JSON.stringify({ query, variables }),
       },
-      body: JSON.stringify({ query, variables }),
-    })
+      async (response) => {
+        if (response.status === 401 || response.status === 403) {
+          providerUpstreamError('Linear authentication failed', ErrorCode.PROVIDER_AUTH_FAILED)
+        }
 
-    if (response.status === 401 || response.status === 403) {
-      providerUpstreamError('Linear authentication failed', ErrorCode.PROVIDER_AUTH_FAILED)
-    }
+        if (response.status === 429) {
+          providerUpstreamError('Linear API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
+        }
 
-    if (response.status === 429) {
-      providerUpstreamError('Linear API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
-    }
+        if (!response.ok) {
+          providerUpstreamError(`Linear API request failed with ${response.status}`)
+        }
 
-    if (!response.ok) {
-      providerUpstreamError(`Linear API request failed with ${response.status}`)
-    }
+        // SAFETY: Each private caller pairs its fixed GraphQL selection with T; HTTP failures
+        // are rejected above, and GraphQL errors and missing data are rejected below.
+        const body = (await response.json()) as GraphQLResponse<T>
+        if (body.errors?.length) {
+          const first = body.errors[0]
+          if (first?.extensions?.code === 'RATELIMITED') {
+            providerUpstreamError('Linear API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
+          }
+          providerUpstreamError(first?.message ?? 'Linear API request failed')
+        }
 
-    // SAFETY: Each private caller pairs its fixed GraphQL selection with T; HTTP failures
-    // are rejected above, and GraphQL errors and missing data are rejected below.
-    const body = (await response.json()) as GraphQLResponse<T>
-    if (body.errors?.length) {
-      const first = body.errors[0]
-      if (first?.extensions?.code === 'RATELIMITED') {
-        providerUpstreamError('Linear API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
-      }
-      providerUpstreamError(first?.message ?? 'Linear API request failed')
-    }
+        if (!body.data) {
+          providerUpstreamError('Linear API returned no data')
+        }
 
-    if (!body.data) {
-      providerUpstreamError('Linear API returned no data')
-    }
-
-    return body.data
+        return body.data
+      },
+      this.options.requestTimeoutMs,
+    )
   }
 
   async getTeam(
