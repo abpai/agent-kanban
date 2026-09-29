@@ -3,7 +3,7 @@ import { mockFetch } from './helpers/fetch'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { Buffer } from 'node:buffer'
 import { ErrorCode } from '../errors'
-import { JiraClient, decideJiraPagination } from '../providers/jira-client'
+import { JiraClient, decideJiraPagination, retryAfterDeadline } from '../providers/jira-client'
 import type { JiraIssue } from '../providers/jira-client'
 
 const origFetch = globalThis.fetch
@@ -297,3 +297,20 @@ test.each(['120', 'Mon, 01 Jun 2026 00:02:00 GMT'])(
     }
   },
 )
+
+describe('retryAfterDeadline', () => {
+  const now = Date.parse('2026-06-01T00:00:00Z')
+
+  test('honors delta-seconds, HTTP dates, and an immediate retry', () => {
+    expect(retryAfterDeadline('120', now)).toBe(now + 120_000)
+    expect(retryAfterDeadline('0', now)).toBe(now)
+    expect(retryAfterDeadline('Mon, 01 Jun 2026 00:02:00 GMT', now)).toBe(now + 120_000)
+  })
+
+  test('falls back to 60s when the header is missing or invalid', () => {
+    expect(retryAfterDeadline(null, now)).toBe(now + 60_000)
+    expect(retryAfterDeadline('  ', now)).toBe(now + 60_000)
+    expect(retryAfterDeadline('soon', now)).toBe(now + 60_000)
+    expect(retryAfterDeadline('-5', now)).toBe(now + 60_000)
+  })
+})

@@ -214,16 +214,13 @@ without the tunnel.
 
 ### Activity refresh and rate limits
 
-Polling and full reconciliation still repair task data when a webhook is missed.
-A provider instance remembers successful activity reads for up to 10,000 issues.
-An unchanged issue skips another changelog request for 30 minutes; the next scan
-then repairs its activity. A changed Jira update timestamp refreshes activity
-immediately when observed. Failed reads are not remembered. This optimization
-is process-local: restart or eviction safely fetches activity again, and separate
-provider instances do not share suppression state.
+Each provider instance remembers the last successful changelog read per issue
+(up to 10,000 issues, in memory). Sync, webhook, and write read-back skip the
+changelog request when the issue's `updated` timestamp is unchanged and the last
+read is under 30 minutes old. Failed reads are not remembered, and a restart
+simply re-fetches.
 
-A Jira 429 response starts a client-local cooldown using `Retry-After` (seconds
-or HTTP date), with a 60-second fallback for missing or invalid values. Further
-requests fail with `PROVIDER_RATE_LIMITED` until that time instead of adding load.
-Already in-flight requests may finish. No mutation is automatically replayed.
-The existing sync loop retries later; this is not a cross-process quota manager.
+A Jira 429 blocks further requests on that client until the `Retry-After`
+deadline (seconds or HTTP date; 60 seconds if missing or invalid). Blocked calls
+fail with `PROVIDER_RATE_LIMITED` without touching the network, and nothing is
+replayed automatically; the sync loop retries on its next tick.

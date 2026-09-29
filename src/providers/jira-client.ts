@@ -211,6 +211,20 @@ export interface JiraClientOptions {
   requestTimeoutMs?: number
 }
 
+const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 60_000
+
+/** Resolves a Retry-After header (delta-seconds or HTTP date) to an epoch-ms deadline. */
+export function retryAfterDeadline(header: string | null, now: number): number {
+  const value = header?.trim()
+  if (value) {
+    if (/^\d+$/.test(value)) return now + Number(value) * 1000
+    // HTTP dates start with a day name; this keeps Date.parse away from inputs like '-5'.
+    const date = /^[a-z]/i.test(value) ? Date.parse(value) : NaN
+    if (Number.isFinite(date)) return date
+  }
+  return now + DEFAULT_RATE_LIMIT_COOLDOWN_MS
+}
+
 export class JiraClient {
   private readonly baseUrl: string
   private readonly authHeader: string
@@ -267,16 +281,10 @@ export class JiraClient {
           providerUpstreamError('Jira authentication failed', ErrorCode.PROVIDER_AUTH_FAILED)
         }
         if (response.status === 429) {
-          const retryAfter = response.headers.get('retry-after')?.trim()
-          const seconds = retryAfter ? Number(retryAfter) : NaN
-          const date = retryAfter ? Date.parse(retryAfter) : NaN
-          const now = Date.now()
-          const deadline = Number.isFinite(seconds) && seconds >= 0 ? now + seconds * 1000 : date
-          // Fail fast during the window, without sleeping or replaying mutations.
-          // Already in-flight requests may finish; later calls share this client gate.
+          // Later calls on this client fail fast until the deadline; nothing is replayed.
           this.retryAt = Math.max(
             this.retryAt,
-            Number.isFinite(deadline) && deadline > now ? deadline : now + 60_000,
+            retryAfterDeadline(response.headers.get('retry-after'), Date.now()),
           )
           providerUpstreamError('Jira API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
         }

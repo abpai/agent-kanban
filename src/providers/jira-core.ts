@@ -53,6 +53,8 @@ import { warnOnce } from './warn-once'
 import { applyTaskFilters, mapWithConcurrency, SyncGate, syncStatusFromMeta } from './sync-core'
 
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
+const ACTIVITY_REFRESH_INTERVAL_MS = 30 * 60_000
+const ACTIVITY_READS_MAX = 10_000
 
 function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boolean {
   if (!lastFullSyncAt) return true
@@ -215,8 +217,8 @@ export class JiraProviderCore implements KanbanProvider {
   protected readonly client: JiraClient
   protected readonly pollingSyncIntervalMs: number
   private readonly syncGate: SyncGate
-  // Optimization only: process restart or eviction re-fetches activity.
-  private readonly activityReads = new Map<string, { version: string; checkedAt: number }>()
+  // Issue id -> last successfully ingested `updated` stamp. Process-local; a miss just re-fetches.
+  private readonly activityReads = new Map<string, { updated: string; readAt: number }>()
 
   constructor(
     protected readonly cache: JiraCachePort,
@@ -856,21 +858,21 @@ export class JiraProviderCore implements KanbanProvider {
     return undefined
   }
 
+  // Skips the changelog call when the issue is unchanged since a recent successful read.
   private async refreshIssueActivity(issue: JiraIssue): Promise<void> {
-    const previous = this.activityReads.get(issue.id)
     const now = Date.now()
-    // The next scan after 30 minutes refreshes unchanged history as well.
+    const previous = this.activityReads.get(issue.id)
     if (
-      previous?.version === issue.fields.updated &&
-      now >= previous.checkedAt &&
-      now - previous.checkedAt < 30 * 60_000
-    )
+      previous?.updated === issue.fields.updated &&
+      now - previous.readAt < ACTIVITY_REFRESH_INTERVAL_MS
+    ) {
       return
+    }
     await this.ingestIssueActivity(issue.id)
-    // Only successful fetch + persistence suppresses later reads. Failures retry.
+    // Re-insert so Map order tracks recency for eviction.
     this.activityReads.delete(issue.id)
-    this.activityReads.set(issue.id, { version: issue.fields.updated, checkedAt: now })
-    if (this.activityReads.size > 10_000) {
+    this.activityReads.set(issue.id, { updated: issue.fields.updated, readAt: now })
+    if (this.activityReads.size > ACTIVITY_READS_MAX) {
       const oldest = this.activityReads.keys().next().value
       if (oldest !== undefined) this.activityReads.delete(oldest)
     }
