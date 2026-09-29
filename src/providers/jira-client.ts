@@ -211,10 +211,25 @@ export interface JiraClientOptions {
   requestTimeoutMs?: number
 }
 
+const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 60_000
+
+/** Resolves a Retry-After header (delta-seconds or HTTP date) to an epoch-ms deadline. */
+export function retryAfterDeadline(header: string | null, now: number): number {
+  const value = header?.trim()
+  if (value) {
+    if (/^\d+$/.test(value)) return now + Number(value) * 1000
+    // HTTP dates start with a day name; this keeps Date.parse away from inputs like '-5'.
+    const date = /^[a-z]/i.test(value) ? Date.parse(value) : NaN
+    if (Number.isFinite(date)) return date
+  }
+  return now + DEFAULT_RATE_LIMIT_COOLDOWN_MS
+}
+
 export class JiraClient {
   private readonly baseUrl: string
   private readonly authHeader: string
   private readonly requestTimeoutMs: number
+  private retryAt = 0
 
   constructor(opts: JiraClientOptions) {
     this.requestTimeoutMs = resolveProviderRequestTimeoutMs(opts.requestTimeoutMs)
@@ -229,6 +244,12 @@ export class JiraClient {
     body?: TBody,
     query?: QueryParams,
   ): Promise<TResponse> {
+    if (Date.now() < this.retryAt) {
+      providerUpstreamError(
+        'Jira API rate limit cooldown is active',
+        ErrorCode.PROVIDER_RATE_LIMITED,
+      )
+    }
     let url = `${this.baseUrl}${path}`
     if (query) {
       const params = new URLSearchParams()
@@ -260,6 +281,11 @@ export class JiraClient {
           providerUpstreamError('Jira authentication failed', ErrorCode.PROVIDER_AUTH_FAILED)
         }
         if (response.status === 429) {
+          // Later calls on this client fail fast until the deadline; nothing is replayed.
+          this.retryAt = Math.max(
+            this.retryAt,
+            retryAfterDeadline(response.headers.get('retry-after'), Date.now()),
+          )
           providerUpstreamError('Jira API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
         }
 

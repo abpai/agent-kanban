@@ -3,7 +3,7 @@ import { mockFetch } from './helpers/fetch'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { Buffer } from 'node:buffer'
 import { ErrorCode } from '../errors'
-import { JiraClient, decideJiraPagination } from '../providers/jira-client'
+import { JiraClient, decideJiraPagination, retryAfterDeadline } from '../providers/jira-client'
 import type { JiraIssue } from '../providers/jira-client'
 
 const origFetch = globalThis.fetch
@@ -267,5 +267,50 @@ describe('decideJiraPagination', () => {
       new Set(),
     )
     expect(d).toEqual({ complete: true })
+  })
+})
+
+test.each(['120', 'Mon, 01 Jun 2026 00:02:00 GMT'])(
+  '429 cooldown honors Retry-After %s across endpoints without replay',
+  async (retryAfter) => {
+    const originalNow = Date.now
+    let now = Date.parse('2026-06-01T00:00:00Z')
+    Date.now = () => now
+    let requests = 0
+    globalThis.fetch = mockFetch(async () => {
+      requests++
+      return requests === 1
+        ? new Response('', { status: 429, headers: { 'Retry-After': retryAfter } })
+        : Response.json({ id: '10000', key: 'ABC', name: 'Alpha' })
+    })
+    try {
+      const client = makeClient()
+      await expect(client.getProject('ABC')).rejects.toThrow('rate limit')
+      now += 119_000
+      await expect(client.getIssue('ABC-1')).rejects.toThrow('cooldown')
+      expect(requests).toBe(1)
+      now += 1000
+      await client.getProject('ABC')
+      expect(requests).toBe(2)
+    } finally {
+      Date.now = originalNow
+    }
+  },
+)
+
+describe('retryAfterDeadline', () => {
+  const now = Date.parse('2026-06-01T00:00:00Z')
+
+  test('honors delta-seconds, HTTP dates, and an immediate retry', () => {
+    expect(retryAfterDeadline('120', now)).toBe(now + 120_000)
+    expect(retryAfterDeadline('0', now)).toBe(now)
+    expect(retryAfterDeadline('Mon, 01 Jun 2026 00:02:00 GMT', now)).toBe(now + 120_000)
+  })
+
+  test('falls back to 60s when the header is missing or invalid', () => {
+    expect(retryAfterDeadline(null, now)).toBe(now + 60_000)
+    expect(retryAfterDeadline('  ', now)).toBe(now + 60_000)
+    expect(retryAfterDeadline('soon', now)).toBe(now + 60_000)
+    expect(retryAfterDeadline('-5', now)).toBe(now + 60_000)
   })
 })

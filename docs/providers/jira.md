@@ -211,3 +211,16 @@ without the tunnel.
 | `PROVIDER_UPSTREAM_ERROR` with `"has no transition to status"` | The issue's current Jira workflow does not allow a transition to the resolved target status for the kanban column.            | Edit the Jira workflow so that a transition exists, or move the issue in the Jira UI first. The error message lists the available transition names. |
 | `PROVIDER_UPSTREAM_ERROR` (other)                              | Generic upstream Jira error (5xx, unexpected response shape).                                                                 | Inspect the message; retry. If persistent, check Jira status page.                                                                                  |
 | `COLUMN_NOT_FOUND`                                             | The column name or id passed to `moveTask` is not present in the cached board configuration.                                  | Run `kanban column list` to see the cached columns; re-check `JIRA_BOARD_ID` or the project's status list.                                          |
+
+### Activity refresh and rate limits
+
+Each provider instance remembers the last successful changelog read per issue
+(up to 10,000 issues, in memory). Sync, webhook, and write read-back skip the
+changelog request when the issue's `updated` timestamp is unchanged and the last
+read is under 30 minutes old. Failed reads are not remembered, and a restart
+simply re-fetches.
+
+A Jira 429 blocks further requests on that client until the `Retry-After`
+deadline (seconds or HTTP date; 60 seconds if missing or invalid). Blocked calls
+fail with `PROVIDER_RATE_LIMITED` without touching the network, and nothing is
+replayed automatically; the sync loop retries on its next tick.

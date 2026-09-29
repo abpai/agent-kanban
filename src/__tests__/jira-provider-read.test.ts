@@ -1033,3 +1033,55 @@ describe('JiraProvider read path', () => {
     }
   })
 })
+
+test('unchanged full scans skip activity; changed issues and periodic repair fetch it', async () => {
+  let now = Date.parse('2026-06-01T00:00:00Z')
+  Date.now = () => now
+  let issue = makeIssue({ id: '10001', key: 'ENG-1', statusId: '10001' })
+  let reads = 0
+  const { provider } = makeProvider(
+    standardRoutes({
+      searchHandler: () => Response.json({ issues: [issue], isLast: true }),
+      changelogHandler: () => {
+        reads++
+        return Response.json({ values: [], isLast: true, total: 0 })
+      },
+    }),
+  )
+  await provider.listTasks()
+  expect(reads).toBe(1)
+  // Force full reconciliation independently of ISO wall-clock persistence.
+  saveJiraSyncMeta(db, { lastSyncAt: null, lastFullSyncAt: null })
+  now += 5 * 60_000
+  await provider.listTasks()
+  expect(reads).toBe(1)
+  issue = { ...issue, fields: { ...issue.fields, updated: '2026-06-01T00:06:00Z' } }
+  saveJiraSyncMeta(db, { lastSyncAt: null, lastFullSyncAt: null })
+  now += 60_000
+  await provider.listTasks()
+  expect(reads).toBe(2)
+  saveJiraSyncMeta(db, { lastSyncAt: null, lastFullSyncAt: null })
+  now += 30 * 60_000
+  await provider.listTasks()
+  expect(reads).toBe(3)
+})
+
+test('a failed activity read stays retryable even after the issue was cached', async () => {
+  let reads = 0
+  const issue = makeIssue({ id: '10001', key: 'ENG-1', statusId: '10001' })
+  const { provider } = makeProvider(
+    standardRoutes({
+      searchHandler: () => Response.json({ issues: [issue], isLast: true }),
+      changelogHandler: () => {
+        reads++
+        return reads === 1
+          ? new Response('unavailable', { status: 503 })
+          : Response.json({ values: [], isLast: true, total: 0 })
+      },
+    }),
+  )
+  await provider.listTasks()
+  saveJiraSyncMeta(db, { lastSyncAt: null, lastFullSyncAt: null })
+  await provider.listTasks()
+  expect(reads).toBe(2)
+})

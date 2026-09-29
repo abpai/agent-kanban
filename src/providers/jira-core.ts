@@ -53,6 +53,8 @@ import { warnOnce } from './warn-once'
 import { applyTaskFilters, mapWithConcurrency, SyncGate, syncStatusFromMeta } from './sync-core'
 
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
+const ACTIVITY_REFRESH_INTERVAL_MS = 30 * 60_000
+const ACTIVITY_READS_MAX = 10_000
 
 function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boolean {
   if (!lastFullSyncAt) return true
@@ -215,6 +217,8 @@ export class JiraProviderCore implements KanbanProvider {
   protected readonly client: JiraClient
   protected readonly pollingSyncIntervalMs: number
   private readonly syncGate: SyncGate
+  // Issue id -> last successfully ingested `updated` stamp. Process-local; a miss just re-fetches.
+  private readonly activityReads = new Map<string, { updated: string; readAt: number }>()
 
   constructor(
     protected readonly cache: JiraCachePort,
@@ -360,7 +364,7 @@ export class JiraProviderCore implements KanbanProvider {
       // keyed on (issue_id, history_id, item_field) keeps this cheap
       // even if the same issue is updated repeatedly.
       await mapWithConcurrency(page.issues, 5, async (issue) => {
-        await this.ingestIssueActivity(issue.id).catch((err) => {
+        await this.refreshIssueActivity(issue).catch((err) => {
           // Activity is best-effort; the main sync shouldn't fail if
           // one changelog call 404s or rate-limits.
           console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
@@ -643,7 +647,7 @@ export class JiraProviderCore implements KanbanProvider {
     // is recorded in jira_activity immediately (backs getActivity and the
     // poll-based `moved` trigger) rather than waiting for the next unthrottled
     // sync. Best-effort: activity must not fail the mutation.
-    await this.ingestIssueActivity(issue.id).catch((err) => {
+    await this.refreshIssueActivity(issue).catch((err) => {
       console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
     })
     const task = await this.cache.getCachedTask(key)
@@ -854,6 +858,26 @@ export class JiraProviderCore implements KanbanProvider {
     return undefined
   }
 
+  // Skips the changelog call when the issue is unchanged since a recent successful read.
+  private async refreshIssueActivity(issue: JiraIssue): Promise<void> {
+    const now = Date.now()
+    const previous = this.activityReads.get(issue.id)
+    if (
+      previous?.updated === issue.fields.updated &&
+      now - previous.readAt < ACTIVITY_REFRESH_INTERVAL_MS
+    ) {
+      return
+    }
+    await this.ingestIssueActivity(issue.id)
+    // Re-insert so Map order tracks recency for eviction.
+    this.activityReads.delete(issue.id)
+    this.activityReads.set(issue.id, { updated: issue.fields.updated, readAt: now })
+    if (this.activityReads.size > ACTIVITY_READS_MAX) {
+      const oldest = this.activityReads.keys().next().value
+      if (oldest !== undefined) this.activityReads.delete(oldest)
+    }
+  }
+
   protected async ingestIssueActivity(issueId: string): Promise<void> {
     const page = await this.client.getChangelog(issueId, { maxResults: 100 })
     const rows: JiraActivityRow[] = []
@@ -951,7 +975,7 @@ export class JiraProviderCore implements KanbanProvider {
         toCacheIssue(issue, this.config.baseUrl, this.config.projectKey),
       ])
       if (event === 'jira:issue_updated') {
-        await this.ingestIssueActivity(issue.id).catch((err) => {
+        await this.refreshIssueActivity(issue).catch((err) => {
           console.warn(`[jira] activity fetch for webhook issue ${issue.key} failed:`, err)
         })
       }
