@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2
+
+### Patch Changes
+
+- [#101](https://github.com/abpai/agent-kanban/pull/101) [`3c57d9a`](https://github.com/abpai/agent-kanban/commit/3c57d9a75c588d1cbcde57607960ec69125ff639) Thanks [@abpai](https://github.com/abpai)! - Skip Jira changelog requests for issues unchanged within 30 minutes, and pause all Jira requests until the Retry-After deadline after a 429.
+
 ## 1.0.1
 
 ### Patch Changes
