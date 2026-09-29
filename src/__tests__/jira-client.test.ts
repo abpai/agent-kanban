@@ -269,3 +269,31 @@ describe('decideJiraPagination', () => {
     expect(d).toEqual({ complete: true })
   })
 })
+
+test.each(['120', 'Mon, 01 Jun 2026 00:02:00 GMT'])(
+  '429 cooldown honors Retry-After %s across endpoints without replay',
+  async (retryAfter) => {
+    const originalNow = Date.now
+    let now = Date.parse('2026-06-01T00:00:00Z')
+    Date.now = () => now
+    let requests = 0
+    globalThis.fetch = mockFetch(async () => {
+      requests++
+      return requests === 1
+        ? new Response('', { status: 429, headers: { 'Retry-After': retryAfter } })
+        : Response.json({ id: '10000', key: 'ABC', name: 'Alpha' })
+    })
+    try {
+      const client = makeClient()
+      await expect(client.getProject('ABC')).rejects.toThrow('rate limit')
+      now += 119_000
+      await expect(client.getIssue('ABC-1')).rejects.toThrow('cooldown')
+      expect(requests).toBe(1)
+      now += 1000
+      await client.getProject('ABC')
+      expect(requests).toBe(2)
+    } finally {
+      Date.now = originalNow
+    }
+  },
+)

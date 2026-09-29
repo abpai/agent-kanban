@@ -211,3 +211,19 @@ without the tunnel.
 | `PROVIDER_UPSTREAM_ERROR` with `"has no transition to status"` | The issue's current Jira workflow does not allow a transition to the resolved target status for the kanban column.            | Edit the Jira workflow so that a transition exists, or move the issue in the Jira UI first. The error message lists the available transition names. |
 | `PROVIDER_UPSTREAM_ERROR` (other)                              | Generic upstream Jira error (5xx, unexpected response shape).                                                                 | Inspect the message; retry. If persistent, check Jira status page.                                                                                  |
 | `COLUMN_NOT_FOUND`                                             | The column name or id passed to `moveTask` is not present in the cached board configuration.                                  | Run `kanban column list` to see the cached columns; re-check `JIRA_BOARD_ID` or the project's status list.                                          |
+
+### Activity refresh and rate limits
+
+Polling and full reconciliation still repair task data when a webhook is missed.
+A provider instance remembers successful activity reads for up to 10,000 issues.
+An unchanged issue skips another changelog request for 30 minutes; the next scan
+then repairs its activity. A changed Jira update timestamp refreshes activity
+immediately when observed. Failed reads are not remembered. This optimization
+is process-local: restart or eviction safely fetches activity again, and separate
+provider instances do not share suppression state.
+
+A Jira 429 response starts a client-local cooldown using `Retry-After` (seconds
+or HTTP date), with a 60-second fallback for missing or invalid values. Further
+requests fail with `PROVIDER_RATE_LIMITED` until that time instead of adding load.
+Already in-flight requests may finish. No mutation is automatically replayed.
+The existing sync loop retries later; this is not a cross-process quota manager.

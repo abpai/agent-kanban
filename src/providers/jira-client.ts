@@ -215,6 +215,7 @@ export class JiraClient {
   private readonly baseUrl: string
   private readonly authHeader: string
   private readonly requestTimeoutMs: number
+  private retryAt = 0
 
   constructor(opts: JiraClientOptions) {
     this.requestTimeoutMs = resolveProviderRequestTimeoutMs(opts.requestTimeoutMs)
@@ -229,6 +230,12 @@ export class JiraClient {
     body?: TBody,
     query?: QueryParams,
   ): Promise<TResponse> {
+    if (Date.now() < this.retryAt) {
+      providerUpstreamError(
+        'Jira API rate limit cooldown is active',
+        ErrorCode.PROVIDER_RATE_LIMITED,
+      )
+    }
     let url = `${this.baseUrl}${path}`
     if (query) {
       const params = new URLSearchParams()
@@ -260,6 +267,17 @@ export class JiraClient {
           providerUpstreamError('Jira authentication failed', ErrorCode.PROVIDER_AUTH_FAILED)
         }
         if (response.status === 429) {
+          const retryAfter = response.headers.get('retry-after')?.trim()
+          const seconds = retryAfter ? Number(retryAfter) : NaN
+          const date = retryAfter ? Date.parse(retryAfter) : NaN
+          const now = Date.now()
+          const deadline = Number.isFinite(seconds) && seconds >= 0 ? now + seconds * 1000 : date
+          // Fail fast during the window, without sleeping or replaying mutations.
+          // Already in-flight requests may finish; later calls share this client gate.
+          this.retryAt = Math.max(
+            this.retryAt,
+            Number.isFinite(deadline) && deadline > now ? deadline : now + 60_000,
+          )
           providerUpstreamError('Jira API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
         }
 
