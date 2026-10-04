@@ -9,6 +9,7 @@ import type {
   Priority,
   ProviderTeamInfo,
   Task,
+  TaskAttachment,
   TaskComment,
 } from '../types'
 import {
@@ -27,6 +28,7 @@ import {
   JiraClient,
   decideJiraPagination,
   normalizeJiraLabels,
+  type JiraAttachment,
   type JiraComment,
   type JiraIssue,
 } from './jira-client'
@@ -40,10 +42,12 @@ import {
   type JiraSyncMeta,
 } from './jira-cache'
 import type {
+  AttachmentRead,
   CreateTaskInput,
   KanbanProvider,
   ProviderContext,
   ProviderSyncStatus,
+  ReadAttachmentOptions,
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
@@ -811,6 +815,63 @@ export class JiraProviderCore implements KanbanProvider {
       body: plainTextToAdf(body),
     })
     return this.toTaskComment(task, updated)
+  }
+
+  private toTaskAttachment(task: Task, attachment: JiraAttachment): TaskAttachment {
+    return {
+      id: attachment.id,
+      task_id: task.id,
+      filename: attachment.filename,
+      media_type: attachment.mimeType ?? 'application/octet-stream',
+      byte_size: attachment.size,
+      author: attachment.author?.displayName ?? null,
+      created_at: attachment.created ?? task.created_at,
+    }
+  }
+
+  // Live on every call: the sync cache never carries the attachment field.
+  async listAttachments(idOrRef: string): Promise<TaskAttachment[]> {
+    await this.sync()
+    const task = await this.resolveTaskByIdOrKey(idOrRef)
+    const attachments = await this.client.getIssueAttachments(this.issueKeyFor(task))
+    return attachments.map((attachment) => this.toTaskAttachment(task, attachment))
+  }
+
+  async readAttachment(
+    idOrRef: string,
+    attachmentId: string,
+    options: ReadAttachmentOptions,
+  ): Promise<AttachmentRead> {
+    const maxBytes = options?.maxBytes
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+      throw new KanbanError(ErrorCode.INVALID_ARGUMENT, 'maxBytes must be a positive integer')
+    }
+    // The issue's own list is the only authority for which ids may be read.
+    const attachment = (await this.listAttachments(idOrRef)).find((a) => a.id === attachmentId)
+    if (!attachment) {
+      throw new KanbanError(
+        ErrorCode.NOT_FOUND,
+        `Task '${idOrRef}' has no attachment with id '${attachmentId}'`,
+      )
+    }
+    if (attachment.byte_size > maxBytes) {
+      providerUpstreamError(
+        `Attachment '${attachmentId}' is ${attachment.byte_size} bytes; the caller allows ${maxBytes}`,
+        ErrorCode.ATTACHMENT_REFUSED,
+      )
+    }
+    // Bound the download at the declared size so a longer body is never held in
+    // full; the caller's limit stays as its own ceiling.
+    const bytes = await this.client.downloadAttachment(attachmentId, {
+      maxBytes: Math.min(maxBytes, attachment.byte_size),
+    })
+    if (bytes.byteLength !== attachment.byte_size) {
+      providerUpstreamError(
+        `Attachment '${attachmentId}' downloaded ${bytes.byteLength} bytes but Jira declared ${attachment.byte_size}`,
+        ErrorCode.ATTACHMENT_REFUSED,
+      )
+    }
+    return { attachment, bytes }
   }
 
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {

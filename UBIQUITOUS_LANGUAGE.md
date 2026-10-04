@@ -16,6 +16,7 @@ this file before introducing a new public term.
 | **Full reconcile** | Periodic provider pull that repairs stale cache rows, deletions, and derived activity/history.                            | poll, webhook                                         |
 | **Capability**     | Public feature bit exposed to callers and dashboards.                                                                     | implementation detail                                 |
 | **Activity**       | User-visible activity surface exposed by the provider API. Internal provider history caches do not imply this capability. | history cache                                         |
+| **Attachment**     | File a provider stores on a task, read live and whole through the provider API; never cached.                             | file, upload, media, unless translating provider APIs |
 
 ## Relationships
 

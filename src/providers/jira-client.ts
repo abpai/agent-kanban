@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { ErrorCode } from '../errors'
+import { ErrorCode, type ErrorCodeValue } from '../errors'
 import type { JsonObject } from '../json'
 import { providerUpstreamError } from './errors'
 import { providerRequest, resolveProviderRequestTimeoutMs } from './request'
@@ -144,6 +144,16 @@ export interface JiraCommentPage {
   comments: JiraComment[]
 }
 
+/** One entry of an issue's `attachment` field. */
+export interface JiraAttachment {
+  id: string
+  filename: string
+  mimeType?: string | null
+  size: number
+  created?: string
+  author?: { accountId?: string; displayName?: string }
+}
+
 export interface JiraCreatedIssueRef {
   id: string
   key: string
@@ -225,6 +235,68 @@ export function retryAfterDeadline(header: string | null, now: number): number {
   return now + DEFAULT_RATE_LIMIT_COOLDOWN_MS
 }
 
+const MIB = 1024 * 1024
+// An error body only feeds the message; anything past this is dropped unread.
+const MAX_ERROR_BODY_BYTES = 64 * 1024
+
+/** One deadline covers headers and body, so a download gets 1 s per MiB on top of the request deadline. */
+export function attachmentDownloadTimeoutMs(requestTimeoutMs: number, maxBytes: number): number {
+  return requestTimeoutMs + Math.ceil(maxBytes / MIB) * 1000
+}
+
+function isRedirect(response: Response): boolean {
+  return response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)
+}
+
+function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes
+}
+
+/** Reads the whole body, or cancels it and calls `overflow` the moment it passes `maxBytes`. */
+async function readBoundedBody(
+  response: Response,
+  maxBytes: number,
+  overflow: () => never,
+): Promise<Uint8Array> {
+  if (!response.body) return new Uint8Array(0)
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined)
+      overflow()
+    }
+    chunks.push(value)
+  }
+  return concatChunks(chunks, total)
+}
+
+/** Reads at most `maxBytes` of text and cancels the rest; the result may be cut mid-character. */
+async function readTextUpTo(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (total < maxBytes) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    total += value.byteLength
+  }
+  if (total >= maxBytes) await reader.cancel().catch(() => undefined)
+  return new TextDecoder().decode(concatChunks(chunks, total).subarray(0, maxBytes))
+}
+
 export class JiraClient {
   private readonly baseUrl: string
   private readonly authHeader: string
@@ -238,18 +310,66 @@ export class JiraClient {
     this.authHeader = `Basic ${encoded}`
   }
 
-  private async request<TBody, TResponse>(
-    method: HttpMethod,
-    path: string,
-    body?: TBody,
-    query?: QueryParams,
-  ): Promise<TResponse> {
+  private assertNotCoolingDown(): void {
     if (Date.now() < this.retryAt) {
       providerUpstreamError(
         'Jira API rate limit cooldown is active',
         ErrorCode.PROVIDER_RATE_LIMITED,
       )
     }
+  }
+
+  /** Shared 401/403/429 handling; a 429 starts the client-wide cooldown. */
+  private rejectAuthOrRateLimit(response: Response): void {
+    if (response.status === 401 || response.status === 403) {
+      providerUpstreamError('Jira authentication failed', ErrorCode.PROVIDER_AUTH_FAILED)
+    }
+    if (response.status === 429) {
+      // Later calls on this client fail fast until the deadline; nothing is replayed.
+      this.retryAt = Math.max(
+        this.retryAt,
+        retryAfterDeadline(response.headers.get('retry-after'), Date.now()),
+      )
+      providerUpstreamError('Jira API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
+    }
+  }
+
+  private async rejectFailure(response: Response): Promise<never> {
+    const text = await readTextUpTo(response, MAX_ERROR_BODY_BYTES).catch(() => '')
+    let parsed: JiraErrorBody = {}
+    if (text.length > 0) {
+      try {
+        // SAFETY: Jira's error response contract supplies message strings and field errors;
+        // malformed JSON falls back to the HTTP status message below.
+        parsed = JSON.parse(text) as JiraErrorBody
+      } catch {
+        parsed = {}
+      }
+    }
+    const parts: string[] = []
+    if (parsed.errorMessages && parsed.errorMessages.length > 0) {
+      parts.push(parsed.errorMessages.join('; '))
+    }
+    if (parsed.errors && Object.keys(parsed.errors).length > 0) {
+      const entries = Object.entries(parsed.errors)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('; ')
+      parts.push(entries)
+    }
+    const message =
+      parts.length > 0 ? parts.join(' | ') : `Jira API request failed with ${response.status}`
+    providerUpstreamError(message)
+  }
+
+  private async request<TBody, TResponse>(
+    method: HttpMethod,
+    path: string,
+    body?: TBody,
+    query?: QueryParams,
+    // When set, the request never follows a redirect and a 3xx fails with this code.
+    options: { refuseRedirectsAs?: ErrorCodeValue } = {},
+  ): Promise<TResponse> {
+    this.assertNotCoolingDown()
     let url = `${this.baseUrl}${path}`
     if (query) {
       const params = new URLSearchParams()
@@ -271,50 +391,22 @@ export class JiraClient {
     if (body !== undefined) {
       init.body = JSON.stringify(body)
     }
+    const { refuseRedirectsAs } = options
+    if (refuseRedirectsAs) init.redirect = 'manual'
 
     return providerRequest(
       'Jira',
       url,
       init,
       async (response) => {
-        if (response.status === 401 || response.status === 403) {
-          providerUpstreamError('Jira authentication failed', ErrorCode.PROVIDER_AUTH_FAILED)
-        }
-        if (response.status === 429) {
-          // Later calls on this client fail fast until the deadline; nothing is replayed.
-          this.retryAt = Math.max(
-            this.retryAt,
-            retryAfterDeadline(response.headers.get('retry-after'), Date.now()),
+        this.rejectAuthOrRateLimit(response)
+        if (refuseRedirectsAs && isRedirect(response)) {
+          providerUpstreamError(
+            `Jira redirected ${method} ${path}; this request reads the Jira origin only`,
+            refuseRedirectsAs,
           )
-          providerUpstreamError('Jira API rate limit exceeded', ErrorCode.PROVIDER_RATE_LIMITED)
         }
-
-        if (!response.ok) {
-          const text = await response.text().catch(() => '')
-          let parsed: JiraErrorBody = {}
-          if (text.length > 0) {
-            try {
-              // SAFETY: Jira's error response contract supplies message strings and field errors;
-              // malformed JSON falls back to the HTTP status message below.
-              parsed = JSON.parse(text) as JiraErrorBody
-            } catch {
-              parsed = {}
-            }
-          }
-          const parts: string[] = []
-          if (parsed.errorMessages && parsed.errorMessages.length > 0) {
-            parts.push(parsed.errorMessages.join('; '))
-          }
-          if (parsed.errors && Object.keys(parsed.errors).length > 0) {
-            const entries = Object.entries(parsed.errors)
-              .map(([k, v]) => `${k}: ${v}`)
-              .join('; ')
-            parts.push(entries)
-          }
-          const message =
-            parts.length > 0 ? parts.join(' | ') : `Jira API request failed with ${response.status}`
-          providerUpstreamError(message)
-        }
+        if (!response.ok) await this.rejectFailure(response)
 
         const contentLength = response.headers.get('content-length')
         const text = response.status === 204 || contentLength === '0' ? '' : await response.text()
@@ -428,6 +520,76 @@ export class JiraClient {
       'PUT',
       `/rest/api/3/issue/${encodeURIComponent(idOrKey)}/comment/${encodeURIComponent(commentId)}`,
       payload,
+    )
+  }
+
+  /**
+   * The issue's own list decides which ids may be downloaded, so this read
+   * refuses redirects too, and an entry without a usable size is refused
+   * here rather than disabling the download bound later.
+   */
+  async getIssueAttachments(idOrKey: string): Promise<JiraAttachment[]> {
+    const issue = await this.request<never, { fields?: { attachment?: JiraAttachment[] | null } }>(
+      'GET',
+      `/rest/api/3/issue/${encodeURIComponent(idOrKey)}`,
+      undefined,
+      { fields: 'attachment' },
+      { refuseRedirectsAs: ErrorCode.ATTACHMENT_REFUSED },
+    )
+    const attachments = issue.fields?.attachment ?? []
+    for (const attachment of attachments) {
+      if (!Number.isSafeInteger(attachment.size) || attachment.size < 0) {
+        providerUpstreamError(`Jira attachment '${attachment.id}' on ${idOrKey} has no valid size`)
+      }
+    }
+    return attachments
+  }
+
+  /**
+   * Downloads attachment bytes from the Jira origin only. Jira answers the
+   * content route with a 303 to its media host by default; `redirect=false`
+   * asks for the bytes inline and `redirect: 'manual'` makes any redirect that
+   * still arrives a refusal instead of a cross-origin fetch with our credentials.
+   * The body is read in chunks and abandoned the moment it passes `maxBytes`.
+   * Refusals are ATTACHMENT_REFUSED so a caller can tell them from transient faults.
+   */
+  downloadAttachment(attachmentId: string, options: { maxBytes: number }): Promise<Uint8Array> {
+    this.assertNotCoolingDown()
+    const url = `${this.baseUrl}/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}?redirect=false`
+    const init: RequestInit = {
+      method: 'GET',
+      headers: { Authorization: this.authHeader, Accept: '*/*' },
+      redirect: 'manual',
+    }
+    return providerRequest(
+      'Jira',
+      url,
+      init,
+      async (response) => {
+        this.rejectAuthOrRateLimit(response)
+        if (isRedirect(response)) {
+          providerUpstreamError(
+            `Jira attachment '${attachmentId}' download was redirected; only the Jira origin is read`,
+            ErrorCode.ATTACHMENT_REFUSED,
+          )
+        }
+        if (!response.ok) await this.rejectFailure(response)
+
+        const declared = Number(response.headers.get('content-length'))
+        if (Number.isFinite(declared) && declared > options.maxBytes) {
+          providerUpstreamError(
+            `Jira attachment '${attachmentId}' is ${declared} bytes; at most ${options.maxBytes} are read`,
+            ErrorCode.ATTACHMENT_REFUSED,
+          )
+        }
+        return readBoundedBody(response, options.maxBytes, () =>
+          providerUpstreamError(
+            `Jira attachment '${attachmentId}' body exceeds ${options.maxBytes} bytes`,
+            ErrorCode.ATTACHMENT_REFUSED,
+          ),
+        )
+      },
+      attachmentDownloadTimeoutMs(this.requestTimeoutMs, options.maxBytes),
     )
   }
 

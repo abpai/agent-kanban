@@ -9,6 +9,7 @@ import type {
   Priority,
   ProviderCapabilities,
   ProviderTeamInfo,
+  TaskAttachment,
   TaskComment,
   Task,
 } from '../types'
@@ -111,6 +112,29 @@ export interface CommentCapability {
   updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment>
 }
 
+export interface ReadAttachmentOptions {
+  /** Positive integer. A declared size above it is refused before the download. */
+  maxBytes: number
+}
+
+export interface AttachmentRead {
+  attachment: TaskAttachment
+  bytes: Uint8Array
+}
+
+/**
+ * Task file reads. Live and whole: nothing is cached, and `readAttachment`
+ * returns the bytes only when they match the declared size and fit `maxBytes`.
+ */
+export interface AttachmentReader {
+  listAttachments(idOrRef: string): Promise<TaskAttachment[]>
+  readAttachment(
+    idOrRef: string,
+    attachmentId: string,
+    options: ReadAttachmentOptions,
+  ): Promise<AttachmentRead>
+}
+
 /** Activity-feed reads. */
 export interface ActivityReader {
   getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]>
@@ -149,6 +173,7 @@ export type KanbanProvider = ProviderIdentity &
   TaskReader &
   TaskWriter &
   CommentCapability &
+  AttachmentReader &
   ActivityReader &
   MetricsReader &
   ConfigWriter &

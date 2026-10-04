@@ -38,6 +38,7 @@ import type {
   KanbanProvider,
   ProviderContext,
   ProviderSyncStatus,
+  ReadAttachmentOptions,
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
@@ -566,6 +567,20 @@ export class LinearProviderCore implements KanbanProvider {
 
   async deleteTask(_idOrRef: string): Promise<Task> {
     unsupportedOperation('Task deletion is not supported in Linear mode')
+  }
+
+  // Linear attachments are link cards without bytes, and pasted files need an
+  // authenticated upload-host fetch; neither is a task file read.
+  async listAttachments(_idOrRef: string): Promise<never> {
+    unsupportedOperation('Attachments are not supported in Linear mode')
+  }
+
+  async readAttachment(
+    _idOrRef: string,
+    _attachmentId: string,
+    _options: ReadAttachmentOptions,
+  ): Promise<never> {
+    unsupportedOperation('Attachments are not supported in Linear mode')
   }
 
   async listComments(idOrRef: string): Promise<TaskComment[]> {

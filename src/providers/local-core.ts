@@ -1,4 +1,5 @@
 import { ErrorCode, KanbanError } from '../errors'
+import { unsupportedOperation } from './errors'
 import type {
   ActivityEntry,
   BoardBootstrap,
@@ -15,6 +16,7 @@ import type {
   KanbanProvider,
   ProviderContext,
   ProviderSyncStatus,
+  ReadAttachmentOptions,
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
@@ -197,6 +199,19 @@ export class LocalProviderCore implements KanbanProvider {
   async updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment> {
     await this.initialize()
     return this.store.updateComment(idOrRef, commentId, body)
+  }
+
+  // Neither local store keeps file bytes; consumers that need task files use Jira.
+  async listAttachments(_idOrRef: string): Promise<never> {
+    unsupportedOperation('Attachments are not supported in local mode')
+  }
+
+  async readAttachment(
+    _idOrRef: string,
+    _attachmentId: string,
+    _options: ReadAttachmentOptions,
+  ): Promise<never> {
+    unsupportedOperation('Attachments are not supported in local mode')
   }
 
   async getActivity(limit?: number, taskId?: string): Promise<ActivityEntry[]> {

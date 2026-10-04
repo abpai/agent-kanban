@@ -74,6 +74,7 @@ the client does not automatically retry a task mutation.
 | label replacement (update) | yes   | yes    | yes  |
 | webhooks                   | no    | yes    | yes  |
 | comment read/create/update | yes   | yes    | yes  |
+| attachment list/read       | no    | no     | yes  |
 | labels (read)              | no    | yes    | yes  |
 | comment count (read)       | no    | yes    | yes  |
 | conflict detection         | yes   | yes    | yes  |
@@ -155,11 +156,22 @@ to lose those nodes if you round-trip through `agent-kanban`.
    on the card and detail view. Comment reads and writes go straight upstream,
    but full comment bodies are not mirrored into the cached board view. Label
    writes are still unsupported.
-6. **Board column -> status mapping is many-to-one on read, one-of-many on
+6. **Attachment reads are live, bounded, and Jira-origin only.**
+   `listAttachments` reads `fields=attachment` from the issue on every call,
+   refusing redirects and any entry without a valid size; nothing is cached.
+   `readAttachment` downloads
+   `/rest/api/3/attachment/content/{id}?redirect=false` with `redirect:
+'manual'`. An id outside the issue's attachment list is `NOT_FOUND`; a
+   redirect, a declared size above the caller's `maxBytes`, or a body whose
+   length differs from the declared size is `ATTACHMENT_REFUSED`, which a
+   retry cannot clear, unlike `PROVIDER_UPSTREAM_ERROR`. Error bodies are read
+   up to 64 KiB. The download deadline is the request deadline plus one second
+   per MiB of the declared size. Uploads are not supported.
+7. **Board column -> status mapping is many-to-one on read, one-of-many on
    write.** Moves always pick the first mapped status; if you need a different
    target status you must either reorder the board config or edit the issue
    directly in Jira.
-7. ADF node types outside paragraphs, bullet/ordered lists, and fenced code
+8. ADF node types outside paragraphs, bullet/ordered lists, and fenced code
    blocks are dropped on read and not produced on write.
 
 ## Webhooks

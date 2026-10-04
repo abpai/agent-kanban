@@ -65,6 +65,7 @@ function makeProvider(overrides: Partial<KanbanProvider> = {}): KanbanProvider {
           bulk: true,
           configEdit: true,
           labelReplacement: true,
+          attachments: false,
         },
         team: null,
       }
@@ -106,6 +107,12 @@ function makeProvider(overrides: Partial<KanbanProvider> = {}): KanbanProvider {
     },
     async listComments(): Promise<[]> {
       return []
+    },
+    async listAttachments(): Promise<[]> {
+      return []
+    },
+    async readAttachment(): Promise<never> {
+      throw new Error('no attachments in the server test provider')
     },
     async getComment() {
       return {
@@ -232,6 +239,7 @@ describe('startServer', () => {
               bulk: true,
               configEdit: true,
               labelReplacement: true,
+              attachments: false,
             },
             team: null,
           }
