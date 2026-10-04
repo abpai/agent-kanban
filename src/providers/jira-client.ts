@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { ErrorCode, type ErrorCodeValue } from '../errors'
 import type { JsonObject } from '../json'
 import { providerUpstreamError } from './errors'
-import { providerRequest, resolveProviderRequestTimeoutMs } from './request'
+import { MAX_TIMER_DELAY_MS, providerRequest, resolveProviderRequestTimeoutMs } from './request'
 import type { AdfDocument } from './jira-adf'
 
 export interface JiraProject {
@@ -241,7 +241,7 @@ const MAX_ERROR_BODY_BYTES = 64 * 1024
 
 /** One deadline covers headers and body, so a download gets 1 s per MiB on top of the request deadline. */
 export function attachmentDownloadTimeoutMs(requestTimeoutMs: number, maxBytes: number): number {
-  return requestTimeoutMs + Math.ceil(maxBytes / MIB) * 1000
+  return Math.min(requestTimeoutMs + Math.ceil(maxBytes / MIB) * 1000, MAX_TIMER_DELAY_MS)
 }
 
 function isRedirect(response: Response): boolean {
@@ -290,11 +290,14 @@ async function readTextUpTo(response: Response, maxBytes: number): Promise<strin
   while (total < maxBytes) {
     const { done, value } = await reader.read()
     if (done) break
-    chunks.push(value)
-    total += value.byteLength
+    // Keep only the allowance, so one oversized chunk cannot be retained whole.
+    const kept = value.subarray(0, maxBytes - total)
+    chunks.push(kept)
+    total += kept.byteLength
+    if (kept.byteLength < value.byteLength) break
   }
   if (total >= maxBytes) await reader.cancel().catch(() => undefined)
-  return new TextDecoder().decode(concatChunks(chunks, total).subarray(0, maxBytes))
+  return new TextDecoder().decode(concatChunks(chunks, total))
 }
 
 export class JiraClient {

@@ -264,6 +264,7 @@ describe('JiraProvider.readAttachment', () => {
   test('gives a download one second per MiB on top of the request deadline', () => {
     expect(attachmentDownloadTimeoutMs(30_000, 1)).toBe(31_000)
     expect(attachmentDownloadTimeoutMs(30_000, 20 * 1024 * 1024)).toBe(50_000)
+    expect(attachmentDownloadTimeoutMs(2_147_483_647, 1)).toBe(2_147_483_647)
   })
 
   test('refuses a redirect instead of following it', async () => {
