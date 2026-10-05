@@ -22,6 +22,8 @@ export const ErrorCode = {
   PROVIDER_UPSTREAM_ERROR: 'PROVIDER_UPSTREAM_ERROR',
   PROVIDER_SYNC_REQUIRED: 'PROVIDER_SYNC_REQUIRED',
   PROVIDER_NOT_CONFIGURED: 'PROVIDER_NOT_CONFIGURED',
+  /** An attachment read the reader refused on its own terms; a retry cannot succeed. */
+  ATTACHMENT_REFUSED: 'ATTACHMENT_REFUSED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const
 

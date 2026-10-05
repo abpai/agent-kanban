@@ -13,6 +13,7 @@ function capabilities(overrides: Partial<ProviderCapabilities> = {}): ProviderCa
     bulk: false,
     configEdit: false,
     labelReplacement: true,
+    attachments: false,
     ...overrides,
   }
 }
@@ -40,4 +41,5 @@ export const POSTGRES_LOCAL_CAPABILITIES: ProviderCapabilities = {
 
 export const LINEAR_CAPABILITIES: ProviderCapabilities = capabilities()
 
-export const JIRA_CAPABILITIES: ProviderCapabilities = capabilities()
+// Jira is the only provider that stores task files behind a bounded, live read path.
+export const JIRA_CAPABILITIES: ProviderCapabilities = capabilities({ attachments: true })

@@ -41,6 +41,19 @@ export interface TaskComment {
   updated_at: string
 }
 
+/** A file stored on a task by the provider. Metadata only; bytes come from `readAttachment`. */
+export interface TaskAttachment {
+  id: string
+  task_id: string
+  /** The provider's filename, unchanged. Consumers decide how to display it. */
+  filename: string
+  /** Provider-reported; may be `application/octet-stream`. */
+  media_type: string
+  byte_size: number
+  author: string | null
+  created_at: string
+}
+
 export interface TaskWithColumn extends Task {
   column_name: string
 }
@@ -126,6 +139,8 @@ export interface ProviderCapabilities {
    * (present → set to that array including `[]`; absent → untouched).
    */
   labelReplacement: boolean
+  /** True when `listAttachments` and `readAttachment` read task files from the provider. */
+  attachments: boolean
 }
 
 export interface ProviderTeamInfo {

@@ -3,7 +3,7 @@ import { providerUpstreamError } from './errors'
 
 const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 30_000
 // setTimeout fires immediately for delays above a signed 32-bit integer.
-const MAX_TIMER_DELAY_MS = 2_147_483_647
+export const MAX_TIMER_DELAY_MS = 2_147_483_647
 
 export function resolveProviderRequestTimeoutMs(
   value = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,

@@ -7,8 +7,7 @@ import {
 } from '../providers/capabilities'
 
 describe('provider capabilities', () => {
-  test('remote providers share the same read/write baseline', () => {
-    expect(LINEAR_CAPABILITIES).toEqual(JIRA_CAPABILITIES)
+  test('remote providers share the same read/write baseline; only Jira reads attachments', () => {
     expect(LINEAR_CAPABILITIES).toEqual({
       taskCreate: true,
       taskUpdate: true,
@@ -21,7 +20,9 @@ describe('provider capabilities', () => {
       bulk: false,
       configEdit: false,
       labelReplacement: true,
+      attachments: false,
     })
+    expect(JIRA_CAPABILITIES).toEqual({ ...LINEAR_CAPABILITIES, attachments: true })
   })
 
   test('local provider exposes the full local board surface', () => {
@@ -37,6 +38,7 @@ describe('provider capabilities', () => {
       bulk: true,
       configEdit: true,
       labelReplacement: true,
+      attachments: false,
     })
   })
 })

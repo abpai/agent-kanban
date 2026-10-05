@@ -15,4 +15,5 @@ export const defaultCapabilities: ProviderCapabilities = Object.freeze({
   bulk: false,
   configEdit: false,
   labelReplacement: false,
+  attachments: false,
 })
