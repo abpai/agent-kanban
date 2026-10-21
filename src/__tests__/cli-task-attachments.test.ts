@@ -396,6 +396,21 @@ describe('kanban task attachment get (Jira)', () => {
 })
 
 describe('providers without attachments', () => {
+  test('a refused attachment command creates no board, at --db or the default path', async () => {
+    process.env['KANBAN_PROVIDER'] = 'local'
+
+    await expectKanbanError(
+      run(['--db', dbPath, 'task', 'attachments', 't_missing']),
+      ErrorCode.UNSUPPORTED_OPERATION,
+    )
+    await expectKanbanError(
+      run(['task', 'attachment', 'get', 't_missing', 'spec.md']),
+      ErrorCode.UNSUPPORTED_OPERATION,
+    )
+
+    expect(existsSync(dbPath)).toBe(false)
+    expect(existsSync(join(dir, '.kanban'))).toBe(false)
+  })
   test('local refuses both commands with UNSUPPORTED_OPERATION and writes nothing', async () => {
     process.env['KANBAN_PROVIDER'] = 'local'
     const task = expectOk<{ id: string }>(await run(['--db', dbPath, 'task', 'add', 'No files']))
