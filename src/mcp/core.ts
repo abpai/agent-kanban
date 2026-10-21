@@ -1,5 +1,6 @@
 import type { KanbanProvider } from '../providers/types'
-import type { BoardView, Task, TaskComment } from '../types'
+import type { BoardView, Task, TaskAttachment, TaskComment } from '../types'
+import { readTaskAttachment } from '../use-cases'
 import { TrackerMcpError, toTrackerMcpError } from './errors'
 import type { TrackerMcpHooks, TrackerMcpPolicy } from './types'
 
@@ -28,14 +29,33 @@ export interface TrackerCore<TScope> {
       body: string
     }): Promise<TaskComment>
     moveTicket(input: { scope: TScope; ticketId: string; column: string }): Promise<void>
+    listAttachments(input: { scope: TScope; ticketId: string }): Promise<TaskAttachment[]>
+    getAttachment(input: {
+      scope: TScope
+      ticketId: string
+      attachment: string
+      maxBytes?: number
+    }): Promise<AttachmentContent>
   }
 }
+
+/** Attachment bytes travel inside the JSON tool result, so they are base64-encoded. */
+interface AttachmentContent {
+  attachment: TaskAttachment
+  encoding: 'base64'
+  content: string
+}
+
+/** Base64 inflates the bytes by a third inside one JSON result, so MCP reads stay small by default. */
+const DEFAULT_MCP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 
 type ToolResultMeta = {
   commentCount?: number
   taskCount?: number
   commentId?: string
   movedTo?: string
+  attachmentCount?: number
+  attachmentId?: string
 }
 
 interface RunToolInput<TScope, TResult> {
@@ -215,6 +235,41 @@ export function createTrackerCore<TScope>(input: {
             await provider.moveTask(ticketId, column)
           },
           resultMeta: { movedTo: column },
+        })
+      },
+
+      listAttachments({ scope, ticketId }) {
+        return runTool({
+          scope,
+          tool: 'listAttachments',
+          ticketId,
+          execute: async () => {
+            await policy.canReadTicket(scope, ticketId)
+            return provider.listAttachments(ticketId)
+          },
+          resultMeta: (attachments) => ({ attachmentCount: attachments.length }),
+        })
+      },
+
+      getAttachment({ scope, ticketId, attachment, maxBytes }) {
+        return runTool({
+          scope,
+          tool: 'getAttachment',
+          ticketId,
+          execute: async () => {
+            await policy.canReadTicket(scope, ticketId)
+            const read = await readTaskAttachment(provider, {
+              idOrRef: ticketId,
+              nameOrId: attachment,
+              maxBytes: maxBytes ?? DEFAULT_MCP_ATTACHMENT_MAX_BYTES,
+            })
+            return {
+              attachment: read.attachment,
+              encoding: 'base64' as const,
+              content: Buffer.from(read.bytes).toString('base64'),
+            }
+          },
+          resultMeta: (result) => ({ attachmentId: result.attachment.id }),
         })
       },
     },

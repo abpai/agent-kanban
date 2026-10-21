@@ -154,6 +154,38 @@ export function defaultTools<TScope>(core: TrackerCore<TScope>): TrackerMcpTool<
           column: requiredStringArgument(args.column, 'column'),
         }),
     },
+    {
+      name: 'listAttachments',
+      description: 'List file attachments on a ticket (metadata only).',
+      inputSchema: ticketIdSchema(),
+      handler: ({ scope, args }) =>
+        core.handlers.listAttachments({
+          scope,
+          ticketId: requiredStringArgument(args.ticketId, 'ticketId'),
+        }),
+    },
+    {
+      name: 'getAttachment',
+      description:
+        'Read one ticket attachment by id or exact filename. Returns its metadata and base64 content; maxBytes defaults to 10 MiB.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ticketId: { type: 'string' },
+          attachment: { type: 'string', description: 'Attachment id or exact filename' },
+          maxBytes: { type: 'integer', minimum: 1 },
+        },
+        required: ['ticketId', 'attachment'],
+        additionalProperties: false,
+      },
+      handler: ({ scope, args }) =>
+        core.handlers.getAttachment({
+          scope,
+          ticketId: requiredStringArgument(args.ticketId, 'ticketId'),
+          attachment: requiredStringArgument(args.attachment, 'attachment'),
+          maxBytes: optionalIntegerArgument(args.maxBytes, 'maxBytes'),
+        }),
+    },
   ]
 }
 
@@ -163,6 +195,16 @@ function requiredStringArgument(value: unknown, field: string): string {
   throw new TrackerMcpError({
     code: 'validation_failed',
     publicMessage: `${field} must be a string`,
+  })
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Decodes one optional integer from a schema-defined MCP argument object.
+function optionalIntegerArgument(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value
+  throw new TrackerMcpError({
+    code: 'validation_failed',
+    publicMessage: `${field} must be an integer`,
   })
 }
 

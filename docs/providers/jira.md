@@ -166,7 +166,9 @@ to lose those nodes if you round-trip through `agent-kanban`.
    length differs from the declared size is `ATTACHMENT_REFUSED`, which a
    retry cannot clear, unlike `PROVIDER_UPSTREAM_ERROR`. Error bodies are read
    up to 64 KiB. The download deadline is the request deadline plus one second
-   per MiB of the declared size. Uploads are not supported.
+   per MiB of the declared size. Uploads are not supported. The CLI exposes
+   these reads as `kanban task attachments` and `kanban task attachment get`;
+   MCP exposes them as `listAttachments` and `getAttachment`.
 7. **Board column -> status mapping is many-to-one on read, one-of-many on
    write.** Moves always pick the first mapped status; if you need a different
    target status you must either reorder the board config or edit the issue

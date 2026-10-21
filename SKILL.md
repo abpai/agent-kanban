@@ -7,7 +7,7 @@ description: Operate the agent-kanban board via its stdio MCP server (preferred)
 
 Use this skill when working inside the `agent-kanban` repository and you need to manage board data. Two interfaces are available:
 
-1. **MCP (preferred).** `bun src/index.ts mcp` starts a stdio MCP server that exposes `getBoard`, `getTicket`, `listComments`, `postComment`, `updateComment`, `moveTicket`. This is the right surface for Claude Code, Claude Desktop, and any MCP-aware agent — no spawning per command, no JSON parsing boilerplate, and inputs are schema-validated.
+1. **MCP (preferred).** `bun src/index.ts mcp` starts a stdio MCP server that exposes `getBoard`, `getTicket`, `listComments`, `postComment`, `updateComment`, `moveTicket`, `listAttachments`, `getAttachment`. This is the right surface for Claude Code, Claude Desktop, and any MCP-aware agent — no spawning per command, no JSON parsing boilerplate, and inputs are schema-validated.
 2. **CLI (fallback).** `kanban <command>` (or `bun src/index.ts <command>`). Useful for shell scripts, cron jobs, or anything not MCP-aware. All commands return structured JSON — parse to chain.
 
 ## Prerequisites
@@ -42,14 +42,16 @@ Register it with a client. For Claude Desktop (`~/Library/Application Support/Cl
 
 Available tools:
 
-| Tool            | Input                           | Returns                            |
-| --------------- | ------------------------------- | ---------------------------------- |
-| `getBoard`      | `{}`                            | Full board state (columns + tasks) |
-| `getTicket`     | `{ ticketId }`                  | Single task by id or external ref  |
-| `listComments`  | `{ ticketId }`                  | Comments in creation order         |
-| `postComment`   | `{ ticketId, body }`            | Created comment                    |
-| `updateComment` | `{ ticketId, commentId, body }` | Updated comment                    |
-| `moveTicket`    | `{ ticketId, column }`          | `{ ok: true }`                     |
+| Tool              | Input                                 | Returns                                                   |
+| ----------------- | ------------------------------------- | --------------------------------------------------------- |
+| `getBoard`        | `{}`                                  | Full board state (columns + tasks)                        |
+| `getTicket`       | `{ ticketId }`                        | Single task by id or external ref                         |
+| `listComments`    | `{ ticketId }`                        | Comments in creation order                                |
+| `postComment`     | `{ ticketId, body }`                  | Created comment                                           |
+| `updateComment`   | `{ ticketId, commentId, body }`       | Updated comment                                           |
+| `moveTicket`      | `{ ticketId, column }`                | `{ ok: true }`                                            |
+| `listAttachments` | `{ ticketId }`                        | Attachment metadata (Jira only)                           |
+| `getAttachment`   | `{ ticketId, attachment, maxBytes? }` | `{ attachment, encoding: 'base64', content }` (Jira only) |
 
 The stdio server runs with an allow-all policy — suitable for local/single-user contexts. For multi-tenant HTTP deployments use `createTrackerMcpServer` from `src/mcp/` and supply your own auth + policy.
 

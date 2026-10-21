@@ -8,6 +8,7 @@ import { getDbPath, initSchema, seedDefaultColumns } from './db'
 import { boardInit, boardReset } from './commands/board'
 import { columnAdd, columnDelete, columnList, columnRename, columnReorder } from './commands/column'
 import { bulkClearDoneCmd, bulkMoveAllCmd } from './commands/bulk'
+import { attachmentGet, attachmentList } from './commands/attachment'
 import { getConfigPath, loadConfig, saveConfig } from './config'
 import { parseBoundedInt, parsePositiveInt } from './transport-input'
 import type { CliOutput, Priority, ProviderCapabilities } from './types'
@@ -64,6 +65,8 @@ function parseCliArgs(argv: string[]) {
       color: { type: 'string' },
       project: { type: 'string' },
       role: { type: 'string' },
+      o: { type: 'string' },
+      'max-bytes': { type: 'string' },
     },
     strict: true,
     allowPositionals: true,
@@ -71,6 +74,12 @@ function parseCliArgs(argv: string[]) {
 }
 
 type CliValues = ReturnType<typeof parseCliArgs>['values']
+
+/** `stdout` carries raw bytes for `-o -`; the envelope then goes to stderr. */
+interface CliResult {
+  output: CliOutput
+  stdout?: Uint8Array
+}
 
 function parsePriority(value: string | undefined): Priority | undefined {
   switch (value) {
@@ -101,13 +110,40 @@ function requireLocalProvider(providerType: string, feature: string): void {
   if (providerType !== 'local') unsupportedOperation(`${feature} is only available in local mode`)
 }
 
+async function routeTaskAttachment(
+  provider: KanbanProvider,
+  capabilities: ProviderCapabilities,
+  positionals: string[],
+  values: CliValues,
+): Promise<CliResult> {
+  const subaction = positionals[2]
+  if (subaction !== 'get') {
+    throw new KanbanError(
+      ErrorCode.UNKNOWN_COMMAND,
+      `Unknown task attachment command '${subaction}'`,
+    )
+  }
+  return attachmentGet(provider, capabilities, {
+    id: positionals[3],
+    nameOrId: positionals[4],
+    output: values.o,
+    maxBytes:
+      values['max-bytes'] === undefined
+        ? undefined
+        : parseBoundedInt(values['max-bytes'], { min: 1, field: '--max-bytes' }),
+  })
+}
+
 async function routeTask(
   provider: KanbanProvider,
+  capabilities: ProviderCapabilities,
   action: string | undefined,
   positionals: string[],
   values: CliValues,
 ): Promise<CliOutput> {
   switch (action) {
+    case 'attachments':
+      return attachmentList(provider, capabilities, { id: positionals[2] })
     case 'add': {
       const title = positionals[2]
       if (!title) throw new KanbanError(ErrorCode.MISSING_ARGUMENT, 'Task title is required')
@@ -363,7 +399,9 @@ async function routeLocalBoard(
   }
 }
 
-async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: number }> {
+async function run(
+  argv: string[],
+): Promise<{ output: CliOutput; exitCode: number; stdout?: Uint8Array }> {
   const { values, positionals } = parseCliArgs(argv)
   if (values.help) {
     return { output: { ok: true, data: { message: HELP_TEXT } }, exitCode: 0 }
@@ -402,7 +440,13 @@ async function run(argv: string[]): Promise<{ output: CliOutput; exitCode: numbe
         }
         break
       case 'task':
-        output = await routeTask(provider, action, positionals, values)
+        if (action === 'attachment') {
+          return {
+            ...(await routeTaskAttachment(provider, capabilities, positionals, values)),
+            exitCode: 0,
+          }
+        }
+        output = await routeTask(provider, capabilities, action, positionals, values)
         break
       case 'comment':
         output = await routeComment(provider, action, positionals)
@@ -458,6 +502,11 @@ Commands:
   task move <id> <column>     Move task to column
   task assign <id> <user>     Assign task
   task prioritize <id> <lvl>  Set priority
+  task attachments <id>       List task attachments (metadata only)
+  task attachment get <id> <name-or-attachment-id>
+                              Download an attachment to a file [-o path] [--max-bytes n]
+                              (default: its filename in the current directory; -o - writes
+                              the bytes to stdout and the JSON envelope to stderr)
 
   comment list <task-id>      List comments on a task
   comment add <task-id> <body> Create a comment
@@ -702,7 +751,12 @@ if (import.meta.main) {
     try {
       const result = await run(argv)
       exitCode = result.exitCode
-      console.info(formatOutput(result.output, pretty))
+      if (result.stdout) {
+        await Bun.write(Bun.stdout, result.stdout)
+        console.error(formatOutput(result.output, pretty))
+      } else {
+        console.info(formatOutput(result.output, pretty))
+      }
     } catch (err) {
       if (err instanceof KanbanError) {
         exitCode = 1

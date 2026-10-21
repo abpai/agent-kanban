@@ -29,6 +29,8 @@ The current default tool set is:
 - `postComment`
 - `updateComment`
 - `moveTicket`
+- `listAttachments`
+- `getAttachment`
 
 ## Protocol revisions
 
@@ -101,6 +103,19 @@ local, Linear, and Jira:
 
 `updateComment` reads the existing comment first so host policy can validate the
 edit against the current body and authoring rules.
+
+## Attachment behavior
+
+`listAttachments({ ticketId })` returns `TaskAttachment` metadata.
+`getAttachment({ ticketId, attachment, maxBytes? })` takes an attachment id or
+exact filename and returns `{ attachment, encoding: 'base64', content }`.
+`maxBytes` defaults to 10 MiB because the bytes travel inside one JSON result.
+Both run the host's `canReadTicket` policy before any provider call.
+
+Only Jira supports attachments. Local and Linear refuse with
+`validation_failed` (from `UNSUPPORTED_OPERATION`). An unknown attachment
+(`NOT_FOUND`) and a refused read (`ATTACHMENT_REFUSED`, for example a declared
+size above `maxBytes`) are also `validation_failed`.
 
 ## Important caveats
 

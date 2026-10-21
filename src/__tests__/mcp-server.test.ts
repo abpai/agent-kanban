@@ -295,6 +295,8 @@ describe.each(['2025-03-26', MODERN_PROTOCOL_VERSION])(
           'postComment',
           'updateComment',
           'moveTicket',
+          'listAttachments',
+          'getAttachment',
         ])
 
         const result = await client.callTool({

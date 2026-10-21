@@ -125,6 +125,7 @@ kanban board view
 | column CRUD                | yes   | no     | no   |
 | bulk operations            | yes   | no     | no   |
 | config edit                | yes   | no     | no   |
+| attachment list/read       | no    | no     | yes  |
 | webhooks                   | no    | yes    | yes  |
 
 Linear tasks carry an `externalRef` (e.g. `TEAM-123`) and a `url`. Commands accept either the internal ID or the external ref.
@@ -140,6 +141,10 @@ Unsupported operations return error code `UNSUPPORTED_OPERATION` with exit code 
 
 Task comments are exposed through the CLI, REST API, and MCP. Dashboard task
 details show the comment count.
+
+Task attachments are exposed through the CLI and MCP. Only Jira stores
+readable task files; in local and Linear modes the attachment commands return
+`UNSUPPORTED_OPERATION` instead of an empty list.
 
 In Linear and Jira modes, webhooks update the cache immediately when configured,
 and the normal poll loop still runs as a fallback so missed deliveries and
@@ -163,16 +168,18 @@ Default columns: `recurring`, `backlog`, `in-progress`, `review`, `done`.
 
 ### task
 
-| Command                               | Description                                      |
-| ------------------------------------- | ------------------------------------------------ |
-| `kanban task add <title>`             | Add a task                                       |
-| `kanban task list`                    | List tasks                                       |
-| `kanban task view <id>`               | View task details                                |
-| `kanban task update <id>`             | Update task fields                               |
-| `kanban task delete <id>`             | Delete a task                                    |
-| `kanban task move <id> <column>`      | Move task to a column                            |
-| `kanban task assign <id> <user>`      | Assign task to a user                            |
-| `kanban task prioritize <id> <level>` | Set priority (`low`, `medium`, `high`, `urgent`) |
+| Command                                                   | Description                                      |
+| --------------------------------------------------------- | ------------------------------------------------ |
+| `kanban task add <title>`                                 | Add a task                                       |
+| `kanban task list`                                        | List tasks                                       |
+| `kanban task view <id>`                                   | View task details                                |
+| `kanban task update <id>`                                 | Update task fields                               |
+| `kanban task delete <id>`                                 | Delete a task                                    |
+| `kanban task move <id> <column>`                          | Move task to a column                            |
+| `kanban task assign <id> <user>`                          | Assign task to a user                            |
+| `kanban task prioritize <id> <level>`                     | Set priority (`low`, `medium`, `high`, `urgent`) |
+| `kanban task attachments <id>`                            | List task attachments (metadata only)            |
+| `kanban task attachment get <id> <name-or-attachment-id>` | Download one attachment to a file                |
 
 **Flags for `task add`:**
 
@@ -197,6 +204,20 @@ Default columns: `recurring`, `backlog`, `in-progress`, `review`, `done`.
 | `--project <name>` | Filter by project                                              |
 | `-l <n>`           | Limit results                                                  |
 | `--sort <field>`   | Sort by: `priority`, `created`, `updated`, `position`, `title` |
+
+**Flags for `task attachment get`:**
+
+| Flag              | Description                                                                                                |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `-o <path>`       | Write to this path, replacing any file there (default: the attachment's filename in the current directory) |
+| `-o -`            | Write the bytes to stdout; the JSON envelope then goes to stderr                                           |
+| `--max-bytes <n>` | Refuse attachments larger than `n` bytes (default: 100 MiB)                                                |
+
+The second argument is an attachment id or an exact filename. A filename shared
+by several attachments is refused with the matching ids. The default path uses
+only the last segment of the provider's filename, refuses dotfile names, and
+never replaces an existing file (`CONFLICT`); pass `-o` to choose the path.
+Success prints `{ "attachment": { ... }, "path": "/abs/path" }`.
 
 **Flags for `task update`:**
 

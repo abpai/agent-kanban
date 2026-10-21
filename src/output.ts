@@ -1,4 +1,4 @@
-import type { CliOutput, BoardView, Task, TaskComment, Column } from './types'
+import type { CliOutput, BoardView, Task, TaskAttachment, TaskComment, Column } from './types'
 
 export function success<T>(data: T): CliOutput<T> {
   return { ok: true, data }
@@ -19,6 +19,8 @@ function formatPrettyData(data: unknown): string {
   if (Array.isArray(data)) {
     if (data.length === 0) return 'No items found.'
     if ('column_id' in data[0]) return data.map(formatTaskLine).join('\n')
+    // Before the comment check: attachments also carry task_id.
+    if ('filename' in data[0]) return data.map(formatAttachmentLine).join('\n')
     if ('task_id' in data[0]) return data.map(formatCommentLine).join('\n')
     if ('position' in data[0]) return data.map(formatColumnLine).join('\n')
     return JSON.stringify(data, null, 2)
@@ -27,6 +29,10 @@ function formatPrettyData(data: unknown): string {
   if ('columns' in data) {
     // SAFETY: The board command produces BoardView; columns distinguishes it from other CLI results.
     return formatBoard(data as BoardView)
+  }
+  if ('attachment' in data && 'path' in data) {
+    // SAFETY: Only `task attachment get` returns an object with attachment and path.
+    return formatAttachmentWrite(data as { attachment: TaskAttachment; path: string })
   }
   if ('column_id' in data) {
     // SAFETY: Task commands return the Task contract, identified by its column_id field.
@@ -94,6 +100,16 @@ function formatCommentDetail(comment: TaskComment): string {
     `Updated: ${comment.updated_at}`,
   ]
   return lines.join('\n')
+}
+
+function formatAttachmentLine(attachment: TaskAttachment): string {
+  const author = attachment.author ? ` @${attachment.author}` : ''
+  return `  ${attachment.id}  ${attachment.filename}  ${attachment.byte_size} bytes  ${attachment.media_type}${author}`
+}
+
+function formatAttachmentWrite(result: { attachment: TaskAttachment; path: string }): string {
+  const target = result.path === '-' ? 'stdout' : result.path
+  return `Wrote ${result.attachment.filename} (${result.attachment.byte_size} bytes) to ${target}`
 }
 
 function formatColumnLine(col: Column): string {
