@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+### Patch Changes
+
+- [#107](https://github.com/abpai/agent-kanban/pull/107) [`2d66839`](https://github.com/abpai/agent-kanban/commit/2d668391af503e9d8449337d9c8834ccef16c220) Thanks [@abpai](https://github.com/abpai)! - Refuse `kanban task attachments` and `kanban task attachment get` before opening the board when the provider has no attachments (local, Linear). The refusal is unchanged (`UNSUPPORTED_OPERATION`), but it no longer creates `./.kanban/board.db` as a side effect.
+
 ## 1.2.0
 
 ### Minor Changes
