@@ -14,7 +14,17 @@ import { parseBoundedInt, parsePositiveInt } from './transport-input'
 import type { CliOutput, Priority, ProviderCapabilities } from './types'
 import { unsupportedOperation } from './providers/errors'
 import { openKanbanRuntime } from './provider-runtime'
-import { WEBHOOK_SECRET_ENV, trackerConfigFromEnv, trackerProviderFromEnv } from './tracker-config'
+import {
+  JIRA_CAPABILITIES,
+  LINEAR_CAPABILITIES,
+  LOCAL_CAPABILITIES,
+} from './providers/capabilities'
+import {
+  WEBHOOK_SECRET_ENV,
+  trackerConfigFromEnv,
+  trackerProviderFromEnv,
+  type TrackerProvider,
+} from './tracker-config'
 import type { KanbanProvider } from './providers/types'
 import type { StartServerOptions } from './server'
 import { MIN_POLLING_SYNC_INTERVAL_MS } from './sync-config'
@@ -104,6 +114,27 @@ function requireCapability(
 ): void {
   if (!capabilities[capability])
     unsupportedOperation(`${feature} is not supported by this provider`)
+}
+
+// Every storage of a provider shares its attachments flag (postgres-local keeps local's).
+const ATTACHMENTS_BY_PROVIDER = {
+  local: LOCAL_CAPABILITIES.attachments,
+  linear: LINEAR_CAPABILITIES.attachments,
+  jira: JIRA_CAPABILITIES.attachments,
+} satisfies Record<TrackerProvider, boolean>
+
+/**
+ * Refuses attachment commands before the runtime opens: opening a local runtime
+ * creates ./.kanban/board.db, and a refused read should leave nothing behind.
+ */
+function refuseUnsupportedAttachments(positionals: string[]): void {
+  const isAttachmentCommand =
+    positionals[0] === 'task' &&
+    (positionals[1] === 'attachments' || positionals[1] === 'attachment')
+  const providerType = trackerProviderFromEnv(process.env)
+  if (isAttachmentCommand && !ATTACHMENTS_BY_PROVIDER[providerType]) {
+    unsupportedOperation(`Task attachments are not supported by the ${providerType} provider`)
+  }
 }
 
 function requireLocalProvider(providerType: string, feature: string): void {
@@ -407,6 +438,7 @@ async function run(
     return { output: { ok: true, data: { message: HELP_TEXT } }, exitCode: 0 }
   }
 
+  refuseUnsupportedAttachments(positionals)
   const actionRequiresExplicitInit = positionals[0] === 'board' && positionals[1] === 'init'
   const runtime = await openKanbanRuntime({
     dbPath: values.db ?? getDbPath(),
