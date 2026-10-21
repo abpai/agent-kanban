@@ -33,8 +33,10 @@ test.each(['legacy', 'modern'])(
       expect(client.getProtocolEra()).toBe(era)
       const tools = await client.listTools()
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
+        'getAttachment',
         'getBoard',
         'getTicket',
+        'listAttachments',
         'listComments',
         'moveTicket',
         'postComment',

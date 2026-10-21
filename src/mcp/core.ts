@@ -1,5 +1,6 @@
 import type { KanbanProvider } from '../providers/types'
-import type { BoardView, Task, TaskComment } from '../types'
+import type { BoardView, Task, TaskAttachment, TaskComment } from '../types'
+import { readTaskAttachment } from '../use-cases'
 import { TrackerMcpError, toTrackerMcpError } from './errors'
 import type { TrackerMcpHooks, TrackerMcpPolicy } from './types'
 
@@ -28,14 +29,37 @@ export interface TrackerCore<TScope> {
       body: string
     }): Promise<TaskComment>
     moveTicket(input: { scope: TScope; ticketId: string; column: string }): Promise<void>
+    listAttachments(input: { scope: TScope; ticketId: string }): Promise<TaskAttachment[]>
+    getAttachment(input: {
+      scope: TScope
+      ticketId: string
+      attachment: string
+      maxBytes?: number
+    }): Promise<AttachmentContent>
   }
 }
+
+/** Attachment bytes travel inside the JSON tool result, so they are base64-encoded. */
+interface AttachmentContent {
+  attachment: TaskAttachment
+  encoding: 'base64'
+  content: string
+}
+
+/**
+ * Default and ceiling for one MCP attachment read. The result carries the
+ * base64 content twice (text content and structuredContent), so 3 MiB of
+ * bytes is about 8 MiB on the wire, under the SDK's 10 MiB stdio buffer.
+ */
+export const MCP_ATTACHMENT_MAX_BYTES = 3 * 1024 * 1024
 
 type ToolResultMeta = {
   commentCount?: number
   taskCount?: number
   commentId?: string
   movedTo?: string
+  attachmentCount?: number
+  attachmentId?: string
 }
 
 interface RunToolInput<TScope, TResult> {
@@ -215,6 +239,47 @@ export function createTrackerCore<TScope>(input: {
             await provider.moveTask(ticketId, column)
           },
           resultMeta: { movedTo: column },
+        })
+      },
+
+      listAttachments({ scope, ticketId }) {
+        return runTool({
+          scope,
+          tool: 'listAttachments',
+          ticketId,
+          execute: async () => {
+            await policy.canReadTicket(scope, ticketId)
+            return provider.listAttachments(ticketId)
+          },
+          resultMeta: (attachments) => ({ attachmentCount: attachments.length }),
+        })
+      },
+
+      getAttachment({ scope, ticketId, attachment, maxBytes }) {
+        return runTool({
+          scope,
+          tool: 'getAttachment',
+          ticketId,
+          execute: async () => {
+            if (maxBytes !== undefined && maxBytes > MCP_ATTACHMENT_MAX_BYTES) {
+              throw new TrackerMcpError({
+                code: 'validation_failed',
+                publicMessage: `maxBytes must be at most ${MCP_ATTACHMENT_MAX_BYTES}; use the CLI for larger attachments`,
+              })
+            }
+            await policy.canReadTicket(scope, ticketId)
+            const read = await readTaskAttachment(provider, {
+              idOrRef: ticketId,
+              nameOrId: attachment,
+              maxBytes: maxBytes ?? MCP_ATTACHMENT_MAX_BYTES,
+            })
+            return {
+              attachment: read.attachment,
+              encoding: 'base64' as const,
+              content: Buffer.from(read.bytes).toString('base64'),
+            }
+          },
+          resultMeta: (result) => ({ attachmentId: result.attachment.id }),
         })
       },
     },

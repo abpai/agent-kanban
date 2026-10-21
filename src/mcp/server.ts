@@ -13,7 +13,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/server'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv'
-import type { TrackerCore } from './core'
+import { MCP_ATTACHMENT_MAX_BYTES, type TrackerCore } from './core'
 import { TrackerMcpError, toMcpError, toTrackerMcpError, trackerMcpJsonRpcCode } from './errors'
 import type { TrackerMcpAuthResolver, TrackerMcpServer, TrackerMcpTool } from './types'
 import { VERSION } from '../version'
@@ -154,6 +154,38 @@ export function defaultTools<TScope>(core: TrackerCore<TScope>): TrackerMcpTool<
           column: requiredStringArgument(args.column, 'column'),
         }),
     },
+    {
+      name: 'listAttachments',
+      description: 'List file attachments on a ticket (metadata only).',
+      inputSchema: ticketIdSchema(),
+      handler: ({ scope, args }) =>
+        core.handlers.listAttachments({
+          scope,
+          ticketId: requiredStringArgument(args.ticketId, 'ticketId'),
+        }),
+    },
+    {
+      name: 'getAttachment',
+      description:
+        'Read one ticket attachment by id or exact filename. Returns its metadata and base64 content; maxBytes defaults to and is capped at 3 MiB.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ticketId: { type: 'string' },
+          attachment: { type: 'string', description: 'Attachment id or exact filename' },
+          maxBytes: { type: 'integer', minimum: 1, maximum: MCP_ATTACHMENT_MAX_BYTES },
+        },
+        required: ['ticketId', 'attachment'],
+        additionalProperties: false,
+      },
+      handler: ({ scope, args }) =>
+        core.handlers.getAttachment({
+          scope,
+          ticketId: requiredStringArgument(args.ticketId, 'ticketId'),
+          attachment: requiredStringArgument(args.attachment, 'attachment'),
+          maxBytes: optionalIntegerArgument(args.maxBytes, 'maxBytes'),
+        }),
+    },
   ]
 }
 
@@ -163,6 +195,16 @@ function requiredStringArgument(value: unknown, field: string): string {
   throw new TrackerMcpError({
     code: 'validation_failed',
     publicMessage: `${field} must be a string`,
+  })
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Decodes one optional integer from a schema-defined MCP argument object.
+function optionalIntegerArgument(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value
+  throw new TrackerMcpError({
+    code: 'validation_failed',
+    publicMessage: `${field} must be an integer`,
   })
 }
 

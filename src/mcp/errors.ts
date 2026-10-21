@@ -35,6 +35,8 @@ function providerError(code: ErrorCodeValue): TrackerMcpErrorCode {
       return 'ticket_not_found'
     case ErrorCode.COMMENT_NOT_FOUND:
       return 'comment_not_found'
+    // NOT_FOUND and ATTACHMENT_REFUSED name an attachment outside the ticket or
+    // one refused for its size: the argument is wrong and a retry cannot succeed.
     case ErrorCode.COLUMN_NOT_FOUND:
     case ErrorCode.INVALID_METADATA:
     case ErrorCode.INVALID_POSITION:
@@ -43,6 +45,9 @@ function providerError(code: ErrorCodeValue): TrackerMcpErrorCode {
     case ErrorCode.MISSING_ARGUMENT:
     case ErrorCode.UNSUPPORTED_OPERATION:
     case ErrorCode.CONFLICT:
+    case ErrorCode.INVALID_ARGUMENT:
+    case ErrorCode.NOT_FOUND:
+    case ErrorCode.ATTACHMENT_REFUSED:
       return 'validation_failed'
     case ErrorCode.PROVIDER_AUTH_FAILED:
     case ErrorCode.PROVIDER_RATE_LIMITED:
