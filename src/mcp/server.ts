@@ -13,7 +13,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/server'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv'
-import type { TrackerCore } from './core'
+import { MCP_ATTACHMENT_MAX_BYTES, type TrackerCore } from './core'
 import { TrackerMcpError, toMcpError, toTrackerMcpError, trackerMcpJsonRpcCode } from './errors'
 import type { TrackerMcpAuthResolver, TrackerMcpServer, TrackerMcpTool } from './types'
 import { VERSION } from '../version'
@@ -167,13 +167,13 @@ export function defaultTools<TScope>(core: TrackerCore<TScope>): TrackerMcpTool<
     {
       name: 'getAttachment',
       description:
-        'Read one ticket attachment by id or exact filename. Returns its metadata and base64 content; maxBytes defaults to 10 MiB.',
+        'Read one ticket attachment by id or exact filename. Returns its metadata and base64 content; maxBytes defaults to and is capped at 3 MiB.',
       inputSchema: {
         type: 'object',
         properties: {
           ticketId: { type: 'string' },
           attachment: { type: 'string', description: 'Attachment id or exact filename' },
-          maxBytes: { type: 'integer', minimum: 1 },
+          maxBytes: { type: 'integer', minimum: 1, maximum: MCP_ATTACHMENT_MAX_BYTES },
         },
         required: ['ticketId', 'attachment'],
         additionalProperties: false,

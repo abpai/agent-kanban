@@ -46,8 +46,12 @@ interface AttachmentContent {
   content: string
 }
 
-/** Base64 inflates the bytes by a third inside one JSON result, so MCP reads stay small by default. */
-const DEFAULT_MCP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+/**
+ * Default and ceiling for one MCP attachment read. The result carries the
+ * base64 content twice (text content and structuredContent), so 3 MiB of
+ * bytes is about 8 MiB on the wire, under the SDK's 10 MiB stdio buffer.
+ */
+export const MCP_ATTACHMENT_MAX_BYTES = 3 * 1024 * 1024
 
 type ToolResultMeta = {
   commentCount?: number
@@ -257,11 +261,17 @@ export function createTrackerCore<TScope>(input: {
           tool: 'getAttachment',
           ticketId,
           execute: async () => {
+            if (maxBytes !== undefined && maxBytes > MCP_ATTACHMENT_MAX_BYTES) {
+              throw new TrackerMcpError({
+                code: 'validation_failed',
+                publicMessage: `maxBytes must be at most ${MCP_ATTACHMENT_MAX_BYTES}; use the CLI for larger attachments`,
+              })
+            }
             await policy.canReadTicket(scope, ticketId)
             const read = await readTaskAttachment(provider, {
               idOrRef: ticketId,
               nameOrId: attachment,
-              maxBytes: maxBytes ?? DEFAULT_MCP_ATTACHMENT_MAX_BYTES,
+              maxBytes: maxBytes ?? MCP_ATTACHMENT_MAX_BYTES,
             })
             return {
               attachment: read.attachment,

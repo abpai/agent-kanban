@@ -324,6 +324,25 @@ describe('kanban task attachment get (Jira)', () => {
     expect(existsSync(join(dir, '.npmrc'))).toBe(false)
   })
 
+  test('a remote filename with control characters is refused at the default path', async () => {
+    useJira()
+    jiraAttachments = [
+      {
+        id: 'att-1',
+        filename: 'report\u001b[2J\nFORGED.txt',
+        mimeType: 'text/plain',
+        size: specBytes.byteLength,
+      },
+    ]
+
+    const err = await expectKanbanError(
+      run(['--db', dbPath, 'task', 'attachment', 'get', 'ENG-1', 'att-1']),
+      ErrorCode.INVALID_ARGUMENT,
+    )
+    expect(err.message).not.toContain('\u001b')
+    expect(err.message).not.toContain('\n')
+  })
+
   test('an unknown name or id is NOT_FOUND and downloads nothing', async () => {
     useJira()
 
@@ -431,6 +450,17 @@ describe('--pretty attachment output', () => {
     )
     expect(formatOutput(success({ attachment, path: '-' }), true)).toBe(
       'Wrote spec.md (17 bytes) to stdout',
+    )
+  })
+
+  test('escapes control characters in remote metadata', () => {
+    const hostile = { ...attachment, filename: 'report\u001b[2J\nFORGED.txt', author: 'x\ry' }
+
+    expect(formatOutput(success([hostile]), true)).toBe(
+      '  att-1  report\\u001b[2J\\u000aFORGED.txt  17 bytes  text/markdown @x\\u000dy',
+    )
+    expect(formatOutput(success({ attachment: hostile, path: '-' }), true)).toBe(
+      'Wrote report\\u001b[2J\\u000aFORGED.txt (17 bytes) to stdout',
     )
   })
 })

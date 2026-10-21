@@ -27,18 +27,27 @@ function requireAttachments(provider: KanbanProvider, capabilities: ProviderCapa
 
 /**
  * The provider's filename is remote input. Only its last path segment is used,
- * and a dotfile name is refused so a download cannot plant config such as
- * `.npmrc` or `.envrc` in the working directory.
+ * a dotfile name is refused so a download cannot plant config such as `.npmrc`
+ * or `.envrc` in the working directory, and control characters are refused so
+ * the name cannot rewrite the terminal when it is printed.
  */
 function defaultFilename(filename: string): string {
   const name = basename(filename.replaceAll('\\', '/'))
-  if (!name || name.startsWith('.') || name.includes('\0')) {
+  if (!name || name.startsWith('.') || hasControlCharacter(name)) {
     throw new KanbanError(
       ErrorCode.INVALID_ARGUMENT,
-      `Attachment filename '${filename}' is not safe to write as-is; pass -o <path>`,
+      `Attachment filename ${JSON.stringify(filename)} is not safe to write as-is; pass -o <path>`,
     )
   }
   return name
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
 }
 
 function writeAttachment(path: string, bytes: Uint8Array, overwrite: boolean): void {

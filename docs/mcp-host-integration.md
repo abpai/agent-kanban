@@ -98,6 +98,11 @@ interface TrackerMcpPolicy<TScope> {
 Note `filterTask`: without it, `getBoard` exposes every ticket and bypasses
 per-ticket `canReadTicket` gates.
 
+`canReadTicket` also gates `listAttachments` and `getAttachment`, so a host on
+`tools: 'default'` exposes attachment downloads to every scope that can read the
+ticket. Build a custom `tools` array without them if a scope should see the
+ticket but not its files.
+
 ## 3. Ticket-scoped tools
 
 The core is ticket-agnostic, but a host usually wants agents to operate on

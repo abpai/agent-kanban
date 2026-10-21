@@ -109,7 +109,9 @@ edit against the current body and authoring rules.
 `listAttachments({ ticketId })` returns `TaskAttachment` metadata.
 `getAttachment({ ticketId, attachment, maxBytes? })` takes an attachment id or
 exact filename and returns `{ attachment, encoding: 'base64', content }`.
-`maxBytes` defaults to 10 MiB because the bytes travel inside one JSON result.
+`maxBytes` defaults to and is capped at 3 MiB: the result carries the base64
+content twice (text and `structuredContent`), and the SDK's stdio buffer holds
+10 MiB per message. Use `kanban task attachment get` for larger files.
 Both run the host's `canReadTicket` policy before any provider call.
 
 Only Jira supports attachments. Local and Linear refuse with

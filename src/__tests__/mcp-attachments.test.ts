@@ -2,7 +2,8 @@ import { mockFetch } from './helpers/fetch'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { addTask, initSchema, seedDefaultColumns } from '../db'
-import { createTrackerCore } from '../mcp/core'
+import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from '@modelcontextprotocol/client'
+import { createTrackerCore, MCP_ATTACHMENT_MAX_BYTES } from '../mcp/core'
 import { TrackerMcpError } from '../mcp/errors'
 import { defaultTools } from '../mcp/server'
 import type { TrackerMcpHooks, TrackerMcpPolicy } from '../mcp/types'
@@ -40,6 +41,7 @@ const allowAll: TrackerMcpPolicy<TestScope> = {
 
 let requests: string[]
 let originalFetch: typeof fetch
+let attachmentBytes: Uint8Array
 
 function makeJiraProvider(): JiraProvider {
   const db = new Database(':memory:')
@@ -91,23 +93,70 @@ async function trackerError(pending: Promise<unknown>): Promise<TrackerMcpError>
 
 beforeEach(() => {
   requests = []
+  attachmentBytes = specBytes
   originalFetch = globalThis.fetch
   globalThis.fetch = mockFetch(async (input: string | URL | Request) => {
     const url = input instanceof Request ? input.url : input.toString()
     requests.push(url)
     if (url === ISSUE_URL) {
       const attachment = [
-        { id: 'att-1', filename: 'spec.md', mimeType: 'text/markdown', size: specBytes.length },
+        {
+          id: 'att-1',
+          filename: 'spec.md',
+          mimeType: 'text/markdown',
+          size: attachmentBytes.length,
+        },
       ]
       return Response.json({ id: '10001', key: 'ENG-1', fields: { attachment } })
     }
-    if (url === CONTENT_URL) return new Response(specBytes)
+    if (url === CONTENT_URL) return new Response(attachmentBytes)
     throw new Error(`Unexpected Jira request: ${url}`)
   })
 })
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+})
+
+describe('MCP attachment size limit', () => {
+  test('a read at the cap still fits one stdio message', async () => {
+    attachmentBytes = new Uint8Array(MCP_ATTACHMENT_MAX_BYTES)
+    const core = createTrackerCore({ provider: makeJiraProvider(), policy: allowAll })
+
+    const result = await core.handlers.getAttachment({
+      scope,
+      ticketId: 'ENG-1',
+      attachment: 'att-1',
+    })
+    // Same shape the server sends: the result as text content and again as structuredContent.
+    const wire = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [{ type: 'text', text: JSON.stringify(result) }],
+        structuredContent: { result },
+      },
+    })
+
+    expect(Buffer.byteLength(wire) + 1).toBeLessThan(STDIO_DEFAULT_MAX_BUFFER_SIZE)
+  })
+
+  test('maxBytes above the cap is refused before any Jira request', async () => {
+    const core = createTrackerCore({ provider: makeJiraProvider(), policy: allowAll })
+
+    const err = await trackerError(
+      core.handlers.getAttachment({
+        scope,
+        ticketId: 'ENG-1',
+        attachment: 'att-1',
+        maxBytes: MCP_ATTACHMENT_MAX_BYTES + 1,
+      }),
+    )
+
+    expect(err.code).toBe('validation_failed')
+    expect(err.publicMessage).toContain('use the CLI')
+    expect(requests).toEqual([])
+  })
 })
 
 describe('MCP attachment handlers (Jira)', () => {

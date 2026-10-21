@@ -102,14 +102,24 @@ function formatCommentDetail(comment: TaskComment): string {
   return lines.join('\n')
 }
 
+/** Attachment metadata is remote input; escape control characters so it cannot rewrite the terminal. */
+function printable(value: string): string {
+  let out = ''
+  for (const char of value) {
+    const code = char.charCodeAt(0)
+    out += code < 0x20 || code === 0x7f ? `\\u${code.toString(16).padStart(4, '0')}` : char
+  }
+  return out
+}
+
 function formatAttachmentLine(attachment: TaskAttachment): string {
-  const author = attachment.author ? ` @${attachment.author}` : ''
-  return `  ${attachment.id}  ${attachment.filename}  ${attachment.byte_size} bytes  ${attachment.media_type}${author}`
+  const author = attachment.author ? ` @${printable(attachment.author)}` : ''
+  return `  ${printable(attachment.id)}  ${printable(attachment.filename)}  ${attachment.byte_size} bytes  ${printable(attachment.media_type)}${author}`
 }
 
 function formatAttachmentWrite(result: { attachment: TaskAttachment; path: string }): string {
-  const target = result.path === '-' ? 'stdout' : result.path
-  return `Wrote ${result.attachment.filename} (${result.attachment.byte_size} bytes) to ${target}`
+  const target = result.path === '-' ? 'stdout' : printable(result.path)
+  return `Wrote ${printable(result.attachment.filename)} (${result.attachment.byte_size} bytes) to ${target}`
 }
 
 function formatColumnLine(col: Column): string {
