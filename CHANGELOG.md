@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0
+
+### Minor Changes
+
+- [#109](https://github.com/abpai/agent-kanban/pull/109) [`0a69425`](https://github.com/abpai/agent-kanban/commit/0a694255570bb1a5489599617be9f7acce4a3c25) Thanks [@abpai](https://github.com/abpai)! - Expose taskDescriptionText from provider-runtime so consumers can confirm task description writes against the provider's write/read representation without duplicating Jira's ADF conversion.
+
 ## 1.2.1
 
 ### Patch Changes
