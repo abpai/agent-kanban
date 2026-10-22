@@ -7,7 +7,8 @@ import type { KanbanProvider } from './providers/types'
 import type { ProviderCapabilities } from './types'
 import { resolveKanbanStorageConfig } from './storage-config'
 import type { KanbanStorageConfig } from './storage-config'
-import { trackerConfigFromEnv, type TrackerConfig } from './tracker-config'
+import { trackerConfigFromEnv, type TrackerConfig, type TrackerProvider } from './tracker-config'
+import { adfToPlainText, plainTextToAdf } from './providers/jira-adf'
 
 export interface KanbanRuntime {
   provider: KanbanProvider
@@ -78,4 +79,9 @@ export async function openKanbanRuntime(
       db.close()
     },
   }
+}
+
+/** The task description produced by this provider's write/read conversion. */
+export function taskDescriptionText(provider: TrackerProvider, description: string): string {
+  return provider === 'jira' ? adfToPlainText(plainTextToAdf(description)) : description
 }
