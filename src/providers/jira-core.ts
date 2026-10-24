@@ -1,3 +1,4 @@
+import type { JiraIssueSnapshot, JiraIssueWriteOptions } from './jira-issue-snapshot'
 import { ErrorCode, KanbanError } from '../errors'
 import type {
   ActivityEntry,
@@ -138,25 +139,7 @@ export interface JiraCachePort {
   replaceIssueTypes(types: Array<{ id: string; name: string }>, prune: boolean): Promise<void>
 
   // Issue writes
-  upsertIssues(
-    issues: Array<{
-      id: string
-      key: string
-      summary: string
-      descriptionText: string
-      statusId: string
-      priorityName?: string | null
-      issueTypeName?: string | null
-      assigneeAccountId?: string | null
-      assigneeName?: string | null
-      labels?: string[] | null
-      commentCount?: number | null
-      projectKey: string
-      url?: string | null
-      createdAt: string
-      updatedAt: string
-    }>,
-  ): Promise<void>
+  upsertIssues(issues: JiraIssueSnapshot[], options?: JiraIssueWriteOptions): Promise<string[]>
   deleteIssue(idOrKey: string): Promise<void>
   pruneIssuesMissingUpstream(projectKey: string, upstreamIssueIds: string[]): Promise<void>
   adjustIssueCommentCount(idOrKey: string, delta: number): Promise<void>
@@ -349,7 +332,7 @@ export class JiraProviderCore implements KanbanProvider {
         nextPageToken,
       })
 
-      await this.cache.upsertIssues(
+      await this.cacheIssueSnapshots(
         page.issues.map((issue) => toCacheIssue(issue, this.config.baseUrl, project.key)),
       )
 
@@ -632,6 +615,13 @@ export class JiraProviderCore implements KanbanProvider {
     }
   }
 
+  private async cacheIssueSnapshots(issues: JiraIssueSnapshot[]): Promise<void> {
+    const conflicts = await this.cache.upsertIssues(issues)
+    await mapWithConcurrency(conflicts, 5, async (key) => {
+      await this.hydrateIssueByKey(key)
+    })
+  }
+
   // Read-after-write via the direct issue endpoint. Unlike JQL search (used by
   // sync()), GET /issue/{key} has no search-index lag, so a just-created or
   // just-transitioned issue is reflected immediately. This replaces the previous
@@ -644,9 +634,10 @@ export class JiraProviderCore implements KanbanProvider {
     // anomaly (the upsert above did not land), not an ordinary not-found — surface
     // it rather than threading an unreachable null through every caller.
     const issue = await this.client.getIssue(key)
-    await this.cache.upsertIssues([
-      toCacheIssue(issue, this.config.baseUrl, this.config.projectKey),
-    ])
+    await this.cache.upsertIssues(
+      [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey)],
+      { authoritative: true },
+    )
     // Ingest the changelog like the sync loop does, so a just-applied transition
     // is recorded in jira_activity immediately (backs getActivity and the
     // poll-based `moved` trigger) rather than waiting for the next unthrottled
@@ -1032,7 +1023,7 @@ export class JiraProviderCore implements KanbanProvider {
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
         })
       }
-      await this.cache.upsertIssues([
+      await this.cacheIssueSnapshots([
         toCacheIssue(issue, this.config.baseUrl, this.config.projectKey),
       ])
       if (event === 'jira:issue_updated') {

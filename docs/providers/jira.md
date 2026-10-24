@@ -140,6 +140,17 @@ uses the node set above. Richer content (panels, media, status lozenges, etc.)
 is dropped on read. This is documented behavior, not a silent failure: expect
 to lose those nodes if you round-trip through `agent-kanban`.
 
+## Cache freshness
+
+SQLite and Postgres retain the newest task snapshot by Jira's `updated` instant,
+including when a delayed polling result or webhook arrives after a successful
+write. Duplicate rows in a polling batch follow the same rule. Repeated snapshots
+are harmless; conflicting snapshots at the same instant trigger a direct
+`GET /issue` read instead of choosing a column by arrival order. If that read
+fails, the existing cache state is retained and the sync or webhook reports the
+failure for retry. A genuinely newer move, including a move back to Backlog,
+still updates the cache.
+
 ## Limitations
 
 1. **Jira Cloud only.** Jira Server and Data Center are not supported; their

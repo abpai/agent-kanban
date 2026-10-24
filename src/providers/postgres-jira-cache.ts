@@ -1,3 +1,8 @@
+import {
+  prepareJiraIssueSnapshots,
+  type JiraIssueSnapshot,
+  type JiraIssueWriteOptions,
+} from './jira-issue-snapshot'
 import type { Sql } from 'postgres'
 
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
@@ -313,53 +318,29 @@ export class PostgresJiraCache implements JiraCachePort {
   }
 
   async upsertIssues(
-    issues: Array<{
-      id: string
-      key: string
-      summary: string
-      descriptionText: string
-      statusId: string
-      priorityName?: string | null
-      issueTypeName?: string | null
-      assigneeAccountId?: string | null
-      assigneeName?: string | null
-      labels?: string[] | null
-      commentCount?: number | null
-      projectKey: string
-      url?: string | null
-      createdAt: string
-      updatedAt: string
-    }>,
-  ): Promise<void> {
-    if (issues.length === 0) return
-    // A sync batch can repeat an issue id (an issue updated while pagination is
-    // in flight shows up on two pages); the batched ON CONFLICT DO UPDATE
-    // statement errors on intra-statement duplicates, so keep the last
-    // occurrence — matching the old row-by-row and SQLite last-wins behavior.
-    const rows = [
-      ...new Map(
-        issues.map((issue) => [
-          issue.id,
-          {
-            id: issue.id,
-            key: issue.key,
-            summary: issue.summary,
-            description_text: issue.descriptionText,
-            status_id: issue.statusId,
-            priority_name: issue.priorityName ?? '',
-            issue_type_name: issue.issueTypeName ?? '',
-            assignee_account_id: issue.assigneeAccountId ?? null,
-            assignee_name: issue.assigneeName ?? '',
-            labels: JSON.stringify(issue.labels ?? []),
-            comment_count: issue.commentCount ?? 0,
-            project_key: issue.projectKey,
-            url: issue.url ?? null,
-            created_at: issue.createdAt,
-            updated_at: issue.updatedAt,
-          },
-        ]),
-      ).values(),
-    ]
+    issues: JiraIssueSnapshot[],
+    options: JiraIssueWriteOptions = {},
+  ): Promise<string[]> {
+    if (issues.length === 0) return []
+    const prepared = prepareJiraIssueSnapshots(issues)
+    const conflicts = new Set(options.authoritative ? [] : prepared.conflicts)
+    const rows = prepared.issues.map((issue) => ({
+      id: issue.id,
+      key: issue.key,
+      summary: issue.summary,
+      description_text: issue.descriptionText,
+      status_id: issue.statusId,
+      priority_name: issue.priorityName ?? '',
+      issue_type_name: issue.issueTypeName ?? '',
+      assignee_account_id: issue.assigneeAccountId ?? null,
+      assignee_name: issue.assigneeName ?? '',
+      labels: JSON.stringify(issue.labels ?? []),
+      comment_count: issue.commentCount ?? 0,
+      project_key: issue.projectKey,
+      url: issue.url ?? null,
+      created_at: issue.createdAt,
+      updated_at: issue.updatedAt,
+    }))
     await this.sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
       await tx`
@@ -402,8 +383,29 @@ export class PostgresJiraCache implements JiraCachePort {
           url = EXCLUDED.url,
           created_at = EXCLUDED.created_at,
           updated_at = EXCLUDED.updated_at
+        WHERE EXCLUDED.updated_at::timestamptz > jira_issues.updated_at::timestamptz
+           OR (${options.authoritative === true} AND EXCLUDED.updated_at::timestamptz = jira_issues.updated_at::timestamptz)
       `
+      if (!options.authoritative) {
+        const equalConflicts = await tx<{ key: string }[]>`
+          SELECT stored.key FROM jira_issues stored
+          JOIN jsonb_to_recordset(${recordsetJson(tx, rows)}) AS incoming(
+            id text, key text, summary text, description_text text, status_id text,
+            priority_name text, issue_type_name text, assignee_account_id text, assignee_name text,
+            labels text, comment_count integer, project_key text, url text, updated_at text
+          ) ON stored.id = incoming.id
+          WHERE stored.updated_at::timestamptz = incoming.updated_at::timestamptz
+            AND (stored.key, stored.summary, stored.description_text, stored.status_id,
+                 stored.priority_name, stored.issue_type_name, stored.assignee_account_id,
+                 stored.assignee_name, stored.labels, stored.comment_count, stored.project_key, stored.url)
+             IS DISTINCT FROM (incoming.key, incoming.summary, incoming.description_text, incoming.status_id,
+                 incoming.priority_name, incoming.issue_type_name, incoming.assignee_account_id,
+                 incoming.assignee_name, incoming.labels, incoming.comment_count, incoming.project_key, incoming.url)
+        `
+        for (const row of equalConflicts) conflicts.add(row.key)
+      }
     })
+    return [...conflicts]
   }
 
   async deleteIssue(idOrKey: string): Promise<void> {

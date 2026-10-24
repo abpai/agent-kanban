@@ -1,3 +1,8 @@
+import {
+  prepareJiraIssueSnapshots,
+  type JiraIssueSnapshot,
+  type JiraIssueWriteOptions,
+} from './jira-issue-snapshot'
 import type { Database } from 'bun:sqlite'
 import { normalizeColumnName } from '../column-roles'
 import { ErrorCode, KanbanError } from '../errors'
@@ -372,26 +377,22 @@ export function replaceJiraIssueTypes(
   run()
 }
 
+// Jira emits offsets like +0200; SQLite's date functions require +02:00.
+function jiraUpdatedAtSql(
+  value: 'excluded.updated_at' | 'jira_issues.updated_at' | 'updated_at' | '$updated_at',
+): string {
+  return `julianday(CASE WHEN substr(${value}, -5, 1) IN ('+', '-')
+    THEN substr(${value}, 1, length(${value}) - 2) || ':' || substr(${value}, -2)
+    ELSE ${value} END)`
+}
+
 export function upsertJiraIssues(
   db: Database,
-  issues: Array<{
-    id: string
-    key: string
-    summary: string
-    descriptionText: string
-    statusId: string
-    priorityName?: string | null
-    issueTypeName?: string | null
-    assigneeAccountId?: string | null
-    assigneeName?: string | null
-    labels?: string[] | null
-    commentCount?: number | null
-    projectKey: string
-    url?: string | null
-    createdAt: string
-    updatedAt: string
-  }>,
-): void {
+  issues: JiraIssueSnapshot[],
+  options: JiraIssueWriteOptions = {},
+): string[] {
+  const prepared = prepareJiraIssueSnapshots(issues)
+  const conflicts = new Set(options.authoritative ? [] : prepared.conflicts)
   const stmt = db.prepare(
     `INSERT INTO jira_issues (
       id, key, summary, description_text, status_id, priority_name, issue_type_name,
@@ -414,10 +415,36 @@ export function upsertJiraIssues(
       project_key = excluded.project_key,
       url = excluded.url,
       created_at = excluded.created_at,
-      updated_at = excluded.updated_at`,
+      updated_at = excluded.updated_at
+    WHERE ${jiraUpdatedAtSql('excluded.updated_at')} > ${jiraUpdatedAtSql('jira_issues.updated_at')}
+       OR ($authoritative AND ${jiraUpdatedAtSql('excluded.updated_at')} = ${jiraUpdatedAtSql('jira_issues.updated_at')})`,
   )
-  for (const issue of issues) {
-    stmt.run({
+  const conflict = db.query<
+    { key: string },
+    {
+      $id: string
+      $updated_at: string
+      $key: string
+      $summary: string
+      $description_text: string
+      $status_id: string
+      $priority_name: string
+      $issue_type_name: string
+      $assignee_account_id: string | null
+      $assignee_name: string
+      $labels: string
+      $comment_count: number
+      $project_key: string
+      $url: string | null
+    }
+  >(`SELECT key FROM jira_issues
+    WHERE id = $id AND ${jiraUpdatedAtSql('updated_at')} = ${jiraUpdatedAtSql('$updated_at')}
+      AND (key, summary, description_text, status_id, priority_name, issue_type_name,
+           assignee_account_id, assignee_name, labels, comment_count, project_key, url)
+       IS NOT ($key, $summary, $description_text, $status_id, $priority_name, $issue_type_name,
+           $assignee_account_id, $assignee_name, $labels, $comment_count, $project_key, $url)`)
+  for (const issue of prepared.issues) {
+    const values = {
       $id: issue.id,
       $key: issue.key,
       $summary: issue.summary,
@@ -431,10 +458,16 @@ export function upsertJiraIssues(
       $comment_count: issue.commentCount ?? 0,
       $project_key: issue.projectKey,
       $url: issue.url ?? null,
-      $created_at: issue.createdAt,
       $updated_at: issue.updatedAt,
+    }
+    stmt.run({
+      ...values,
+      $created_at: issue.createdAt,
+      $authoritative: options.authoritative ? 1 : 0,
     })
+    if (!options.authoritative && conflict.get(values)) conflicts.add(issue.key)
   }
+  return [...conflicts]
 }
 
 export function deleteJiraIssue(db: Database, idOrKey: string): void {
