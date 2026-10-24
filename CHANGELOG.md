@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1
+
+### Patch Changes
+
+- [#111](https://github.com/abpai/agent-kanban/pull/111) [`06fe594`](https://github.com/abpai/agent-kanban/commit/06fe5941059e8dcc44c2cdb9fc91b7affbce1db7) Thanks [@abpai](https://github.com/abpai)! - Prevent delayed Jira polling or webhook snapshots from overwriting newer cached task state. Keep the newest version in duplicate batches, resolve conflicting equal-version snapshots through a direct issue read, and preserve legitimate newer column changes in SQLite and Postgres.
+
 ## 1.3.0
 
 ### Minor Changes
