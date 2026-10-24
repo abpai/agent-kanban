@@ -1085,3 +1085,77 @@ test('a failed activity read stays retryable even after the issue was cached', a
   await provider.listTasks()
   expect(reads).toBe(2)
 })
+
+test('a created task keeps its confirmed column through a lagging search and conflicting webhook', async () => {
+  const backlog = makeIssue({ id: '10001', key: 'ENG-1', statusId: '10001' })
+  let current = backlog
+  let visibleInSearch = false
+  let directReads = 0
+  let failReadback = false
+  const { provider } = makeProvider([
+    {
+      match: (url) => /\/issue\/ENG-1\/transitions$/.test(url),
+      handler: (_url, init) => {
+        if (init?.method === 'POST') {
+          current = makeIssue({
+            id: '10001',
+            key: 'ENG-1',
+            statusId: '10002',
+            updated: '2026-01-03T00:00:00Z',
+          })
+          return new Response(null, { status: 204 })
+        }
+        return Response.json({
+          transitions: [{ id: 'transition-todo', name: 'ToDo', to: { id: '10002', name: 'ToDo' } }],
+        })
+      },
+    },
+    {
+      match: (url) => url.endsWith('/rest/api/3/issue'),
+      handler: () => {
+        visibleInSearch = true
+        return Response.json({ id: '10001', key: 'ENG-1' })
+      },
+    },
+    {
+      match: (url) => /\/rest\/api\/3\/issue\/ENG-1(?:\?|$)/.test(url),
+      handler: () => {
+        directReads++
+        return failReadback ? new Response('Unavailable', { status: 503 }) : Response.json(current)
+      },
+    },
+    ...standardRoutes({
+      issueTypes: [{ id: '10000', name: 'Task' }],
+      searchHandler: () =>
+        Response.json({ issues: visibleInSearch ? [backlog] : [], isLast: true }),
+    }),
+  ])
+  await provider.createTask({ title: 'Review the PR' })
+  expect((await provider.moveTask('ENG-1', 'status:10002')).column_id).toBe('10002')
+  provider.setBackgroundManaged(true)
+  saveJiraSyncMeta(db, { lastSyncAt: '2020-01-01T00:00:00Z' })
+  await provider.syncCache()
+  expect((await provider.getTask('ENG-1')).column_id).toBe('10002')
+  // A same-version replica disagrees with the direct issue read.
+  const conflict = { ...backlog, fields: { ...backlog.fields, updated: current.fields.updated } }
+  await provider.handleWebhook({
+    rawBody: JSON.stringify({ webhookEvent: 'jira:issue_updated', issue: conflict }),
+    headers: {},
+  })
+  expect((await provider.getTask('ENG-1')).column_id).toBe('10002')
+  expect(directReads).toBe(3)
+  // Replaying the authoritative snapshot needs no further GET or state change.
+  await provider.handleWebhook({
+    rawBody: JSON.stringify({ webhookEvent: 'jira:issue_updated', issue: current }),
+    headers: {},
+  })
+  expect(directReads).toBe(3)
+  failReadback = true
+  await expect(
+    provider.handleWebhook({
+      rawBody: JSON.stringify({ webhookEvent: 'jira:issue_updated', issue: conflict }),
+      headers: {},
+    }),
+  ).rejects.toMatchObject({ code: 'PROVIDER_UPSTREAM_ERROR' })
+  expect((await provider.getTask('ENG-1')).column_id).toBe('10002')
+})

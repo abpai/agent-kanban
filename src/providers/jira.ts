@@ -1,3 +1,4 @@
+import type { JiraIssueSnapshot, JiraIssueWriteOptions } from './jira-issue-snapshot'
 import type { Database } from 'bun:sqlite'
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
 import type { JiraClient } from './jira-client'
@@ -90,8 +91,11 @@ class SqliteJiraCache implements JiraCachePort {
     replaceJiraIssueTypes(this.db, types, prune)
   }
 
-  async upsertIssues(issues: Parameters<JiraCachePort['upsertIssues']>[0]): Promise<void> {
-    upsertJiraIssues(this.db, issues)
+  async upsertIssues(
+    issues: JiraIssueSnapshot[],
+    options?: JiraIssueWriteOptions,
+  ): Promise<string[]> {
+    return upsertJiraIssues(this.db, issues, options)
   }
 
   async deleteIssue(idOrKey: string): Promise<void> {

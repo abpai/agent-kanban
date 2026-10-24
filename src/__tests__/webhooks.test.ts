@@ -248,7 +248,7 @@ describe('Jira webhook', () => {
         statusId: '1',
         projectKey: 'ENG',
         createdAt: '2025-02-01',
-        updatedAt: '2025-02-01',
+        updatedAt: '2025-02-01T00:00:00.000Z',
       },
     ])
     process.env['JIRA_WEBHOOK_SECRET'] = JIRA_TEST_SECRET
@@ -319,7 +319,7 @@ describe('Jira webhook', () => {
           issuetype: { id: 't', name: 'Task' },
           project: { id: '1', key: 'ENG' },
           created: '2025-02-01',
-          updated: '2025-02-01',
+          updated: '2025-02-01T00:00:00.000Z',
         },
       },
     })
