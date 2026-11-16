@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.0
+
+### Minor Changes
+
+- [#117](https://github.com/abpai/agent-kanban/pull/117) [`1137c15`](https://github.com/abpai/agent-kanban/commit/1137c15ee1fd2ea435dde62904cd7ab6824b3ea9) Thanks [@abpai](https://github.com/abpai)! - Jira writes keep HTML as literal text instead of refusing it. Markdown such as `current_count=<integer>`, `<Suspense>` or an HTML block is stored as the characters typed and reads back escaped (`\<integer>`), which writes back unchanged. `<u>`, `<sub>`, `<sup>` and color spans are still formatting.
+
 ## 2.1.0
 
 ### Minor Changes
