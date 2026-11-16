@@ -141,6 +141,10 @@ between ADF and GitHub-flavored markdown. Consumers can import it as
   HTML block is stored as those characters and reads back escaped
   (`\<integer>`), which writes back unchanged. Only `<u>`, `<sub>`, `<sup>` and
   a `<span style="color: ...">` become formatting.
+  The same markdown always writes the same document: the `localId`s Jira
+  requires on task lists, task items, tables and statuses are derived from each
+  node's place and content, not random, so re-saving a description read back
+  unchanged keeps its `description_hash`.
   The test suite checks every converted document against Atlassian's published
   ADF JSON Schema (`@atlaskit/adf-schema`, a pinned dev dependency), so these
   rules follow the schema Jira enforces rather than guesses.

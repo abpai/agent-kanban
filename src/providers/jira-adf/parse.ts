@@ -15,6 +15,8 @@ import type {
   RootContent,
   Table,
 } from 'mdast'
+import { createHash } from 'node:crypto'
+
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import { gfmStrikethroughFromMarkdown } from 'mdast-util-gfm-strikethrough'
 import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
@@ -23,10 +25,11 @@ import { gfmStrikethrough } from 'micromark-extension-gfm-strikethrough'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { gfmTaskListItem } from 'micromark-extension-gfm-task-list-item'
 
-import type { JsonObject } from '../../json'
+import type { JsonObject, JsonValue } from '../../json'
 import {
   DATE_SCHEME,
   EMOJI_SCHEME,
+  isJsonObject,
   MARKER_PATTERN,
   MENTION_SCHEME,
   STATUS_SCHEME,
@@ -241,7 +244,7 @@ function taskListToAdf(node: List, ctx: WriteContext): AdfNode {
     const inline = first?.type === 'paragraph' ? phrasingToAdf(first.children, [], ctx) : []
     const task: AdfNode = {
       type: 'taskItem',
-      attrs: { localId: crypto.randomUUID(), state: item.checked ? 'DONE' : 'TODO' },
+      attrs: { localId: PENDING_LOCAL_ID, state: item.checked ? 'DONE' : 'TODO' },
     }
     if (inline.length > 0) task['content'] = inline
     content.push(task)
@@ -261,7 +264,7 @@ function taskListToAdf(node: List, ctx: WriteContext): AdfNode {
       }
     }
   }
-  return { type: 'taskList', attrs: { localId: crypto.randomUUID() }, content }
+  return { type: 'taskList', attrs: { localId: PENDING_LOCAL_ID }, content }
 }
 
 function tableToAdf(node: Table, ctx: WriteContext): AdfNode {
@@ -288,7 +291,7 @@ function tableToAdf(node: Table, ctx: WriteContext): AdfNode {
   )
   return {
     type: 'table',
-    attrs: { isNumberColumnEnabled: false, layout: 'default', localId: crypto.randomUUID() },
+    attrs: { isNumberColumnEnabled: false, layout: 'default', localId: PENDING_LOCAL_ID },
     content: rows,
   }
 }
@@ -402,7 +405,7 @@ function schemeNode(
       }
       return {
         type: 'status',
-        attrs: { text: label, color: value, localId: crypto.randomUUID() },
+        attrs: { text: label, color: value, localId: PENDING_LOCAL_ID },
       }
     default:
       if (!/^\d+$/.test(value)) {
@@ -687,7 +690,37 @@ export function parseMarkdown(markdown: string): ParsedMarkdown {
   const lines = markdown.split(/\r?\n/)
   const { segments } = splitSegments(lines, codeLineIndexes(parseTree(lines.join('\n'))), 0, false)
   const content = segmentsToAdf(segments, 0, issues)
+  assignLocalIds(content)
   return { document: { version: 1, type: 'doc', content }, issues }
+}
+
+// Jira requires a localId on task lists, task items, tables and statuses, and
+// stores whatever is sent. A random id would change the stored document, and so
+// the description hash, every time the same markdown is written, which reads as
+// an edit nobody made. Each id is instead derived from the node's place in the
+// document and its content, so the same markdown always writes the same
+// document, and identical nodes at different places still get distinct ids.
+const PENDING_LOCAL_ID = 'pending-local-id'
+
+function assignLocalIds(nodes: JsonValue[], path = ''): void {
+  nodes.forEach((node, index) => {
+    if (!isJsonObject(node)) return
+    const at = `${path}/${index}`
+    const children = node['content']
+    if (Array.isArray(children)) assignLocalIds(children, at)
+    const attrs = node['attrs']
+    if (!isJsonObject(attrs) || attrs['localId'] !== PENDING_LOCAL_ID) return
+    const digest = createHash('sha256')
+      .update(`${at}\n${JSON.stringify({ ...node, attrs: { ...attrs, localId: null } })}`)
+      .digest('hex')
+    attrs['localId'] = [
+      digest.slice(0, 8),
+      digest.slice(8, 12),
+      digest.slice(12, 16),
+      digest.slice(16, 20),
+      digest.slice(20, 32),
+    ].join('-')
+  })
 }
 
 const EXPAND_OPEN = /^::: expand(?: title="((?:\\.|[^"\\])*)")?$/
