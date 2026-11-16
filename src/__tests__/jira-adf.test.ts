@@ -13,6 +13,7 @@ import {
   type AdfDocument,
   type AdfNode,
 } from '../providers/jira-adf'
+import { adfSchemaErrors } from './helpers/adf-schema'
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'jira-adf')
 
@@ -52,9 +53,12 @@ function bullets(...items: AdfNode[]): AdfNode {
   return { type: 'bulletList', content: items }
 }
 
+// Every converted document must also pass Atlassian's published ADF schema,
+// which is what Jira enforces on a write.
 function written(markdown: string): AdfDocument {
   const result = markdownToAdf(markdown)
   if (!result.ok) throw new Error(`expected markdown to convert: ${JSON.stringify(result.issues)}`)
+  expect(adfSchemaErrors(result.document)).toEqual([])
   return result.document
 }
 
@@ -118,7 +122,7 @@ describe('golden corpus', () => {
   test('results carry the converter version', () => {
     expect(adfToMarkdown(fixture('comment').adf).converterVersion).toBe(JIRA_ADF_CONVERTER_VERSION)
     expect(markdownToAdf('x').converterVersion).toBe(JIRA_ADF_CONVERTER_VERSION)
-    expect(JIRA_ADF_CONVERTER_VERSION).toBe('agent-kanban/adf-markdown@2')
+    expect(JIRA_ADF_CONVERTER_VERSION).toBe('agent-kanban/adf-markdown@3')
   })
 })
 
@@ -434,11 +438,6 @@ describe('markdownToAdf refuses lossy writes', () => {
     // Shapes the ADF schema rejects: Jira would answer 400 after the request.
     ['a task list inside a quote', '> - [ ] a', /task list cannot be written inside a quote/],
     [
-      'a task list inside a list item',
-      '- a\n  - [ ] b',
-      /task list cannot be written inside a list item/,
-    ],
-    [
       'a table inside a nested expand',
       '::: expand\n::: expand\n| a |\n| - |\n| b |\n:::\n:::',
       /table cannot be written inside a nested expand/,
@@ -560,6 +559,44 @@ describe('reading never throws', () => {
     const malformed = adfToMarkdown({ type: 'paragraph' })
     expect(malformed.markdown).toBe('[unsupported Jira content: malformed document]')
     expect(malformed.warnings).toHaveLength(1)
+  })
+})
+
+describe('the ADF schema is the authority', () => {
+  test('the schema check rejects an invalid document', () => {
+    expect(
+      adfSchemaErrors({ version: 1, type: 'doc', content: [{ type: 'blockquote', content: [] }] }),
+    ).not.toEqual([])
+  })
+
+  test('a task list inside a list item round-trips', () => {
+    expect(
+      expectRoundTrip(
+        doc(
+          bullets(
+            li(p(text('parent')), {
+              type: 'taskList',
+              attrs: { localId: 'l' },
+              content: [
+                { type: 'taskItem', attrs: { localId: 't', state: 'DONE' }, content: [text('b')] },
+              ],
+            }),
+          ),
+        ),
+      ),
+    ).toBe('- parent\n  - [x] b')
+  })
+
+  test('a status with a hex color round-trips', () => {
+    expect(
+      expectRoundTrip(
+        doc(p({ type: 'status', attrs: { text: 'CUSTOM', color: '#ff5630', localId: 's' } })),
+      ),
+    ).toBe('[CUSTOM](jira-status:%23ff5630)')
+  })
+
+  test('a text color around a link is valid ADF', () => {
+    written('<span style="color: #ff0000">[a](https://x.test)</span>')
   })
 })
 
@@ -759,6 +796,13 @@ describe('generated documents round-trip', () => {
           type: 'inlineCard',
           attrs: { url: `https://acme.atlassian.net/browse/DXS-${Math.floor(random() * 999)}` },
         }
+      if (r < 0.16) return { type: 'emoji', attrs: { shortName: ':rocket:', id: '1f680' } }
+      if (r < 0.18)
+        return {
+          type: 'status',
+          attrs: { text: pick(['DONE', 'in review']), color: pick(['green', '#ff5630']) },
+        }
+      if (r < 0.2) return { type: 'date', attrs: { timestamp: '1763251200000' } }
       return text(pick(words) + (random() < 0.5 ? ' ' : ''), ...pick(markSets))
     })
   const paragraph = (breaks = true): AdfNode => p(...inline(1 + Math.floor(random() * 5), breaks))
@@ -834,7 +878,53 @@ describe('generated documents round-trip', () => {
       const read = adfToMarkdown(source)
       const write = markdownToAdf(read.markdown)
       const differences = write.ok ? compareAdf(source, write.document) : ['refused']
-      if (!read.lossless || differences.length > 0) failures.push(read.markdown)
+      const schema = write.ok ? adfSchemaErrors(write.document) : []
+      if (!read.lossless || differences.length > 0 || schema.length > 0) {
+        failures.push(
+          JSON.stringify({
+            warnings: read.warnings.map((w) => w.message),
+            differences: differences.slice(0, 3),
+            schema,
+          }),
+        )
+      }
+    }
+    expect(failures).toEqual([])
+  })
+
+  // Hostile reads: content Jira might send that we cannot render. A read never
+  // throws, never drops text, and is never called lossless while it warns.
+  const hostile = (): AdfNode => {
+    const r = random()
+    if (r < 0.2) return { type: 'panel', attrs: { panelType: 'info' }, content: [paragraph()] }
+    if (r < 0.35) return p(text('a '), { type: 'futureInline', content: [text('KEEP_INLINE')] })
+    if (r < 0.5)
+      return p(
+        text('x', { type: 'link', attrs: { href: pick(['jira-mention:%zz', 'jira-date:x']) } }),
+      )
+    if (r < 0.6) return { type: 'codeBlock', content: [text('KEEP_CODE'), { type: 'hardBreak' }] }
+    if (r < 0.7) return p({ type: 'date', attrs: { timestamp: '99999999999999999999' } })
+    if (r < 0.8) return { type: 'paragraph', content: ['KEEP_RAW'] }
+    return block()
+  }
+
+  test('300 hostile documents read without throwing or dropping text', () => {
+    const failures: string[] = []
+    for (let i = 0; i < 300; i += 1) {
+      const source = doc(...Array.from({ length: 1 + Math.floor(random() * 4) }, hostile))
+      const read = adfToMarkdown(source)
+      const json = JSON.stringify(source)
+      for (const needle of ['KEEP_INLINE', 'KEEP_CODE', 'KEEP_RAW']) {
+        if (json.includes(needle) && !read.markdown.includes(needle))
+          failures.push(`${needle} lost`)
+      }
+      if (read.lossless && read.warnings.length > 0) failures.push('lossless with warnings')
+      if (read.lossless) {
+        const write = markdownToAdf(read.markdown)
+        if (!write.ok || compareAdf(source, write.document).length > 0) {
+          failures.push(`lossless but not round-tripping: ${read.markdown}`)
+        }
+      }
     }
     expect(failures).toEqual([])
   })

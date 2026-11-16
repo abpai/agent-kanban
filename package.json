@@ -91,6 +91,7 @@
     "postgres": "^3.4.4"
   },
   "devDependencies": {
+    "@atlaskit/adf-schema": "57.7.25",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.31.0",
     "@modelcontextprotocol/client": "2.0.0",
@@ -98,6 +99,8 @@
     "@types/bun": "1.4.2",
     "@types/mdast": "4.0.4",
     "@types/node": "22.20.2",
+    "ajv": "8.17.1",
+    "ajv-draft-04": "1.0.0",
     "husky": "^8.0.3",
     "knip": "^6.24.0",
     "lint-staged": "^15.2.0",
