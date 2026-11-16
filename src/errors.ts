@@ -24,6 +24,11 @@ export const ErrorCode = {
   PROVIDER_NOT_CONFIGURED: 'PROVIDER_NOT_CONFIGURED',
   /** An attachment read the reader refused on its own terms; a retry cannot succeed. */
   ATTACHMENT_REFUSED: 'ATTACHMENT_REFUSED',
+  /**
+   * The write reached the provider, but what it stored differs from what was
+   * sent. The created or updated object exists; retrying would duplicate it.
+   */
+  WRITE_UNCONFIRMED: 'WRITE_UNCONFIRMED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const
 

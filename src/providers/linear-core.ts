@@ -39,6 +39,7 @@ import type {
   ProviderContext,
   ProviderSyncStatus,
   ReadAttachmentOptions,
+  ReadTaskOptions,
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
@@ -494,7 +495,15 @@ export class LinearProviderCore implements KanbanProvider {
     return applyTaskFilters(tasks, filters)
   }
 
-  async getTask(idOrRef: string): Promise<Task> {
+  async getTask(idOrRef: string, options: ReadTaskOptions = {}): Promise<Task> {
+    if (options.fresh) {
+      // One issue fetch, no team sync. Linear's issue query takes an id or an
+      // identifier such as ENG-12. Failures propagate: no cached fallback.
+      await this.cache.ready
+      // Team scoping in hydrateIssue needs the team id, not a configured key.
+      await this.getConfiguredTeam()
+      return this.hydrateIssue(idOrRef.replace(/^linear:/, ''))
+    }
     await this.sync()
     return this.resolveTask(idOrRef)
   }

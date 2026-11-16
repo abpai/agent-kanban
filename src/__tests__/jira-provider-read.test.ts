@@ -13,7 +13,7 @@ import {
   type JiraUser,
 } from '../providers/jira-client'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
-import type { AdfDocument } from '../providers/jira-adf'
+import { adfContentHash, JIRA_ADF_CONVERTER_VERSION, type AdfDocument } from '../providers/jira-adf'
 import { resetWarnOnce } from '../providers/warn-once'
 import {
   getCachedColumns,
@@ -23,6 +23,7 @@ import {
   saveJiraSyncMeta,
   saveTeamInfo,
   initJiraCacheSchema,
+  upsertJiraIssues,
 } from '../providers/jira-cache'
 
 type FetchInit = RequestInit | undefined
@@ -660,7 +661,7 @@ describe('JiraProvider read path', () => {
     // Regression for the DXS-12 shape: a user pastes
     // `Repo: https://github.com/abpai/garage-band` in the description, Jira
     // auto-converts the URL to an inlineCard, and the previous
-    // adfToPlainText silently dropped attrs.url.
+    // plain-text converter silently dropped attrs.url.
     const description: AdfDocument = {
       version: 1,
       type: 'doc',
@@ -696,9 +697,11 @@ describe('JiraProvider read path', () => {
     const { provider } = makeProvider(standardRoutes({ searchHandler }))
     await provider.getBoard()
     const task = await provider.getTask('ENG-12')
-    expect(task.description).toContain('Repo:')
-    expect(task.description).toContain('https://github.com/abpai/garage-band')
-    expect(task.description.split('\n')[0]).toBe('**Repo:** https://github.com/abpai/garage-band')
+    // The smart link renders as an autolink, which reads back as the same
+    // inlineCard; the bold stays on exactly the text Jira marked bold.
+    expect(task.description).toBe(
+      '**Repo**: <https://github.com/abpai/garage-band>\n\nIncrement SMOKE_TEST_TASK.md by 1.',
+    )
   })
 
   test('getBootstrap returns provider=jira and the adapted BoardConfig', async () => {
@@ -1158,4 +1161,201 @@ test('a created task keeps its confirmed column through a lagging search and con
     }),
   ).rejects.toMatchObject({ code: 'PROVIDER_UPSTREAM_ERROR' })
   expect((await provider.getTask('ENG-1')).column_id).toBe('10002')
+})
+
+describe('JiraProvider fresh single-issue read', () => {
+  const description: AdfDocument = {
+    version: 1,
+    type: 'doc',
+    content: [
+      {
+        type: 'bulletList',
+        content: [
+          {
+            type: 'listItem',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'Edited in Jira' }] },
+              { type: 'panel', attrs: { panelType: 'info' }, content: [] },
+            ],
+          },
+        ],
+      },
+    ],
+  }
+  // Pinned literally so a converter change cannot move it: the hash covers the
+  // raw ADF only, keys sorted.
+  const pinnedHash =
+    'sha256:' +
+    new Bun.CryptoHasher('sha256')
+      .update(
+        '{"content":[{"content":[{"content":[{"content":[{"text":"Edited in Jira","type":"text"}],"type":"paragraph"},{"attrs":{"panelType":"info"},"content":[],"type":"panel"}],"type":"listItem"}],"type":"bulletList"}],"type":"doc","version":1}',
+      )
+      .digest('hex')
+  const attachments = [
+    {
+      id: '2002',
+      filename: 'b.log',
+      mimeType: 'text/plain',
+      size: 12,
+      created: '2026-01-03T00:00:00Z',
+    },
+    {
+      id: '2001',
+      filename: 'a.png',
+      mimeType: 'image/png',
+      size: 34,
+      created: '2026-01-02T00:00:00Z',
+    },
+  ]
+  const freshIssue = (): JiraIssue => {
+    const issue = makeIssue({
+      id: '10001',
+      key: 'ENG-1',
+      statusId: '10002',
+      updated: '2026-01-05T00:00:00Z',
+      summary: 'Fresh title',
+      description,
+    })
+    issue.fields.attachment = attachments
+    return issue
+  }
+  const issueRoute = (handler: StubHandler): StubRoute => ({
+    match: (u) => /\/rest\/api\/3\/issue\/[^/?]+(\?|$)/.test(u),
+    handler,
+  })
+  // A warm, background-managed cache holding an older copy written by an
+  // earlier converter: normal reads serve it without calling Jira.
+  const warmCache = () => {
+    saveJiraSyncMeta(db, {
+      projectKey: 'ENG',
+      lastSyncAt: '2026-01-01T00:00:00.000Z',
+      lastFullSyncAt: '2026-01-01T00:00:00.000Z',
+      lastIssueUpdatedAt: '2026-01-01T00:00:00.000Z',
+    })
+    upsertJiraIssues(db, [
+      {
+        id: '10001',
+        key: 'ENG-1',
+        summary: 'Cached title',
+        descriptionText: 'text from an older converter',
+        descriptionHash: 'sha256:stale',
+        statusId: '10001',
+        projectKey: 'ENG',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-02T00:00:00Z',
+      },
+    ])
+    Date.now = () => Date.parse('2026-01-01T01:00:00.000Z')
+  }
+
+  test('reads one issue from Jira despite a warm cache and writes it back', async () => {
+    const { provider, calls } = makeProvider([
+      issueRoute(() => Response.json(freshIssue())),
+      ...standardRoutes({}),
+    ])
+    provider.setBackgroundManaged(true)
+    warmCache()
+    expect((await provider.getTask('ENG-1')).title).toBe('Cached title')
+    expect(calls).toHaveLength(0)
+
+    const task = await provider.getTask('ENG-1', { fresh: true })
+
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/rest/api/3/issue/ENG-1'])
+    expect(task).toMatchObject({
+      title: 'Fresh title',
+      column_id: '10002',
+      description_hash: pinnedHash,
+    })
+    expect(task.description).toContain('- Edited in Jira')
+    expect(task.description).toContain('[unsupported Jira content: panel')
+    const read = task.fresh_read!
+    expect(read.converter_version).toBe(JIRA_ADF_CONVERTER_VERSION)
+    expect(read.description_lossless).toBe(false)
+    expect(read.description_warnings).toEqual([
+      expect.objectContaining({ code: 'unsupported_node', node_type: 'panel' }),
+    ])
+    expect(read.attachments.map((a) => [a.id, a.filename, a.byte_size])).toEqual([
+      ['2001', 'a.png', 34],
+      ['2002', 'b.log', 12],
+    ])
+    expect(read.attachments[0]!.digest).toMatch(/^sha256:[0-9a-f]{64}$/)
+    expect(read.attachments_digest).toMatch(/^sha256:[0-9a-f]{64}$/)
+
+    // The cache now holds the fresh copy; a normal read serves it with the hash.
+    const cached = await provider.getTask('ENG-1')
+    expect(cached).toMatchObject({ title: 'Fresh title', description_hash: pinnedHash })
+    expect(cached.description).toBe(task.description)
+    expect(cached.fresh_read).toBeUndefined()
+    expect(calls).toHaveLength(1)
+  })
+
+  test('the description hash follows the raw ADF, not the converter output', async () => {
+    const { provider } = makeProvider([
+      issueRoute(() => Response.json(freshIssue())),
+      ...standardRoutes({}),
+    ])
+    warmCache()
+    const task = await provider.getTask('ENG-1', { fresh: true })
+    expect(task.description_hash).toBe(pinnedHash)
+    expect(adfContentHash(description)).toBe(pinnedHash)
+    // Key order plays no part.
+    expect(adfContentHash({ type: 'doc', content: description.content, version: 1 })).toBe(
+      pinnedHash,
+    )
+    // A row rendered by another converter version keeps the hash of the same ADF.
+    upsertJiraIssues(db, [
+      {
+        id: '10001',
+        key: 'ENG-1',
+        summary: 'Fresh title',
+        descriptionText: 'rendered by adf-markdown@3',
+        descriptionHash: adfContentHash(description),
+        statusId: '10002',
+        projectKey: 'ENG',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-06T00:00:00Z',
+      },
+    ])
+    const later = getCachedTasks(db)[0]!
+    expect(later.description).not.toBe(task.description)
+    expect(later.description_hash).toBe(task.description_hash)
+    expect(adfContentHash(null)).toBeNull()
+  })
+
+  test('an unreachable Jira fails the fresh read instead of serving the cache', async () => {
+    const { provider } = makeProvider([
+      issueRoute(() => new Response('upstream down', { status: 503 })),
+      ...standardRoutes({}),
+    ])
+    provider.setBackgroundManaged(true)
+    warmCache()
+    const err = await provider.getTask('ENG-1', { fresh: true }).catch((cause: Error) => cause)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.PROVIDER_UPSTREAM_ERROR)
+    expect(err.message).toContain(
+      "Fresh read of Jira issue 'ENG-1' failed; no cached copy is returned",
+    )
+    expect((await provider.getTask('ENG-1')).title).toBe('Cached title')
+
+    globalThis.fetch = mockFetch(async () => {
+      throw new TypeError('fetch failed')
+    })
+    const network = await provider
+      .getTask('jira:10001', { fresh: true })
+      .catch((cause: Error) => cause)
+    assertKanbanError(network)
+    expect(network.message).toContain("Fresh read of Jira issue '10001' failed")
+  })
+
+  test('an issue outside the configured project is not found', async () => {
+    const other = freshIssue()
+    other.fields.project = { id: '2', key: 'OPS' }
+    const { provider } = makeProvider([
+      issueRoute(() => Response.json(other)),
+      ...standardRoutes({}),
+    ])
+    const err = await provider.getTask('OPS-1', { fresh: true }).catch((cause: Error) => cause)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.TASK_NOT_FOUND)
+  })
 })

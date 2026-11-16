@@ -7,3 +7,6 @@ coverage/
 .vscode/
 .cache/
 tools/oxlint/anti-slop/
+
+# Golden converter output must stay byte-exact.
+src/__tests__/fixtures/jira-adf/

@@ -30,6 +30,41 @@ export interface Task {
   updated_at: string
   version: string | null
   source_updated_at: string | null
+  /**
+   * Hash of the description exactly as the provider stores it (Jira: the raw
+   * ADF JSON), as `sha256:<hex>`. It changes only when the stored description
+   * changes, never when the markdown converter changes. `null` when there is no
+   * description; absent for providers whose description is the markdown itself.
+   */
+  description_hash?: string | null
+  /** Present only on a fresh read (`getTask(id, { fresh: true })`) from Jira. */
+  fresh_read?: FreshTaskRead
+}
+
+/** A warning about content the markdown description cannot show as-is. */
+export interface DescriptionWarning {
+  code: string
+  node_type: string
+  /** JSON path into the provider's stored description, e.g. `content[2].content[0]`. */
+  path: string
+  message: string
+}
+
+export interface FreshTaskAttachment extends TaskAttachment {
+  /** `sha256:<hex>` of the attachment's metadata. Jira attachments never change in place. */
+  digest: string
+}
+
+/** What a fresh read observed, beyond the task itself. */
+export interface FreshTaskRead {
+  read_at: string
+  converter_version: string
+  /** True when the markdown parses back to the same stored document. */
+  description_lossless: boolean
+  description_warnings: DescriptionWarning[]
+  attachments: FreshTaskAttachment[]
+  /** `sha256:<hex>` over the attachment digests, sorted by attachment id. */
+  attachments_digest: string
 }
 
 export interface TaskComment {

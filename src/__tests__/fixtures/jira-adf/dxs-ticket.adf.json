@@ -1,0 +1,307 @@
+{
+  "version": 1,
+  "type": "doc",
+  "content": [
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "Context" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "The " },
+        { "type": "text", "text": "subscriber export", "marks": [{ "type": "strong" }] },
+        { "type": "text", "text": " drops rows when " },
+        { "type": "text", "text": "batch_size", "marks": [{ "type": "code" }] },
+        { "type": "text", "text": " exceeds the page limit. See " },
+        {
+          "type": "inlineCard",
+          "attrs": { "url": "https://fusionmedia.atlassian.net/browse/DXS-401" }
+        },
+        { "type": "text", "text": " and the " },
+        {
+          "type": "text",
+          "text": "runbook",
+          "marks": [
+            {
+              "type": "link",
+              "attrs": { "href": "https://wiki.example.com/runbooks/export?section=limits" }
+            }
+          ]
+        },
+        { "type": "text", "text": "." }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "mention",
+          "attrs": { "id": "557058:1f2e3d4c", "text": "@Dana Lee", "accessLevel": "" }
+        },
+        { "type": "text", "text": " owns the fix " },
+        { "type": "emoji", "attrs": { "shortName": ":rocket:", "id": "1f680", "text": "🚀" } },
+        { "type": "text", "text": " Status: " },
+        {
+          "type": "status",
+          "attrs": { "text": "IN REVIEW", "color": "blue", "localId": "a1b2c3", "style": "" }
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 3 },
+      "content": [{ "type": "text", "text": "Acceptance criteria" }]
+    },
+    {
+      "type": "bulletList",
+      "attrs": { "localId": "list-1" },
+      "content": [
+        {
+          "type": "listItem",
+          "attrs": { "localId": "li-1" },
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Export paginates every request" }]
+            },
+            {
+              "type": "bulletList",
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        { "type": "text", "text": "Page size comes from " },
+                        { "type": "text", "text": "EXPORT_PAGE_SIZE", "marks": [{ "type": "code" }] }
+                      ]
+                    },
+                    {
+                      "type": "orderedList",
+                      "attrs": { "order": 1 },
+                      "content": [
+                        {
+                          "type": "listItem",
+                          "content": [
+                            {
+                              "type": "paragraph",
+                              "content": [
+                                { "type": "text", "text": "Default " },
+                                { "type": "text", "text": "500", "marks": [{ "type": "strong" }] }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "listItem",
+                          "content": [
+                            {
+                              "type": "paragraph",
+                              "content": [
+                                { "type": "text", "text": "Hard cap " },
+                                {
+                                  "type": "text",
+                                  "text": "2000",
+                                  "marks": [{ "type": "strong" }, { "type": "em" }]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        { "type": "text", "text": "Retries are " },
+                        { "type": "text", "text": "idempotent", "marks": [{ "type": "em" }] }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "A second paragraph inside the item." }]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "bulletList",
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Item whose first child is a list" }]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Run the migration:" }]
+            },
+            {
+              "type": "codeBlock",
+              "attrs": { "language": "bash" },
+              "content": [{ "type": "text", "text": "bun run migrate --dry-run\nbun run migrate" }]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "text": "Legacy " },
+                { "type": "text", "text": "CSV", "marks": [{ "type": "strike" }] },
+                { "type": "text", "text": " export is " },
+                { "type": "text", "text": "removed", "marks": [{ "type": "underline" }] }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 3 },
+      "content": [{ "type": "text", "text": "Limits" }]
+    },
+    {
+      "type": "table",
+      "attrs": { "isNumberColumnEnabled": false, "layout": "default", "localId": "tbl-1", "width": 760 },
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableHeader",
+              "attrs": { "colspan": 1, "rowspan": 1, "colwidth": [200] },
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Plan", "marks": [{ "type": "strong" }] }] }]
+            },
+            {
+              "type": "tableHeader",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Rows per page", "marks": [{ "type": "strong" }] }] }]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Free" }] }]
+            },
+            {
+              "type": "tableCell",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "100 | burst 150", "marks": [{ "type": "code" }] }] }]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Enterprise" }] }]
+            },
+            {
+              "type": "tableCell",
+              "attrs": {},
+              "content": [{ "type": "paragraph" }]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "blockquote",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            { "type": "text", "text": "Customer quote: " },
+            { "type": "text", "text": "the export is missing half of March", "marks": [{ "type": "em" }] }
+          ]
+        }
+      ]
+    },
+    { "type": "rule" },
+    {
+      "type": "expand",
+      "attrs": { "title": "Reproduction \"steps\"" },
+      "content": [
+        {
+          "type": "orderedList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Create 2,001 subscribers" }] }]
+            },
+            {
+              "type": "listItem",
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Export with the default settings" }] }]
+            }
+          ]
+        },
+        {
+          "type": "codeBlock",
+          "attrs": { "language": "json" },
+          "content": [{ "type": "text", "text": "{\n  \"rows\": 2000,\n  \"expected\": 2001\n}" }]
+        }
+      ]
+    },
+    {
+      "type": "taskList",
+      "attrs": { "localId": "tl-1" },
+      "content": [
+        {
+          "type": "taskItem",
+          "attrs": { "localId": "ti-1", "state": "DONE" },
+          "content": [{ "type": "text", "text": "Reproduce locally" }]
+        },
+        {
+          "type": "taskItem",
+          "attrs": { "localId": "ti-2", "state": "TODO" },
+          "content": [{ "type": "text", "text": "Ship the fix" }]
+        }
+      ]
+    },
+    { "type": "paragraph" },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Plain URL stays text: https://status.example.com" },
+        { "type": "hardBreak" },
+        { "type": "text", "text": "Second line after a break, due " },
+        { "type": "date", "attrs": { "timestamp": "1763251200000" } }
+      ]
+    }
+  ]
+}

@@ -7,6 +7,8 @@ import type {
   BoardMetrics,
   BoardView,
   Column,
+  FreshTaskAttachment,
+  FreshTaskRead,
   Priority,
   ProviderTeamInfo,
   Task,
@@ -21,12 +23,21 @@ import {
   type WebhookRequest,
   type WebhookResult,
 } from '../webhooks'
-import { adfToPlainText, plainTextToAdf } from './jira-adf'
+import {
+  adfContentHash,
+  adfToMarkdown,
+  compareAdf,
+  describeAdfDifferences,
+  markdownToAdf,
+  type AdfDocument,
+} from './jira-adf'
+import { sha256Json } from './jira-adf/hash'
 import { buildDeltaJql, safeDeltaSince } from './jira-jql'
 import { JIRA_CAPABILITIES } from './capabilities'
 import { providerUpstreamError, unsupportedOperation } from './errors'
 import {
   JiraClient,
+  checkedAttachments,
   decideJiraPagination,
   normalizeJiraLabels,
   type JiraAttachment,
@@ -49,6 +60,7 @@ import type {
   ProviderContext,
   ProviderSyncStatus,
   ReadAttachmentOptions,
+  ReadTaskOptions,
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
@@ -60,6 +72,50 @@ import { applyTaskFilters, mapWithConcurrency, SyncGate, syncStatusFromMeta } fr
 const FULL_RECONCILE_INTERVAL_MS = 5 * 60_000
 const ACTIVITY_REFRESH_INTERVAL_MS = 30 * 60_000
 const ACTIVITY_READS_MAX = 10_000
+
+// Converts caller markdown to ADF, or refuses before anything is sent: a
+// document that cannot be represented must not reach Jira as degraded markup.
+// Jira never edits an attachment in place (a re-upload gets a new id), so the
+// metadata identifies the bytes without downloading them.
+function freshAttachment(task: TaskAttachment, raw: JiraAttachment): FreshTaskAttachment {
+  return {
+    ...task,
+    digest: sha256Json([raw.id, raw.filename, raw.size, raw.mimeType ?? null, raw.created ?? null]),
+  }
+}
+
+function jiraDocument(markdown: string, field: 'description' | 'comment'): AdfDocument {
+  const converted = markdownToAdf(markdown)
+  if (converted.ok) return converted.document
+  const reasons = converted.issues
+    .map((issue) => {
+      const where = issue.line === undefined ? '' : `line ${issue.line}: `
+      const diff = issue.differences?.length
+        ? ` (${describeAdfDifferences(issue.differences)})`
+        : ''
+      return `${where}${issue.message}${diff}`
+    })
+    .join('; ')
+  throw new KanbanError(
+    ErrorCode.INVALID_ARGUMENT,
+    `Refusing to write the Jira ${field}: ${reasons}`,
+  )
+}
+
+// Write confirmation: what Jira stored must equal what was sent, structurally.
+// It runs after the write, so a failure names the object that now exists.
+function confirmJiraDocument(
+  written: AdfDocument,
+  stored: AdfDocument | string | null | undefined,
+  what: string,
+): void {
+  const differences = compareAdf(written, stored ?? null)
+  if (differences.length === 0) return
+  throw new KanbanError(
+    ErrorCode.WRITE_UNCONFIRMED,
+    `The write was applied, but Jira stored a different ${what} than was sent; do not retry it as new: ${describeAdfDifferences(differences)}`,
+  )
+}
 
 function shouldRunFullReconcile(lastFullSyncAt: string | null, now: number): boolean {
   if (!lastFullSyncAt) return true
@@ -88,7 +144,7 @@ type JiraTaskFields = {
   project?: { key: string }
   summary?: string
   issuetype?: { id: string }
-  description?: ReturnType<typeof plainTextToAdf>
+  description?: AdfDocument
   priority?: { name: string }
   assignee?: { accountId: string } | null
   labels?: string[]
@@ -178,7 +234,8 @@ function toCacheIssue(
     id: issue.id,
     key: issue.key,
     summary: issue.fields.summary,
-    descriptionText: adfToPlainText(issue.fields.description),
+    descriptionText: adfToMarkdown(issue.fields.description).markdown,
+    descriptionHash: adfContentHash(issue.fields.description),
     statusId: issue.fields.status.id,
     priorityName: issue.fields.priority?.name ?? null,
     issueTypeName: issue.fields.issuetype?.name ?? '',
@@ -539,13 +596,74 @@ export class JiraProviderCore implements KanbanProvider {
     )
   }
 
-  async getTask(idOrRef: string): Promise<Task> {
+  async getTask(idOrRef: string, options: ReadTaskOptions = {}): Promise<Task> {
+    if (options.fresh) return this.readTaskFresh(idOrRef)
     await this.sync()
     const task = await this.cache.getCachedTask(idOrRef)
     if (!task) {
       throw new KanbanError(ErrorCode.TASK_NOT_FOUND, `No task with id '${idOrRef}'`)
     }
     return task
+  }
+
+  // One GET /issue, no sync and no warmer. Jira takes an issue id or key, so the
+  // cache is not consulted to find the issue and a cold cache is fine. The
+  // response is authoritative, like hydrateIssueByKey, so it replaces the
+  // cached row even at the same `updated` stamp. No stale fallback: any failure
+  // to reach Jira is the caller's error.
+  private async readTaskFresh(idOrRef: string): Promise<Task> {
+    await this.cache.ready
+    const lookup = idOrRef.replace(/^jira:/, '')
+    let issue: JiraIssue
+    try {
+      issue = await this.client.getIssue(lookup)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      throw new KanbanError(
+        err instanceof KanbanError ? err.code : ErrorCode.PROVIDER_UPSTREAM_ERROR,
+        `Fresh read of Jira issue '${lookup}' failed; no cached copy is returned: ${reason}`,
+      )
+    }
+    if (issue.fields.project?.key !== this.config.projectKey) {
+      throw new KanbanError(
+        ErrorCode.TASK_NOT_FOUND,
+        `Jira issue '${issue.key}' is not in project '${this.config.projectKey}'`,
+      )
+    }
+    const readAt = new Date().toISOString()
+    const description = adfToMarkdown(issue.fields.description)
+    await this.cache.upsertIssues(
+      [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey)],
+      { authoritative: true },
+    )
+    const cached = await this.cache.getCachedTask(issue.id)
+    if (!cached) {
+      providerUpstreamError(`Jira issue ${issue.key} was read fresh but is missing from the cache.`)
+    }
+    const attachments = checkedAttachments(issue.fields.attachment, issue.key)
+      .map((attachment) => freshAttachment(this.toTaskAttachment(cached, attachment), attachment))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    const freshRead: FreshTaskRead = {
+      read_at: readAt,
+      converter_version: description.converterVersion,
+      description_lossless: description.lossless,
+      description_warnings: description.warnings.map((warning) => ({
+        code: warning.code,
+        node_type: warning.nodeType,
+        path: warning.path,
+        message: warning.message,
+      })),
+      attachments,
+      attachments_digest: sha256Json(attachments.map((attachment) => attachment.digest)),
+    }
+    // The cache keeps the newer row if one landed between the GET and the
+    // upsert; the description fields always come from this read.
+    return {
+      ...cached,
+      description: description.markdown,
+      description_hash: adfContentHash(issue.fields.description),
+      fresh_read: freshRead,
+    }
   }
 
   private async resolveJiraPriorityName(canonical: Priority): Promise<string> {
@@ -608,7 +726,7 @@ export class JiraProviderCore implements KanbanProvider {
     return {
       id: comment.id,
       task_id: task.id,
-      body: adfToPlainText(comment.body),
+      body: adfToMarkdown(comment.body).markdown,
       author: comment.author?.displayName ?? null,
       created_at: comment.created ?? timestamp,
       updated_at: timestamp,
@@ -628,7 +746,7 @@ export class JiraProviderCore implements KanbanProvider {
   // "create/transition then sync(true) then getCachedTask" pattern, which raced
   // the search index (creates reported "not yet visible"; a move's new status
   // sometimes didn't land) and forced a full whole-project reconcile per write.
-  private async hydrateIssueByKey(key: string): Promise<Task> {
+  private async hydrateIssueByKey(key: string, writtenDescription?: AdfDocument): Promise<Task> {
     // getIssue throws on a missing key (404), so reaching this method means the
     // issue exists upstream. A null read-back would therefore be a genuine cache
     // anomaly (the upsert above did not land), not an ordinary not-found — surface
@@ -645,6 +763,9 @@ export class JiraProviderCore implements KanbanProvider {
     await this.refreshIssueActivity(issue).catch((err) => {
       console.warn(`[jira] activity fetch for ${issue.key} failed:`, err)
     })
+    if (writtenDescription) {
+      confirmJiraDocument(writtenDescription, issue.fields.description, `description on ${key}`)
+    }
     const task = await this.cache.getCachedTask(key)
     if (!task) {
       providerUpstreamError(
@@ -665,7 +786,7 @@ export class JiraProviderCore implements KanbanProvider {
       issuetype: { id: issueTypeId },
     }
     if (input.description !== undefined) {
-      fields['description'] = plainTextToAdf(input.description)
+      fields['description'] = jiraDocument(input.description, 'description')
     }
     if (input.priority !== undefined) {
       fields['priority'] = { name: await this.resolveJiraPriorityName(input.priority) }
@@ -681,7 +802,7 @@ export class JiraProviderCore implements KanbanProvider {
     // issues land in the project workflow's default start state. Use
     // `moveTask` after create to change status.
     const created = await this.client.createIssue({ fields })
-    return this.hydrateIssueByKey(created.key)
+    return this.hydrateIssueByKey(created.key, fields.description)
   }
 
   async updateTask(idOrRef: string, input: UpdateTaskInput): Promise<Task> {
@@ -701,7 +822,7 @@ export class JiraProviderCore implements KanbanProvider {
     const fields: JiraTaskFields = {}
     if (input.title !== undefined) fields['summary'] = input.title
     if (input.description !== undefined) {
-      fields['description'] = plainTextToAdf(input.description)
+      fields['description'] = jiraDocument(input.description, 'description')
     }
     if (input.priority !== undefined) {
       fields['priority'] = { name: await this.resolveJiraPriorityName(input.priority) }
@@ -721,7 +842,7 @@ export class JiraProviderCore implements KanbanProvider {
     if (Object.keys(fields).length > 0) {
       await this.client.updateIssue(issueKey, { fields })
     }
-    return this.hydrateIssueByKey(issueKey)
+    return this.hydrateIssueByKey(issueKey, fields.description)
   }
 
   async moveTask(idOrRef: string, column: string): Promise<Task> {
@@ -792,19 +913,21 @@ export class JiraProviderCore implements KanbanProvider {
   async comment(idOrRef: string, body: string): Promise<TaskComment> {
     await this.sync()
     const task = await this.resolveTaskByIdOrKey(idOrRef)
-    const created = await this.client.addComment(this.issueKeyFor(task), {
-      body: plainTextToAdf(body),
-    })
+    const document = jiraDocument(body, 'comment')
+    const created = await this.client.addComment(this.issueKeyFor(task), { body: document })
     await this.cache.adjustIssueCommentCount(task.providerId || task.externalRef || task.id, 1)
+    confirmJiraDocument(document, created.body, `comment ${created.id}`)
     return this.toTaskComment(task, created)
   }
 
   async updateComment(idOrRef: string, commentId: string, body: string): Promise<TaskComment> {
     await this.sync()
     const task = await this.resolveTaskByIdOrKey(idOrRef)
+    const document = jiraDocument(body, 'comment')
     const updated = await this.client.updateComment(this.issueKeyFor(task), commentId, {
-      body: plainTextToAdf(body),
+      body: document,
     })
+    confirmJiraDocument(document, updated.body, `comment ${commentId}`)
     return this.toTaskComment(task, updated)
   }
 

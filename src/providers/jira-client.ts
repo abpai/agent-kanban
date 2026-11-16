@@ -44,6 +44,8 @@ export interface JiraIssue {
     created: string
     updated: string
     project?: { id: string; key: string }
+    /** Present when GET /issue returns all fields; search requests never ask for it. */
+    attachment?: JiraAttachment[] | null
   }
 }
 
@@ -152,6 +154,19 @@ export interface JiraAttachment {
   size: number
   created?: string
   author?: { accountId?: string; displayName?: string }
+}
+
+/** Attachment metadata with a usable size; anything else is an upstream fault. */
+export function checkedAttachments(
+  attachments: JiraAttachment[] | null | undefined,
+  idOrKey: string,
+): JiraAttachment[] {
+  for (const attachment of attachments ?? []) {
+    if (!Number.isSafeInteger(attachment.size) || attachment.size < 0) {
+      providerUpstreamError(`Jira attachment '${attachment.id}' on ${idOrKey} has no valid size`)
+    }
+  }
+  return attachments ?? []
 }
 
 export interface JiraCreatedIssueRef {
@@ -539,13 +554,7 @@ export class JiraClient {
       { fields: 'attachment' },
       { refuseRedirectsAs: ErrorCode.ATTACHMENT_REFUSED },
     )
-    const attachments = issue.fields?.attachment ?? []
-    for (const attachment of attachments) {
-      if (!Number.isSafeInteger(attachment.size) || attachment.size < 0) {
-        providerUpstreamError(`Jira attachment '${attachment.id}' on ${idOrKey} has no valid size`)
-      }
-    }
-    return attachments
+    return checkedAttachments(issue.fields?.attachment, idOrKey)
   }
 
   /**

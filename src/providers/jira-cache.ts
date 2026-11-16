@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS jira_issues (
   key TEXT NOT NULL UNIQUE,
   summary TEXT NOT NULL,
   description_text TEXT NOT NULL DEFAULT '',
+  description_hash TEXT,
   status_id TEXT NOT NULL,
   priority_name TEXT NOT NULL DEFAULT '',
   issue_type_name TEXT NOT NULL DEFAULT '',
@@ -206,6 +207,11 @@ function migrateJiraCacheSchema(db: Database): void {
   }
   if (!cols.some((c) => c.name === 'comment_count')) {
     db.run('ALTER TABLE jira_issues ADD COLUMN comment_count INTEGER NOT NULL DEFAULT 0')
+  }
+  // Rows from before the hash existed keep NULL; the next snapshot at the same
+  // `updated` stamp differs, so it is re-read through GET /issue and filled in.
+  if (!cols.some((c) => c.name === 'description_hash')) {
+    db.run('ALTER TABLE jira_issues ADD COLUMN description_hash TEXT')
   }
 }
 
@@ -395,16 +401,17 @@ export function upsertJiraIssues(
   const conflicts = new Set(options.authoritative ? [] : prepared.conflicts)
   const stmt = db.prepare(
     `INSERT INTO jira_issues (
-      id, key, summary, description_text, status_id, priority_name, issue_type_name,
+      id, key, summary, description_text, description_hash, status_id, priority_name, issue_type_name,
       assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
     ) VALUES (
-      $id, $key, $summary, $description_text, $status_id, $priority_name, $issue_type_name,
+      $id, $key, $summary, $description_text, $description_hash, $status_id, $priority_name, $issue_type_name,
       $assignee_account_id, $assignee_name, $labels, $comment_count, $project_key, $url, $created_at, $updated_at
     )
     ON CONFLICT(id) DO UPDATE SET
       key = excluded.key,
       summary = excluded.summary,
       description_text = excluded.description_text,
+      description_hash = excluded.description_hash,
       status_id = excluded.status_id,
       priority_name = excluded.priority_name,
       issue_type_name = excluded.issue_type_name,
@@ -427,6 +434,7 @@ export function upsertJiraIssues(
       $key: string
       $summary: string
       $description_text: string
+      $description_hash: string | null
       $status_id: string
       $priority_name: string
       $issue_type_name: string
@@ -439,9 +447,9 @@ export function upsertJiraIssues(
     }
   >(`SELECT key FROM jira_issues
     WHERE id = $id AND ${jiraUpdatedAtSql('updated_at')} = ${jiraUpdatedAtSql('$updated_at')}
-      AND (key, summary, description_text, status_id, priority_name, issue_type_name,
+      AND (key, summary, description_text, description_hash, status_id, priority_name, issue_type_name,
            assignee_account_id, assignee_name, labels, comment_count, project_key, url)
-       IS NOT ($key, $summary, $description_text, $status_id, $priority_name, $issue_type_name,
+       IS NOT ($key, $summary, $description_text, $description_hash, $status_id, $priority_name, $issue_type_name,
            $assignee_account_id, $assignee_name, $labels, $comment_count, $project_key, $url)`)
   for (const issue of prepared.issues) {
     const values = {
@@ -449,6 +457,7 @@ export function upsertJiraIssues(
       $key: issue.key,
       $summary: issue.summary,
       $description_text: issue.descriptionText,
+      $description_hash: issue.descriptionHash ?? null,
       $status_id: issue.statusId,
       $priority_name: issue.priorityName ?? '',
       $issue_type_name: issue.issueTypeName ?? '',

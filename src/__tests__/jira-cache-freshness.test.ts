@@ -126,6 +126,18 @@ for (const storage of ['sqlite', 'postgres'] as const) {
         }),
     )
 
+    run('a row without a description hash is re-read once and then stores it', () =>
+      withCache(storage, async ({ write, read }) => {
+        expect(await write([snapshot])).toEqual([])
+        expect((await read())?.description_hash).toBeNull()
+        const hashed = { ...snapshot, descriptionHash: 'sha256:abc' }
+        expect(await write([hashed])).toEqual(['DXS-266'])
+        expect(await write([hashed], { authoritative: true })).toEqual([])
+        expect((await read())?.description_hash).toBe('sha256:abc')
+        expect(await write([hashed])).toEqual([])
+      }),
+    )
+
     run('conflicting duplicate versions in a batch are reported for readback', () =>
       withCache(storage, async ({ write, read }) => {
         expect(await write([snapshot, { ...snapshot, statusId: '12103' }])).toEqual(['DXS-266'])
