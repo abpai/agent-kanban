@@ -51,7 +51,7 @@ function statusForCode(code: string): number {
     return 404
   if (code === ErrorCode.PROVIDER_AUTH_FAILED) return 401
   if (code === ErrorCode.PROVIDER_RATE_LIMITED) return 429
-  if (code === ErrorCode.CONFLICT) return 409
+  if (code === ErrorCode.CONFLICT || code === ErrorCode.WRITE_UNCONFIRMED) return 409
   if (code === ErrorCode.UNSUPPORTED_OPERATION) return 400
   // Server-side / upstream failures must surface as 5xx, not as the default 400.
   // (The MCP layer likewise treats these as `provider_unavailable`.)

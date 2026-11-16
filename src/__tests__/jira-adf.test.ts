@@ -431,6 +431,33 @@ describe('markdownToAdf refuses lossy writes', () => {
       '::: expand\n::: expand\n::: expand\nx\n:::\n:::\n:::',
       /nested one level deep/,
     ],
+    // Shapes the ADF schema rejects: Jira would answer 400 after the request.
+    ['a task list inside a quote', '> - [ ] a', /task list cannot be written inside a quote/],
+    [
+      'a task list inside a list item',
+      '- a\n  - [ ] b',
+      /task list cannot be written inside a list item/,
+    ],
+    [
+      'a table inside a nested expand',
+      '::: expand\n::: expand\n| a |\n| - |\n| b |\n:::\n:::',
+      /table cannot be written inside a nested expand/,
+    ],
+    ['an unknown status color', '[DONE](jira-status:banana)', /'banana' is not one/],
+    ['a mention without an account id', '[@x](jira-mention:)', /needs an account id/],
+    ['malformed percent-encoding', '[x](jira-mention:%zz)', /malformed percent-encoding/],
+    // A marker hidden by formatting or link syntax is still a marker.
+    ['a marker split by emphasis', '[unsupported *Jira* content: media]', /marker/],
+    [
+      'a marker written as a reference link',
+      '[unsupported Jira content: media][r]\n\n[r]: https://x.test',
+      /marker/,
+    ],
+    [
+      'a marker written as a shortcut reference',
+      '[unsupported Jira content: media]\n\n[unsupported Jira content: media]: https://x.test',
+      /marker/,
+    ],
   ]
   for (const [name, markdown, reason] of refused) {
     test(name, () => {
@@ -533,6 +560,84 @@ describe('reading never throws', () => {
     const malformed = adfToMarkdown({ type: 'paragraph' })
     expect(malformed.markdown).toBe('[unsupported Jira content: malformed document]')
     expect(malformed.warnings).toHaveLength(1)
+  })
+})
+
+describe('content in unexpected places is never dropped', () => {
+  test('a paragraph inside a task item keeps its text between markers', () => {
+    const read = adfToMarkdown(
+      doc({
+        type: 'taskList',
+        attrs: { localId: 'l' },
+        content: [
+          {
+            type: 'taskItem',
+            attrs: { localId: 't', state: 'TODO' },
+            content: [p(text('hello world'))],
+          },
+        ],
+      }),
+    )
+    expect(read.markdown).toContain('hello world')
+    expect(read.markdown).toContain('[unsupported Jira content: paragraph]')
+    expect(read.lossless).toBe(false)
+  })
+
+  test('an unknown inline node keeps its text', () => {
+    const read = adfToMarkdown(
+      doc(p(text('a '), { type: 'futureInline', content: [text('SECRET')] })),
+    )
+    expect(read.markdown).toBe(
+      'a [unsupported Jira content: futureInline]SECRET[end unsupported Jira content: futureInline]',
+    )
+    expect(read.warnings.map((w) => w.nodeType)).toEqual(['futureInline'])
+  })
+
+  test('a non-text node inside a code block keeps its text and is reported', () => {
+    const read = adfToMarkdown(
+      doc({
+        type: 'codeBlock',
+        content: [text('call '), { type: 'mention', attrs: { id: '1', text: '@bob' } }],
+      }),
+    )
+    expect(read.markdown).toBe('```\ncall \n```')
+    expect(read.warnings).toEqual([
+      expect.objectContaining({ code: 'unsupported_node', nodeType: 'mention' }),
+    ])
+  })
+
+  test('content entries that are not nodes render as markers with their JSON', () => {
+    const read = adfToMarkdown({
+      version: 1,
+      type: 'doc',
+      content: [p(text('ok')), 'raw string'],
+    })
+    expect(read.markdown).toContain('ok')
+    expect(read.markdown).toContain('[unsupported Jira content: invalid text="\\"raw string\\""]')
+    expect(read.lossless).toBe(false)
+  })
+
+  test('a date outside the Date range becomes a marker for that node only', () => {
+    const read = adfToMarkdown(
+      doc(p({ type: 'date', attrs: { timestamp: '99999999999999999999' } }), p(text('other'))),
+    )
+    expect(read.markdown).toBe(
+      '[unsupported Jira content: date timestamp="99999999999999999999"]\n\nother',
+    )
+  })
+
+  test('a link with a malformed jira- scheme reads without throwing', () => {
+    const read = adfToMarkdown(
+      doc(p(text('x', { type: 'link', attrs: { href: 'jira-mention:%zz' } }))),
+    )
+    expect(read.markdown).toBe('[x](jira-mention:%zz)')
+    expect(read.lossless).toBe(false)
+  })
+
+  test('an email autolink is a plain link, not a smart link', () => {
+    expect(written('<bob@example.com>').content).toEqual([
+      p(text('bob@example.com', { type: 'link', attrs: { href: 'mailto:bob@example.com' } })),
+    ])
   })
 })
 

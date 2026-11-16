@@ -7,6 +7,8 @@ import type {
   BoardMetrics,
   BoardView,
   Column,
+  FreshTaskAttachment,
+  FreshTaskRead,
   Priority,
   ProviderTeamInfo,
   Task,
@@ -22,17 +24,20 @@ import {
   type WebhookResult,
 } from '../webhooks'
 import {
+  adfContentHash,
   adfToMarkdown,
   compareAdf,
   describeAdfDifferences,
   markdownToAdf,
   type AdfDocument,
 } from './jira-adf'
+import { sha256Json } from './jira-adf/hash'
 import { buildDeltaJql, safeDeltaSince } from './jira-jql'
 import { JIRA_CAPABILITIES } from './capabilities'
 import { providerUpstreamError, unsupportedOperation } from './errors'
 import {
   JiraClient,
+  checkedAttachments,
   decideJiraPagination,
   normalizeJiraLabels,
   type JiraAttachment,
@@ -55,6 +60,7 @@ import type {
   ProviderContext,
   ProviderSyncStatus,
   ReadAttachmentOptions,
+  ReadTaskOptions,
   TaskListFilters,
   UpdateTaskInput,
 } from './types'
@@ -69,6 +75,15 @@ const ACTIVITY_READS_MAX = 10_000
 
 // Converts caller markdown to ADF, or refuses before anything is sent: a
 // document that cannot be represented must not reach Jira as degraded markup.
+// Jira never edits an attachment in place (a re-upload gets a new id), so the
+// metadata identifies the bytes without downloading them.
+function freshAttachment(task: TaskAttachment, raw: JiraAttachment): FreshTaskAttachment {
+  return {
+    ...task,
+    digest: sha256Json([raw.id, raw.filename, raw.size, raw.mimeType ?? null, raw.created ?? null]),
+  }
+}
+
 function jiraDocument(markdown: string, field: 'description' | 'comment'): AdfDocument {
   const converted = markdownToAdf(markdown)
   if (converted.ok) return converted.document
@@ -88,6 +103,7 @@ function jiraDocument(markdown: string, field: 'description' | 'comment'): AdfDo
 }
 
 // Write confirmation: what Jira stored must equal what was sent, structurally.
+// It runs after the write, so a failure names the object that now exists.
 function confirmJiraDocument(
   written: AdfDocument,
   stored: AdfDocument | string | null | undefined,
@@ -95,8 +111,9 @@ function confirmJiraDocument(
 ): void {
   const differences = compareAdf(written, stored ?? null)
   if (differences.length === 0) return
-  providerUpstreamError(
-    `Jira stored a different ${what} than was written: ${describeAdfDifferences(differences)}`,
+  throw new KanbanError(
+    ErrorCode.WRITE_UNCONFIRMED,
+    `The write was applied, but Jira stored a different ${what} than was sent; do not retry it as new: ${describeAdfDifferences(differences)}`,
   )
 }
 
@@ -218,6 +235,7 @@ function toCacheIssue(
     key: issue.key,
     summary: issue.fields.summary,
     descriptionText: adfToMarkdown(issue.fields.description).markdown,
+    descriptionHash: adfContentHash(issue.fields.description),
     statusId: issue.fields.status.id,
     priorityName: issue.fields.priority?.name ?? null,
     issueTypeName: issue.fields.issuetype?.name ?? '',
@@ -578,13 +596,74 @@ export class JiraProviderCore implements KanbanProvider {
     )
   }
 
-  async getTask(idOrRef: string): Promise<Task> {
+  async getTask(idOrRef: string, options: ReadTaskOptions = {}): Promise<Task> {
+    if (options.fresh) return this.readTaskFresh(idOrRef)
     await this.sync()
     const task = await this.cache.getCachedTask(idOrRef)
     if (!task) {
       throw new KanbanError(ErrorCode.TASK_NOT_FOUND, `No task with id '${idOrRef}'`)
     }
     return task
+  }
+
+  // One GET /issue, no sync and no warmer. Jira takes an issue id or key, so the
+  // cache is not consulted to find the issue and a cold cache is fine. The
+  // response is authoritative, like hydrateIssueByKey, so it replaces the
+  // cached row even at the same `updated` stamp. No stale fallback: any failure
+  // to reach Jira is the caller's error.
+  private async readTaskFresh(idOrRef: string): Promise<Task> {
+    await this.cache.ready
+    const lookup = idOrRef.replace(/^jira:/, '')
+    let issue: JiraIssue
+    try {
+      issue = await this.client.getIssue(lookup)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      throw new KanbanError(
+        err instanceof KanbanError ? err.code : ErrorCode.PROVIDER_UPSTREAM_ERROR,
+        `Fresh read of Jira issue '${lookup}' failed; no cached copy is returned: ${reason}`,
+      )
+    }
+    if (issue.fields.project?.key !== this.config.projectKey) {
+      throw new KanbanError(
+        ErrorCode.TASK_NOT_FOUND,
+        `Jira issue '${issue.key}' is not in project '${this.config.projectKey}'`,
+      )
+    }
+    const readAt = new Date().toISOString()
+    const description = adfToMarkdown(issue.fields.description)
+    await this.cache.upsertIssues(
+      [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey)],
+      { authoritative: true },
+    )
+    const cached = await this.cache.getCachedTask(issue.id)
+    if (!cached) {
+      providerUpstreamError(`Jira issue ${issue.key} was read fresh but is missing from the cache.`)
+    }
+    const attachments = checkedAttachments(issue.fields.attachment, issue.key)
+      .map((attachment) => freshAttachment(this.toTaskAttachment(cached, attachment), attachment))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    const freshRead: FreshTaskRead = {
+      read_at: readAt,
+      converter_version: description.converterVersion,
+      description_lossless: description.lossless,
+      description_warnings: description.warnings.map((warning) => ({
+        code: warning.code,
+        node_type: warning.nodeType,
+        path: warning.path,
+        message: warning.message,
+      })),
+      attachments,
+      attachments_digest: sha256Json(attachments.map((attachment) => attachment.digest)),
+    }
+    // The cache keeps the newer row if one landed between the GET and the
+    // upsert; the description fields always come from this read.
+    return {
+      ...cached,
+      description: description.markdown,
+      description_hash: adfContentHash(issue.fields.description),
+      fresh_read: freshRead,
+    }
   }
 
   private async resolveJiraPriorityName(canonical: Priority): Promise<string> {

@@ -5,6 +5,8 @@ export interface JiraIssueSnapshot {
   key: string
   summary: string
   descriptionText: string
+  /** `sha256:<hex>` of the raw ADF description; null when there is none. */
+  descriptionHash?: string | null
   statusId: string
   priorityName?: string | null
   issueTypeName?: string | null
@@ -57,6 +59,7 @@ function snapshotContent(issue: JiraIssueSnapshot): string {
     issue.key,
     issue.summary,
     issue.descriptionText,
+    issue.descriptionHash ?? null,
     issue.statusId,
     issue.priorityName ?? '',
     issue.issueTypeName ?? '',

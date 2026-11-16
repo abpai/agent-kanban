@@ -3,7 +3,8 @@ import { mockFetch } from './helpers/fetch'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { ErrorCode } from '../errors'
-import { adfToMarkdown, markdownToAdf } from '../providers/jira-adf'
+import { adfToMarkdown, markdownToAdf, type AdfDocument } from '../providers/jira-adf'
+import type { JsonObject, JsonValue } from '../json'
 import {
   JiraClient,
   type JiraCreatePayload,
@@ -304,7 +305,10 @@ function fullSyncRoutes(extraIssues: JiraIssue[] = []): StubRoute[] {
 }
 
 describe('JiraProvider mutations', () => {
-  function descriptionRoutes(issue: JiraIssue, opts: { ignoreUpdate: () => boolean }) {
+  function descriptionRoutes(
+    issue: JiraIssue,
+    opts: { ignoreUpdate: () => boolean; store?: (sent: AdfDocument) => AdfDocument },
+  ) {
     const syncRoutes = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [{ name: 'To Do', statusIds: ['20000'] }],
@@ -319,7 +323,11 @@ describe('JiraProvider mutations', () => {
         const payload: { fields?: Pick<JiraIssue['fields'], 'description'> } = JSON.parse(
           await new Response(init?.body).text(),
         )
-        if (!opts.ignoreUpdate()) issue.fields.description = payload.fields?.description
+        const sent = payload.fields?.description
+        if (!opts.ignoreUpdate()) {
+          issue.fields.description =
+            sent && typeof sent !== 'string' && opts.store ? opts.store(sent) : sent
+        }
         return emptyResponse()
       },
     }
@@ -349,10 +357,70 @@ describe('JiraProvider mutations', () => {
       .updateTask('ENG-1', { description: 'A different reading path' })
       .catch((cause: Error) => cause)
     assertKanbanError(err)
-    expect(err.code).toBe(ErrorCode.PROVIDER_UPSTREAM_ERROR)
+    expect(err.code).toBe(ErrorCode.WRITE_UNCONFIRMED)
     expect(err.message).toMatch(
-      /Jira stored a different description on ENG-1 than was written: content/,
+      /The write was applied, but Jira stored a different description on ENG-1 than was sent; do not retry it as new: content/,
     )
+  })
+
+  test('attributes Jira adds when it stores a description do not fail confirmation', async () => {
+    fullSeed(db)
+    const issue = makeJiraIssueFixture(seedIssues[0]!)
+    // What Jira Cloud hands back: localIds everywhere, table sizing, default
+    // attrs spelled out, mention access levels, and blank spacer paragraphs.
+    const enrich = (node: JsonValue): JsonValue => {
+      if (Array.isArray(node)) return node.map(enrich)
+      if (node === null || typeof node !== 'object') return node
+      const out: JsonObject = {}
+      for (const [key, value] of Object.entries(node))
+        if (value !== undefined) out[key] = enrich(value)
+      const attrs: JsonObject =
+        typeof out['attrs'] === 'object' && out['attrs'] !== null && !Array.isArray(out['attrs'])
+          ? { ...out['attrs'] }
+          : {}
+      switch (out['type']) {
+        case 'table':
+          Object.assign(attrs, { width: 760, displayMode: 'default', localId: 'tbl-1' })
+          break
+        case 'tableCell':
+        case 'tableHeader':
+          Object.assign(attrs, { colspan: 1, rowspan: 1, colwidth: [] })
+          break
+        case 'paragraph':
+        case 'heading':
+          attrs['localId'] = 'p-1'
+          break
+        case 'orderedList':
+          attrs['order'] ??= 1
+          break
+        case 'codeBlock':
+          attrs['language'] ??= ''
+          break
+        case 'mention':
+          Object.assign(attrs, { accessLevel: '', userType: 'DEFAULT' })
+          break
+        default:
+          return out
+      }
+      out['attrs'] = attrs
+      return out
+    }
+    const { provider } = makeProvider(
+      db,
+      descriptionRoutes(issue, {
+        ignoreUpdate: () => false,
+        store: (sent) => {
+          // SAFETY: enrich keeps the doc node shape; it only adds attributes and nodes.
+          const stored = enrich(sent) as AdfDocument
+          stored.content = [...(stored.content ?? []), { type: 'paragraph', content: [] }]
+          return stored
+        },
+      }),
+    )
+    const requested =
+      '## Plan\n\n1. Ask [@Dana Lee](jira-mention:557058:abc)\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n```\nrun()\n```'
+    const updated = await provider.updateTask('ENG-1', { description: requested })
+    expect(updated.description).toBe(requested)
   })
 
   test('markdown Jira cannot represent is refused before anything is written', async () => {

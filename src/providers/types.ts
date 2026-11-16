@@ -90,10 +90,21 @@ export interface BoardReader {
   getConfig(): Promise<BoardConfig>
 }
 
+export interface ReadTaskOptions {
+  /**
+   * Read this one task from the provider now, skipping the cache warmer and any
+   * full sync, and write the result into the cache. A fresh read never falls
+   * back to the cache: if the provider cannot be reached it throws. Jira also
+   * returns `fresh_read` (converter output details and attachment digests).
+   * The local provider is always fresh.
+   */
+  fresh?: boolean
+}
+
 /** Task reads. */
 export interface TaskReader {
   listTasks(filters?: TaskListFilters): Promise<Task[]>
-  getTask(idOrRef: string): Promise<Task>
+  getTask(idOrRef: string, options?: ReadTaskOptions): Promise<Task>
 }
 
 /** Task mutations. */

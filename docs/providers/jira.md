@@ -119,7 +119,7 @@ transition from every status.
 
 Jira Cloud stores rich text as **Atlassian Document Format (ADF)**, a JSON
 tree. Descriptions and comments both go through
-[`src/providers/jira-adf.ts`](../../src/providers/jira-adf.ts), which converts
+[`src/providers/jira-adf/`](../../src/providers/jira-adf/index.ts), which converts
 between ADF and GitHub-flavored markdown. Consumers can import it as
 `@andypai/agent-kanban/jira-adf`.
 
@@ -131,13 +131,18 @@ between ADF and GitHub-flavored markdown. Consumers can import it as
   normalized ADF) and `converterVersion`.
 - **Writes refuse what Jira cannot represent.** `markdownToAdf` returns
   `{ ok: false, issues }` for images, raw HTML, table column alignment, block
-  types a list item or quote cannot hold, or markdown that still carries an
-  unsupported-content marker. The provider turns a refusal into
-  `INVALID_ARGUMENT` before any request is sent.
+  types a container cannot hold under the ADF schema (a task list in a quote or
+  list item, a table in a nested expand), unknown status colors, mentions with
+  no account id, or markdown that still carries an unsupported-content marker
+  (also when formatting or link syntax splits it). The provider turns a refusal
+  into `INVALID_ARGUMENT` before any request is sent. `markdownToAdf` never
+  throws.
 - **Writes are confirmed structurally.** After a description or comment write,
   the provider compares what Jira stored with what it sent using
-  `compareAdf`. A mismatch is `PROVIDER_UPSTREAM_ERROR` with the differing
-  paths.
+  `compareAdf`. A mismatch is `WRITE_UNCONFIRMED` (HTTP 409, MCP
+  `validation_failed`). The write has already happened at that point and the
+  message names the issue key or comment id, so do not retry it as a new
+  write.
 
 ### Markdown syntax per ADF node
 
@@ -176,6 +181,12 @@ end of a paragraph, whitespace at the edges of a table cell, whitespace at the
 edges of bold or italic text, emoji `text`, and mention access level. It merges
 adjacent text with the same marks and treats `\n` inside text as a line break.
 
+`lossless` uses the same definition. A table with custom column widths, or a
+description with blank spacer paragraphs, reads as lossless, but writing the
+markdown back drops the widths and spacers. `markdownToAdf` also gives tables,
+task lists and status lozenges fresh random `localId`s on every call, so hash
+`normalizeAdf(document)` rather than the raw document when comparing writes.
+
 ### Converter version
 
 `JIRA_ADF_CONVERTER_VERSION` changes whenever the same ADF could render to
@@ -183,6 +194,34 @@ different markdown. Store it next to anything derived from rendered text so
 the derived value can be recomputed. After an upgrade, cached descriptions
 re-render on the next full reconcile: same-instant snapshots with different
 text trigger the existing authoritative `GET /issue` read.
+
+### Fresh reads and description hashes
+
+Every Jira task carries `description_hash`: `sha256:<hex>` of the raw ADF
+description as Jira stores it, with object keys sorted. It never depends on the
+converter, so a converter upgrade cannot make an unchanged description look
+edited. It is `null` when the issue has no description, and
+`adfContentHash(doc)` from `@andypai/agent-kanban/jira-adf` computes the same
+value. Rows cached before this field existed are re-read once through
+`GET /issue` on their next snapshot.
+
+`provider.getTask(id, { fresh: true })` reads one issue now:
+
+1. One `GET /issue/{id or key}`, skipping the background warmer and any sync.
+2. The result is written into the cache as an authoritative row.
+3. The task comes back with `description_hash` and `fresh_read`:
+   `read_at`, `converter_version`, `description_lossless`,
+   `description_warnings`, `attachments` (each with a `digest`), and
+   `attachments_digest`.
+4. If Jira cannot be reached or answers with an error, the read throws. It
+   never falls back to the cache.
+
+An attachment `digest` is `sha256:<hex>` of `[id, filename, size, mimeType,
+created]`. Jira never edits an attachment in place (a re-upload gets a new id),
+so this identifies the bytes without downloading them. `attachments_digest`
+hashes the attachment digests sorted by attachment id. Linear also supports
+`fresh: true` (one issue fetch, no `fresh_read`); the local provider is always
+fresh.
 
 ## Cache freshness
 

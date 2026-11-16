@@ -67,14 +67,29 @@ function collectDefinitions(node: Nodes, into: Map<string, Definition>): void {
   if ('children' in node) for (const child of node.children) collectDefinitions(child, into)
 }
 
-type FlowScope = 'doc' | 'listItem' | 'blockquote' | 'expand'
+type FlowScope = 'doc' | 'listItem' | 'blockquote' | 'expand' | 'nestedExpand'
 
+// What the ADF schema lets each container hold. Writing anything else gets a
+// 400 from Jira, so it is refused here with a line number instead.
 const ALLOWED_IN = {
   doc: new Set(['paragraph', 'heading', 'list', 'code', 'blockquote', 'thematicBreak', 'table']),
   expand: new Set(['paragraph', 'heading', 'list', 'code', 'blockquote', 'thematicBreak', 'table']),
+  nestedExpand: new Set(['paragraph', 'heading', 'list', 'code', 'blockquote', 'thematicBreak']),
   listItem: new Set(['paragraph', 'list', 'code']),
   blockquote: new Set(['paragraph', 'list', 'code']),
 } satisfies Record<FlowScope, ReadonlySet<string>>
+
+// Task lists are only valid directly in a doc, an expand, or another task list.
+const TASK_LIST_SCOPES: ReadonlySet<FlowScope> = new Set(['doc', 'expand', 'nestedExpand'])
+
+const STATUS_COLORS: ReadonlySet<string> = new Set([
+  'neutral',
+  'purple',
+  'blue',
+  'red',
+  'yellow',
+  'green',
+])
 
 function emptyParagraph(): AdfNode {
   return { type: 'paragraph' }
@@ -88,27 +103,49 @@ function flowToAdf(nodes: RootContent[], scope: FlowScope, ctx: WriteContext): A
       refuse(ctx, node, describeRefusal(node, scope))
       continue
     }
+    if (node.type === 'list' && isTaskList(node) && !TASK_LIST_SCOPES.has(scope)) {
+      refuse(ctx, node, `A task list cannot be written inside ${scopeName(scope)} in Jira.`)
+      continue
+    }
     const converted = flowNodeToAdf(node, ctx)
     if (converted) out.push(converted)
   }
   return out
 }
 
+function isTaskList(node: List): boolean {
+  return node.children.some((item) => typeof item.checked === 'boolean')
+}
+
+function scopeName(scope: FlowScope): string {
+  switch (scope) {
+    case 'listItem':
+      return 'a list item'
+    case 'blockquote':
+      return 'a quote'
+    case 'nestedExpand':
+      return 'a nested expand'
+    default:
+      return 'Jira'
+  }
+}
+
 function describeRefusal(node: RootContent, scope: FlowScope): string {
   if (node.type === 'html') return 'Raw HTML blocks cannot be written to Jira.'
   if (node.type === 'footnoteDefinition') return 'Footnotes cannot be written to Jira.'
   if (node.type === 'yaml') return 'Front matter cannot be written to Jira.'
-  const where = scope === 'listItem' ? 'a list item' : scope === 'blockquote' ? 'a quote' : 'Jira'
-  return `A markdown ${node.type} cannot be written inside ${where}.`
+  return `A markdown ${node.type} cannot be written inside ${scopeName(scope)}.`
 }
 
 function flowNodeToAdf(node: RootContent, ctx: WriteContext): AdfNode | null {
   switch (node.type) {
     case 'paragraph': {
+      checkMarker(node.children, node, ctx)
       const content = phrasingToAdf(node.children, [], ctx)
       return content.length > 0 ? { type: 'paragraph', content } : null
     }
     case 'heading': {
+      checkMarker(node.children, node, ctx)
       const content = phrasingToAdf(node.children, [], ctx)
       const heading: AdfNode = { type: 'heading', attrs: { level: node.depth } }
       if (content.length > 0) heading['content'] = content
@@ -147,6 +184,8 @@ function listToAdf(node: List, ctx: WriteContext): AdfNode {
     return taskListToAdf(node, ctx)
   }
   const items = node.children.map((item): AdfNode => {
+    // Jira's editor stores an item that starts with a nested list when the
+    // first bullet is indented, so that shape is written as-is.
     const content = flowToAdf(item.children, 'listItem', ctx)
     return { type: 'listItem', content: content.length > 0 ? content : [emptyParagraph()] }
   })
@@ -160,6 +199,7 @@ function taskListToAdf(node: List, ctx: WriteContext): AdfNode {
   const content: AdfNode[] = []
   for (const item of node.children) {
     const [first, ...rest] = item.children
+    if (first?.type === 'paragraph') checkMarker(first.children, first, ctx)
     const inline = first?.type === 'paragraph' ? phrasingToAdf(first.children, [], ctx) : []
     const task: AdfNode = {
       type: 'taskItem',
@@ -198,6 +238,7 @@ function tableToAdf(node: Table, ctx: WriteContext): AdfNode {
     (row, rowIndex): AdfNode => ({
       type: 'tableRow',
       content: row.children.map((cell): AdfNode => {
+        checkMarker(cell.children, cell, ctx)
         const content = phrasingToAdf(cell.children, [], ctx)
         return {
           type: rowIndex === 0 ? 'tableHeader' : 'tableCell',
@@ -211,6 +252,48 @@ function tableToAdf(node: Table, ctx: WriteContext): AdfNode {
     type: 'table',
     attrs: { isNumberColumnEnabled: false, layout: 'default', localId: crypto.randomUUID() },
     content: rows,
+  }
+}
+
+// The visible text of inline content, with link text kept in brackets, so a
+// marker split by formatting or written as a reference link is still seen.
+function visibleText(nodes: PhrasingContent[]): string {
+  return nodes
+    .map((node): string => {
+      switch (node.type) {
+        case 'text':
+        case 'inlineCode':
+          return node.value
+        case 'link':
+        case 'linkReference':
+          return `[${visibleText(node.children)}]`
+        case 'emphasis':
+        case 'strong':
+        case 'delete':
+          return visibleText(node.children)
+        default:
+          return ''
+      }
+    })
+    .join('')
+}
+
+function checkMarker(nodes: PhrasingContent[], at: Nodes, ctx: WriteContext): void {
+  if (!MARKER_PATTERN.test(visibleText(nodes))) return
+  const issue: MarkdownWriteIssue = {
+    code: 'unsupported_marker',
+    message:
+      'The markdown still contains an unsupported-Jira-content marker; writing it would replace the original Jira content with the marker text.',
+  }
+  if (at.position) issue.line = at.position.start.line + ctx.lineOffset
+  ctx.issues.push(issue)
+}
+
+function decodeSchemeValue(encoded: string): string | null {
+  try {
+    return decodeURIComponent(encoded)
+  } catch {
+    return null
   }
 }
 
@@ -249,13 +332,21 @@ function schemeNode(
   )
   if (!scheme) return undefined
   const label = linkText(node)
-  const value = decodeURIComponent(node.url.slice(scheme.length))
+  const value = decodeSchemeValue(node.url.slice(scheme.length))
+  if (value === null) {
+    refuse(ctx, node, `The ${scheme.slice(0, -1)} link has malformed percent-encoding.`)
+    return null
+  }
   if (label === null || marks.length > 0) {
     refuse(ctx, node, `A ${scheme.slice(0, -1)} link must be plain text outside other formatting.`)
     return null
   }
   switch (scheme) {
     case MENTION_SCHEME:
+      if (value.length === 0) {
+        refuse(ctx, node, 'A jira-mention link needs an account id.')
+        return null
+      }
       return { type: 'mention', attrs: { id: value, text: label } }
     case EMOJI_SCHEME: {
       const attrs: JsonObject = { shortName: label }
@@ -263,6 +354,14 @@ function schemeNode(
       return { type: 'emoji', attrs }
     }
     case STATUS_SCHEME:
+      if (!STATUS_COLORS.has(value)) {
+        refuse(
+          ctx,
+          node,
+          `Jira status colors are ${[...STATUS_COLORS].join(', ')}; '${value}' is not one.`,
+        )
+        return null
+      }
       return {
         type: 'status',
         attrs: { text: label, color: value, localId: crypto.randomUUID() },
@@ -282,7 +381,7 @@ function linkToAdf(node: Link, marks: AdfMarkSpec[], out: AdfNode[], ctx: WriteC
     if (special) out.push(special)
     return
   }
-  if (sourceStartsWith(node, ctx, '<')) {
+  if (sourceStartsWith(node, ctx, '<') && !node.url.startsWith('mailto:')) {
     if (marks.length > 0) {
       refuse(ctx, node, 'A Jira smart link (<url>) cannot be formatted.')
       return
@@ -332,15 +431,6 @@ function phrasingToAdf(
   for (const node of nodes) {
     switch (node.type) {
       case 'text':
-        if (MARKER_PATTERN.test(node.value)) {
-          const issue: MarkdownWriteIssue = {
-            code: 'unsupported_marker',
-            message:
-              'The markdown still contains an unsupported-Jira-content marker; writing it would replace the original Jira content with the marker text.',
-          }
-          if (node.position) issue.line = node.position.start.line + ctx.lineOffset
-          ctx.issues.push(issue)
-        }
         out.push(...textNodes(node.value, active()))
         break
       case 'break':
@@ -520,7 +610,8 @@ function segmentsToAdf(
     const definitions = new Map<string, Definition>()
     collectDefinitions(tree, definitions)
     const ctx: WriteContext = { issues, definitions, lineOffset: segment.firstLine, source }
-    out.push(...flowToAdf(tree.children, depth === 0 ? 'doc' : 'expand', ctx))
+    const scope: FlowScope = depth === 0 ? 'doc' : depth === 1 ? 'expand' : 'nestedExpand'
+    out.push(...flowToAdf(tree.children, scope, ctx))
   }
   return out
 }

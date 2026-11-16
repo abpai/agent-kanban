@@ -84,6 +84,7 @@ export class PostgresJiraCache implements JiraCachePort {
         key TEXT NOT NULL UNIQUE,
         summary TEXT NOT NULL,
         description_text TEXT NOT NULL DEFAULT '',
+        description_hash TEXT,
         status_id TEXT NOT NULL,
         priority_name TEXT NOT NULL DEFAULT '',
         issue_type_name TEXT NOT NULL DEFAULT '',
@@ -97,6 +98,8 @@ export class PostgresJiraCache implements JiraCachePort {
         updated_at TEXT NOT NULL
       )
     `
+    // Rows from before the hash existed keep NULL until their next GET /issue re-read.
+    await this.sql`ALTER TABLE jira_issues ADD COLUMN IF NOT EXISTS description_hash TEXT`
     await this.sql`CREATE INDEX IF NOT EXISTS idx_jira_issues_status_id ON jira_issues(status_id)`
     await this.sql`CREATE INDEX IF NOT EXISTS idx_jira_issues_updated_at ON jira_issues(updated_at)`
     await this.sql`
@@ -329,6 +332,7 @@ export class PostgresJiraCache implements JiraCachePort {
       key: issue.key,
       summary: issue.summary,
       description_text: issue.descriptionText,
+      description_hash: issue.descriptionHash ?? null,
       status_id: issue.statusId,
       priority_name: issue.priorityName ?? '',
       issue_type_name: issue.issueTypeName ?? '',
@@ -345,17 +349,18 @@ export class PostgresJiraCache implements JiraCachePort {
       await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
       await tx`
         INSERT INTO jira_issues (
-          id, key, summary, description_text, status_id, priority_name, issue_type_name,
+          id, key, summary, description_text, description_hash, status_id, priority_name, issue_type_name,
           assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
         )
         SELECT
-          id, key, summary, description_text, status_id, priority_name, issue_type_name,
+          id, key, summary, description_text, description_hash, status_id, priority_name, issue_type_name,
           assignee_account_id, assignee_name, labels, comment_count, project_key, url, created_at, updated_at
         FROM jsonb_to_recordset(${recordsetJson(tx, rows)}) AS data(
           id text,
           key text,
           summary text,
           description_text text,
+          description_hash text,
           status_id text,
           priority_name text,
           issue_type_name text,
@@ -372,6 +377,7 @@ export class PostgresJiraCache implements JiraCachePort {
           key = EXCLUDED.key,
           summary = EXCLUDED.summary,
           description_text = EXCLUDED.description_text,
+          description_hash = EXCLUDED.description_hash,
           status_id = EXCLUDED.status_id,
           priority_name = EXCLUDED.priority_name,
           issue_type_name = EXCLUDED.issue_type_name,
@@ -390,15 +396,15 @@ export class PostgresJiraCache implements JiraCachePort {
         const equalConflicts = await tx<{ key: string }[]>`
           SELECT stored.key FROM jira_issues stored
           JOIN jsonb_to_recordset(${recordsetJson(tx, rows)}) AS incoming(
-            id text, key text, summary text, description_text text, status_id text,
+            id text, key text, summary text, description_text text, description_hash text, status_id text,
             priority_name text, issue_type_name text, assignee_account_id text, assignee_name text,
             labels text, comment_count integer, project_key text, url text, updated_at text
           ) ON stored.id = incoming.id
           WHERE stored.updated_at::timestamptz = incoming.updated_at::timestamptz
-            AND (stored.key, stored.summary, stored.description_text, stored.status_id,
+            AND (stored.key, stored.summary, stored.description_text, stored.description_hash, stored.status_id,
                  stored.priority_name, stored.issue_type_name, stored.assignee_account_id,
                  stored.assignee_name, stored.labels, stored.comment_count, stored.project_key, stored.url)
-             IS DISTINCT FROM (incoming.key, incoming.summary, incoming.description_text, incoming.status_id,
+             IS DISTINCT FROM (incoming.key, incoming.summary, incoming.description_text, incoming.description_hash, incoming.status_id,
                  incoming.priority_name, incoming.issue_type_name, incoming.assignee_account_id,
                  incoming.assignee_name, incoming.labels, incoming.comment_count, incoming.project_key, incoming.url)
         `

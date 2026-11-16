@@ -48,6 +48,9 @@ import {
 } from './model'
 import { normalizeMarks } from './normalize'
 
+// The largest instant a JavaScript Date can hold.
+const MAX_DATE_MS = 8.64e15
+
 const AUTOLINK_URL = /^[a-z][a-z0-9+.-]{1,31}:[^\s<>]*$/i
 
 const HTML_MARK_TAGS = new Map<string, string>([
@@ -190,7 +193,7 @@ function blocksToMdast(
   nodes.forEach((node, index) => {
     // Empty paragraphs are vertical spacing in Jira; markdown collapses them.
     if (isEmptyParagraph(node)) return
-    for (const block of blockToMdast(node, `${path}[${index}]`, ctx, allowExpand)) {
+    for (const block of safeBlockToMdast(node, `${path}[${index}]`, ctx, allowExpand)) {
       if (block.type === 'paragraph' && block.children.length === 0) continue
       out.push(block)
     }
@@ -231,7 +234,18 @@ function blockToMdast(
       const code: Code = {
         type: 'code',
         lang: language && language.length > 0 ? language : null,
-        value: childNodes(node).map(textOf).join(''),
+        value: childNodes(node)
+          .map((child, index) => {
+            if (child.type === 'text') return textOf(child)
+            warn(ctx, {
+              code: 'unsupported_node',
+              nodeType: child.type,
+              path: `${path}.content[${index}]`,
+              message: `Jira ${child.type} inside a code block has no markdown form; kept as its text.`,
+            })
+            return collectInline(child).map(textOf).join('')
+          })
+          .join(''),
       }
       return [code]
     }
@@ -260,6 +274,33 @@ function blockToMdast(
     default:
       if (isInlineNode(node)) return [paragraphFromInline([node], path, ctx)]
       return unsupportedNode(node, path, ctx)
+  }
+}
+
+// A renderer fault on one node becomes a marker holding that node's JSON, so
+// the rest of the document still renders and nothing is lost.
+function safeBlockToMdast(
+  node: AdfNode,
+  path: string,
+  ctx: ReadContext,
+  allowExpand: boolean,
+): RootContent[] {
+  const before = ctx.warnings.length
+  try {
+    return blockToMdast(node, path, ctx, allowExpand)
+  } catch (err) {
+    ctx.warnings.length = before
+    warn(ctx, {
+      code: 'unsupported_node',
+      nodeType: node.type,
+      path,
+      message: `Jira ${node.type} failed to render (${err instanceof Error ? err.message : String(err)}); kept as JSON.`,
+    })
+    return [
+      rawFlow(`[${MARKER_PREFIX}${node.type} that failed to render]`),
+      { type: 'code', lang: 'json', value: JSON.stringify(node) },
+      rawFlow(`[end ${MARKER_PREFIX}${node.type}]`),
+    ]
   }
 }
 
@@ -399,8 +440,14 @@ function flattenCell(cell: AdfNode, path: string, ctx: ReadContext): PhrasingCon
 
 function collectInline(node: AdfNode): AdfNode[] {
   if (isInlineNode(node)) return [node]
+  const children = childNodes(node)
+  // A childless block (a rule, a media node) is kept so it renders as a
+  // marker; an empty paragraph or heading has nothing to keep.
+  if (children.length === 0) {
+    return node.type === 'paragraph' || node.type === 'heading' ? [] : [node]
+  }
   const out: AdfNode[] = []
-  for (const child of childNodes(node)) {
+  for (const child of children) {
     if (out.length > 0 && !isInlineNode(child)) out.push({ type: 'text', text: ' ' })
     out.push(...collectInline(child))
   }
@@ -671,8 +718,9 @@ function inlineLeaf(
     }
     case 'date': {
       const timestamp = stringAttr(node, 'timestamp') ?? String(numberAttr(node, 'timestamp') ?? '')
-      if (!/^\d+$/.test(timestamp)) break
-      const label = new Date(Number(timestamp)).toISOString().slice(0, 10)
+      const ms = Number(timestamp)
+      if (!/^\d+$/.test(timestamp) || !Number.isSafeInteger(ms) || ms > MAX_DATE_MS) break
+      const label = new Date(ms).toISOString().slice(0, 10)
       return [schemeLink(`${DATE_SCHEME}${timestamp}`, label)]
     }
     case 'inlineCard': {
@@ -689,7 +737,15 @@ function inlineLeaf(
     path,
     message: `Jira ${node.type} has no markdown form; rendered as a marker.`,
   })
-  return [{ type: 'html', value: markerText(node) }]
+  const marker: PhrasingContent = { type: 'html', value: markerText(node) }
+  if (childNodes(node).length === 0) return [marker]
+  // A block or unknown node where only inline content fits: its text stays
+  // readable between markers instead of vanishing.
+  return [
+    marker,
+    ...inlineToMdast(collectInline(node), `${path}.content`, ctx),
+    { type: 'html', value: `[end ${MARKER_PREFIX}${node.type}]` },
+  ]
 }
 
 function serialize(children: RootContent[]): string {
@@ -700,8 +756,19 @@ function serialize(children: RootContent[]): string {
 
 export function documentContent(doc: JsonValue | undefined): AdfNode[] | null {
   const node = asNode(doc)
-  if (!node || node.type !== 'doc' || !Array.isArray(node['content'])) return null
-  return childNodes(node)
+  const content = node?.['content']
+  if (!node || node.type !== 'doc' || !Array.isArray(content)) return null
+  return content.map(withValidChildren)
+}
+
+// A content entry that is not an ADF node (a bare string, a number) becomes an
+// `invalid` node holding its JSON, so it renders as a marker instead of being
+// skipped.
+function withValidChildren(value: JsonValue): AdfNode {
+  const node = asNode(value)
+  if (!node) return { type: 'invalid', attrs: { text: JSON.stringify(value) } }
+  const content = node['content']
+  return Array.isArray(content) ? { ...node, content: content.map(withValidChildren) } : node
 }
 
 export interface RenderedMarkdown {

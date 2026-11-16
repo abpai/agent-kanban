@@ -1,4 +1,6 @@
+import { assertKanbanError } from './helpers/errors'
 import { mockFetch } from './helpers/fetch'
+import { ErrorCode } from '../errors'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { JiraClient } from '../providers/jira-client'
@@ -257,6 +259,51 @@ describe('JiraProvider.comment', () => {
       author: 'Jira User',
       updated_at: '2026-01-05T00:00:00Z',
     })
+  })
+
+  test('a comment Jira stored differently is reported as applied but unconfirmed', async () => {
+    const client = new JiraClient({
+      baseUrl: baseConfig.baseUrl,
+      email: baseConfig.email,
+      apiToken: baseConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, baseConfig, client)
+
+    // The POST stub always stores "hello from jira".
+    const err = await provider.comment('ENG-1', 'something else').catch((cause: Error) => cause)
+
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.WRITE_UNCONFIRMED)
+    expect(err.message).toContain('Jira stored a different comment comment-1 than was sent')
+    // The comment exists upstream, so the count still moves.
+    expect((await provider.getTask('ENG-1')).comment_count).toBe(1)
+  })
+
+  test('an edited comment Jira stored differently is reported as unconfirmed', async () => {
+    const client = new JiraClient({
+      baseUrl: baseConfig.baseUrl,
+      email: baseConfig.email,
+      apiToken: baseConfig.apiToken,
+    })
+    const provider = new JiraProvider(db, baseConfig, client)
+    globalThis.fetch = mockFetch(async () =>
+      Response.json({
+        id: 'comment-1',
+        body: {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }],
+        },
+        created: '2026-01-03T00:00:00Z',
+        updated: '2026-01-05T00:00:00Z',
+      }),
+    )
+
+    const err = await provider
+      .updateComment('ENG-1', 'comment-1', 'edited jira comment')
+      .catch((cause: Error) => cause)
+
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.WRITE_UNCONFIRMED)
   })
 
   test('puts an updated ADF comment to the Jira issue comment endpoint', async () => {

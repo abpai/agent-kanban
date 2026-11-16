@@ -5,6 +5,7 @@ export interface JiraTaskRow {
   key: string
   summary: string
   description_text: string
+  description_hash: string | null
   status_id: string
   priority_name: string
   issue_type_name: string
@@ -82,6 +83,7 @@ export function jiraTaskFromRow(row: JiraTaskRow): Task {
     url: row.url,
     title: row.summary,
     description: row.description_text,
+    description_hash: row.description_hash,
     column_id: row.status_id,
     position: 0,
     priority: mapJiraPriorityNameToCanonical(row.priority_name),

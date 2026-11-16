@@ -20,7 +20,9 @@ import {
   JIRA_ADF_CONVERTER_VERSION,
   MARKER_PREFIX,
   asNode,
+  type AdfConversionWarning,
   type AdfMarkdown,
+  type AdfNode,
   type MarkdownToAdfResult,
 } from './model'
 import { compareAdf } from './normalize'
@@ -37,6 +39,7 @@ export {
   type MarkdownToAdfResult,
   type MarkdownWriteIssue,
 } from './model'
+export { adfContentHash } from './hash'
 export { compareAdf, describeAdfDifferences, normalizeAdf } from './normalize'
 
 /**
@@ -96,22 +99,8 @@ export function adfToMarkdown(doc: JsonValue | undefined): AdfMarkdown {
 
   const { markdown, warnings } = rendered
   if (warnings.length === 0) {
-    const reparsed = parseMarkdown(markdown)
-    const differences =
-      reparsed.issues.length > 0
-        ? []
-        : compareAdf({ version: 1, type: 'doc', content }, reparsed.document)
-    if (reparsed.issues.length > 0 || differences.length > 0) {
-      const first = differences[0]
-      warnings.push({
-        code: 'round_trip_mismatch',
-        nodeType: 'doc',
-        path: first?.path ?? '',
-        message:
-          reparsed.issues[0]?.message ??
-          `Markdown does not parse back to the same document at ${first?.path ?? '(root)'}.`,
-      })
-    }
+    const mismatch = roundTripMismatch(content, markdown)
+    if (mismatch) warnings.push(mismatch)
   }
 
   return {
@@ -122,11 +111,56 @@ export function adfToMarkdown(doc: JsonValue | undefined): AdfMarkdown {
   }
 }
 
+// The `lossless` check. A parser fault counts as a mismatch, never a failed read.
+function roundTripMismatch(content: AdfNode[], markdown: string): AdfConversionWarning | null {
+  try {
+    const reparsed = parseMarkdown(markdown)
+    const differences =
+      reparsed.issues.length > 0
+        ? []
+        : compareAdf({ version: 1, type: 'doc', content }, reparsed.document)
+    if (reparsed.issues.length === 0 && differences.length === 0) return null
+    const first = differences[0]
+    return {
+      code: 'round_trip_mismatch',
+      nodeType: 'doc',
+      path: first?.path ?? '',
+      message:
+        reparsed.issues[0]?.message ??
+        `Markdown does not parse back to the same document at ${first?.path ?? '(root)'}.`,
+    }
+  } catch (err) {
+    return {
+      code: 'round_trip_mismatch',
+      nodeType: 'doc',
+      path: '',
+      message: `Markdown could not be parsed back: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
+}
+
 /**
  * Converts markdown to a Jira ADF document, or refuses with the reasons when
- * the markdown holds something ADF cannot represent.
+ * the markdown holds something ADF cannot represent. Never throws.
  */
 export function markdownToAdf(markdown: string): MarkdownToAdfResult {
+  try {
+    return convertMarkdown(markdown)
+  } catch (err) {
+    return {
+      ok: false,
+      issues: [
+        {
+          code: 'unsupported_markdown',
+          message: `The markdown could not be converted: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ],
+      converterVersion: JIRA_ADF_CONVERTER_VERSION,
+    }
+  }
+}
+
+function convertMarkdown(markdown: string): MarkdownToAdfResult {
   const { document, issues } = parseMarkdown(markdown)
   if (issues.length > 0) return { ok: false, issues, converterVersion: JIRA_ADF_CONVERTER_VERSION }
   const rendered = adfToMarkdown(document)

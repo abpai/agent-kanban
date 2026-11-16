@@ -37,6 +37,8 @@ function providerError(code: ErrorCodeValue): TrackerMcpErrorCode {
       return 'comment_not_found'
     // NOT_FOUND and ATTACHMENT_REFUSED name an attachment outside the ticket or
     // one refused for its size: the argument is wrong and a retry cannot succeed.
+    // WRITE_UNCONFIRMED is a write that landed but stored something else; a
+    // retry would duplicate it.
     case ErrorCode.COLUMN_NOT_FOUND:
     case ErrorCode.INVALID_METADATA:
     case ErrorCode.INVALID_POSITION:
@@ -45,6 +47,7 @@ function providerError(code: ErrorCodeValue): TrackerMcpErrorCode {
     case ErrorCode.MISSING_ARGUMENT:
     case ErrorCode.UNSUPPORTED_OPERATION:
     case ErrorCode.CONFLICT:
+    case ErrorCode.WRITE_UNCONFIRMED:
     case ErrorCode.INVALID_ARGUMENT:
     case ErrorCode.NOT_FOUND:
     case ErrorCode.ATTACHMENT_REFUSED:
