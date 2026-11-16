@@ -310,18 +310,25 @@ function listItemChildren(item: AdfNode, path: string, ctx: ReadContext): ListIt
   return blocksToMdast(children, `${path}.content`, ctx, false) as ListItem['children']
 }
 
-// CommonMark lets only a list starting at 1 interrupt a paragraph. Any other
-// list after a paragraph needs a blank line, which makes the item loose.
+// CommonMark lets only a list starting at 1, with a non-empty first item,
+// interrupt a paragraph. Lists that open on the same line (`- 2. a`) count
+// too. Any other list after a paragraph needs a blank line, which makes the
+// item loose.
+function cannotInterruptParagraph(list: List): boolean {
+  if (list.ordered === true && (list.start ?? 1) !== 1) return true
+  const first = list.children[0]
+  if (!first || first.children.length === 0) return true
+  const lead = first.children[0]
+  return lead?.type === 'list' && cannotInterruptParagraph(lead)
+}
+
 function needsLooseItem(children: ListItem['children']): boolean {
-  return children.some((child, index) => {
-    const previous = children[index - 1]
-    return (
-      previous?.type === 'paragraph' &&
+  return children.some(
+    (child, index) =>
+      children[index - 1]?.type === 'paragraph' &&
       child.type === 'list' &&
-      ((child.ordered === true && (child.start ?? 1) !== 1) ||
-        child.children[0]?.children.length === 0)
-    )
-  })
+      cannotInterruptParagraph(child),
+  )
 }
 
 function listToMdast(node: AdfNode, path: string, ctx: ReadContext): List {

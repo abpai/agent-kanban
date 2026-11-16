@@ -9,7 +9,7 @@ import type { JsonObject, JsonValue } from '../../json'
  * could render to different markdown, so stored hashes of rendered text can be
  * re-stamped.
  */
-export const JIRA_ADF_CONVERTER_VERSION = 'agent-kanban/adf-markdown@2'
+export const JIRA_ADF_CONVERTER_VERSION = 'agent-kanban/adf-markdown@3'
 
 export interface AdfNode extends JsonObject {
   type: string

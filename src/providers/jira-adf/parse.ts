@@ -79,8 +79,13 @@ const ALLOWED_IN = {
   blockquote: new Set(['paragraph', 'list', 'code']),
 } satisfies Record<FlowScope, ReadonlySet<string>>
 
-// Task lists are only valid directly in a doc, an expand, or another task list.
-const TASK_LIST_SCOPES: ReadonlySet<FlowScope> = new Set(['doc', 'expand', 'nestedExpand'])
+// The ADF schema allows task lists everywhere except inside a quote.
+const TASK_LIST_SCOPES: ReadonlySet<FlowScope> = new Set([
+  'doc',
+  'expand',
+  'nestedExpand',
+  'listItem',
+])
 
 const STATUS_COLORS: ReadonlySet<string> = new Set([
   'neutral',
@@ -354,11 +359,11 @@ function schemeNode(
       return { type: 'emoji', attrs }
     }
     case STATUS_SCHEME:
-      if (!STATUS_COLORS.has(value)) {
+      if (!STATUS_COLORS.has(value) && !/^#[0-9a-f]{6}$/i.test(value)) {
         refuse(
           ctx,
           node,
-          `Jira status colors are ${[...STATUS_COLORS].join(', ')}; '${value}' is not one.`,
+          `Jira status colors are ${[...STATUS_COLORS].join(', ')} or #rrggbb; '${value}' is not one.`,
         )
         return null
       }
