@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.1
+
+### Patch Changes
+
+- [#119](https://github.com/abpai/agent-kanban/pull/119) [`6dd0efa`](https://github.com/abpai/agent-kanban/commit/6dd0efa008ee393dc8fd0b9a921cd162ae7daf88) Thanks [@abpai](https://github.com/abpai)! - Jira writes derive the `localId` of task lists, task items, tables and statuses from each node's place and content instead of generating random ids. The same markdown now always writes the same document, so re-saving a description that was read back unchanged keeps its `description_hash` instead of looking like an edit.
+
 ## 2.2.0
 
 ### Minor Changes
