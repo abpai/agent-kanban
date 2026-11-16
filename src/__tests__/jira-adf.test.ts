@@ -652,6 +652,16 @@ describe('HTML is written as literal text', () => {
     expect(JSON.stringify(document)).toContain('<aside>')
   })
 
+  test('re-writing the read-back stores the identical raw document', () => {
+    // Jira stores text runs as sent and the description hash covers them, so a
+    // re-save of what was read must not split or merge runs differently.
+    const document = written('Wrap **<Suspense>** and current_count=<integer> </span>.')
+    expect(written(adfToMarkdown(document).markdown)).toEqual(document)
+    expect(document.content[0]).toEqual(
+      p(text('Wrap '), text('<Suspense>', 'strong'), text(' and current_count=<integer> </span>.')),
+    )
+  })
+
   test('the recognized tags are still marks', () => {
     expect(
       compareAdf(doc(p(text('u', 'underline'), text(' <b>'))), written('<u>u</u> <b>')),

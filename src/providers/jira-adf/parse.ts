@@ -533,7 +533,28 @@ function phrasingToAdf(
   if (htmlMarks.length > 0) {
     refuse(ctx, null, `Unclosed inline HTML mark (${htmlMarks.map((m) => m.type).join(', ')}).`)
   }
-  return out
+  return mergeTextRuns(out)
+}
+
+// Literal HTML arrives as its own markdown node, so `a <x> b` would write three
+// text nodes while its read-back `a \<x> b` writes one. Jira stores them as
+// sent, and the description hash covers the stored document, so adjacent runs
+// with the same marks are merged to make a re-save of the read-back a no-op.
+function mergeTextRuns(nodes: AdfNode[]): AdfNode[] {
+  const merged: AdfNode[] = []
+  for (const node of nodes) {
+    const previous = merged.at(-1)
+    if (
+      previous?.type === 'text' &&
+      node.type === 'text' &&
+      JSON.stringify(previous['marks'] ?? []) === JSON.stringify(node['marks'] ?? [])
+    ) {
+      merged[merged.length - 1] = { ...previous, text: `${previous['text']}${node['text']}` }
+    } else {
+      merged.push(node)
+    }
+  }
+  return merged
 }
 
 interface ExpandSegment {
