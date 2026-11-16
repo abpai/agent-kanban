@@ -418,8 +418,6 @@ describe('the old failures are fixed', () => {
 describe('markdownToAdf refuses lossy writes', () => {
   const refused: Array<[string, string, RegExp]> = [
     ['image', 'see ![d](https://x.test/d.png)', /image cannot be written/],
-    ['raw HTML block', '<div>\nhi\n</div>', /Raw HTML blocks/],
-    ['unknown inline HTML', 'a <kbd>K</kbd>', /Inline HTML <kbd>/],
     ['table alignment', '| a |\n| :-: |\n| b |', /column alignment/],
     ['heading inside a list item', '- # nope', /heading cannot be written inside a list item/],
     ['task items mixed with plain items', '- [ ] task\n- plain', /mixes task items/],
@@ -600,6 +598,67 @@ describe('the ADF schema is the authority', () => {
   })
 })
 
+describe('HTML is written as literal text', () => {
+  // Jira has no HTML, so the faithful write is the characters as typed. They
+  // read back escaped, and writing that escaped markdown again changes nothing.
+  const cases: Array<[string, string, AdfDocument, string]> = [
+    [
+      'a placeholder in a sentence',
+      'preserving the current_count=<integer> format.',
+      doc(p(text('preserving the current_count=<integer> format.'))),
+      'preserving the current_count=\\<integer> format.',
+    ],
+    [
+      'a component name inside bold',
+      'Wrap it in **<Suspense>** first.',
+      doc(p(text('Wrap it in '), text('<Suspense>', 'strong'), text(' first.'))),
+      'Wrap it in **\\<Suspense>** first.',
+    ],
+    [
+      'an unknown tag pair and a stray close tag',
+      'a <kbd>K</kbd> and </span>',
+      doc(p(text('a <kbd>K</kbd> and </span>'))),
+      'a \\<kbd>K\\</kbd> and \\</span>',
+    ],
+    [
+      'an HTML block',
+      '<div>\nhi\n</div>',
+      doc(
+        p(text('<div>'), { type: 'hardBreak' }, text('hi'), { type: 'hardBreak' }, text('</div>')),
+      ),
+      '\\<div>\\\nhi\\\n\\</div>',
+    ],
+    ['an HTML comment', '<!-- note -->', doc(p(text('<!-- note -->'))), '\\<!-- note -->'],
+  ]
+
+  for (const [name, markdown, expected, readBack] of cases) {
+    test(name, () => {
+      const document = written(markdown)
+      expect(compareAdf(expected, document)).toEqual([])
+      const read = adfToMarkdown(document)
+      expect(read.lossless).toBe(true)
+      expect(read.markdown).toBe(readBack)
+      // Re-writing what was read back is the same document and the same markdown.
+      const again = written(read.markdown)
+      expect(compareAdf(document, again)).toEqual([])
+      expect(adfToMarkdown(again).markdown).toBe(readBack)
+    })
+  }
+
+  test('HTML blocks inside a list item and a quote become paragraphs', () => {
+    const document = written('- item\n\n  <details>\n  </details>\n\n> <aside>\n> x\n> </aside>')
+    expect(adfToMarkdown(document).lossless).toBe(true)
+    expect(JSON.stringify(document)).toContain('<details>')
+    expect(JSON.stringify(document)).toContain('<aside>')
+  })
+
+  test('the recognized tags are still marks', () => {
+    expect(
+      compareAdf(doc(p(text('u', 'underline'), text(' <b>'))), written('<u>u</u> <b>')),
+    ).toEqual([])
+  })
+})
+
 describe('content in unexpected places is never dropped', () => {
   test('a paragraph inside a task item keeps its text between markers', () => {
     const read = adfToMarkdown(
@@ -760,6 +819,10 @@ describe('generated documents round-trip', () => {
     ' lead',
     'trail ',
     '<tag>',
+    '<u>',
+    '</span>',
+    '<!-- c -->',
+    '<div>',
     '&amp;',
     '::: expand',
     'http://e.com',
