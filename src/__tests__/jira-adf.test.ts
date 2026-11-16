@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import type { JsonValue } from '../json'
 import {
   JIRA_ADF_CONVERTER_VERSION,
+  adfContentHash,
   adfToMarkdown,
   compareAdf,
   markdownToAdf,
@@ -666,6 +667,42 @@ describe('HTML is written as literal text', () => {
     expect(
       compareAdf(doc(p(text('u', 'underline'), text(' <b>'))), written('<u>u</u> <b>')),
     ).toEqual([])
+  })
+})
+
+describe('local ids are stable', () => {
+  // Jira stores the localIds it is sent, and the description hash covers them,
+  // so a random id would make every re-save of the same markdown look like an edit.
+  const markdown = [
+    '- [ ] same',
+    '- [ ] same',
+    '- [x] done',
+    '',
+    '| a | b |',
+    '| --- | --- |',
+    '| [OK](jira-status:green) | [OK](jira-status:green) |',
+  ].join('\n')
+
+  test('the same markdown writes the identical document', () => {
+    expect(written(markdown)).toEqual(written(markdown))
+  })
+
+  test('re-writing the read-back keeps the description hash', () => {
+    const document = written(markdown)
+    const again = written(adfToMarkdown(document).markdown)
+    expect(again).toEqual(document)
+    expect(adfContentHash(again)).toBe(adfContentHash(document))
+  })
+
+  test('identical nodes at different places get distinct ids', () => {
+    const ids = [...JSON.stringify(written(markdown)).matchAll(/"localId":"([^"]+)"/g)].map(
+      (match) => match[1],
+    )
+    expect(ids.length).toBe(7)
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const id of ids) {
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    }
   })
 })
 
