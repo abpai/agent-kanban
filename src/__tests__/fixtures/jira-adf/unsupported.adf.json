@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "type": "doc",
+  "content": [
+    {
+      "type": "panel",
+      "attrs": { "panelType": "warning" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Do not run on production." }] }
+      ]
+    },
+    {
+      "type": "mediaSingle",
+      "attrs": { "layout": "center" },
+      "content": [
+        {
+          "type": "media",
+          "attrs": { "id": "4f6c-media", "type": "file", "collection": "jira-10001", "alt": "export-error.png" }
+        }
+      ]
+    },
+    {
+      "type": "decisionList",
+      "attrs": { "localId": "d1" },
+      "content": [
+        {
+          "type": "decisionItem",
+          "attrs": { "localId": "d2", "state": "DECIDED" },
+          "content": [{ "type": "text", "text": "Keep the v1 endpoint" }]
+        }
+      ]
+    },
+    {
+      "type": "layoutSection",
+      "content": [
+        {
+          "type": "layoutColumn",
+          "attrs": { "width": 50 },
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Left column" }] }]
+        }
+      ]
+    },
+    {
+      "type": "extension",
+      "attrs": { "extensionType": "com.atlassian.confluence.macro.core", "extensionKey": "toc" }
+    },
+    { "type": "blockCard", "attrs": { "url": "https://github.com/acme/widget/pull/812" } },
+    {
+      "type": "table",
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableHeader",
+              "attrs": { "colspan": 2 },
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Merged header" }] }]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "a" }] }]
+            },
+            {
+              "type": "tableCell",
+              "content": [
+                {
+                  "type": "bulletList",
+                  "content": [
+                    {
+                      "type": "listItem",
+                      "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "listed" }] }]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "marks": [{ "type": "alignment", "attrs": { "align": "center" } }],
+      "content": [
+        { "type": "text", "text": "Centered " },
+        {
+          "type": "text",
+          "text": "highlighted",
+          "marks": [{ "type": "backgroundColor", "attrs": { "color": "#fedec8" } }]
+        },
+        { "type": "text", "text": " " },
+        { "type": "placeholder", "attrs": { "text": "Type here" } },
+        { "type": "inlineExtension", "attrs": { "extensionKey": "jira-issue-count" } },
+        { "type": "mediaInline", "attrs": { "id": "inline-media", "collection": "jira-10001" } }
+      ]
+    },
+    { "type": "somethingNew", "attrs": { "title": "Future node" } }
+  ]
+}

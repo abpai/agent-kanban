@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "type": "doc",
+  "content": [
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "mention", "attrs": { "id": "712020:9a8b7c", "text": "@Garage Planner" } },
+        { "type": "text", "text": " plan for this cycle:" }
+      ]
+    },
+    {
+      "type": "orderedList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "text": "Read " },
+                { "type": "text", "text": "src/export/paginate.ts", "marks": [{ "type": "code" }] }
+              ]
+            },
+            {
+              "type": "bulletList",
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "check the cursor math" }]
+                    },
+                    {
+                      "type": "bulletList",
+                      "content": [
+                        {
+                          "type": "listItem",
+                          "content": [
+                            {
+                              "type": "paragraph",
+                              "content": [
+                                { "type": "text", "text": "off-by-one at " },
+                                { "type": "text", "text": "page * size", "marks": [{ "type": "code" }] }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "text": "Patch and add a regression test (" },
+                {
+                  "type": "text",
+                  "text": "PR #812",
+                  "marks": [{ "type": "link", "attrs": { "href": "https://github.com/acme/widget/pull/812" } }]
+                },
+                { "type": "text", "text": ")" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "codeBlock",
+      "attrs": { "language": "ts" },
+      "content": [{ "type": "text", "text": "const next = cursor + pageSize // was: cursor + pageSize + 1" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Risk: ", "marks": [{ "type": "strong" }] },
+        { "type": "text", "text": "low; " },
+        { "type": "text", "text": "rollback", "marks": [{ "type": "em" }] },
+        { "type": "text", "text": " is a revert." }
+      ]
+    }
+  ]
+}

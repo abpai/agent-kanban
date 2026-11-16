@@ -30,6 +30,7 @@
     "./types": "./src/types.ts",
     "./providers/types": "./src/providers/types.ts",
     "./provider-runtime": "./src/provider-runtime.ts",
+    "./jira-adf": "./src/providers/jira-adf/index.ts",
     "./package.json": "./package.json"
   },
   "files": [
@@ -79,6 +80,14 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
+    "mdast-util-from-markdown": "2.1.0",
+    "mdast-util-gfm-strikethrough": "2.0.1",
+    "mdast-util-gfm-table": "2.0.0",
+    "mdast-util-gfm-task-list-item": "2.0.0",
+    "mdast-util-to-markdown": "2.2.0",
+    "micromark-extension-gfm-strikethrough": "2.1.0",
+    "micromark-extension-gfm-table": "2.1.2",
+    "micromark-extension-gfm-task-list-item": "2.1.0",
     "postgres": "^3.4.4"
   },
   "devDependencies": {
@@ -87,6 +96,7 @@
     "@modelcontextprotocol/client": "2.0.0",
     "@oxlint/plugins": "1.82.0",
     "@types/bun": "1.4.2",
+    "@types/mdast": "4.0.4",
     "@types/node": "22.20.2",
     "husky": "^8.0.3",
     "knip": "^6.24.0",

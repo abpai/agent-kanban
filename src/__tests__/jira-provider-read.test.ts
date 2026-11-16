@@ -660,7 +660,7 @@ describe('JiraProvider read path', () => {
     // Regression for the DXS-12 shape: a user pastes
     // `Repo: https://github.com/abpai/garage-band` in the description, Jira
     // auto-converts the URL to an inlineCard, and the previous
-    // adfToPlainText silently dropped attrs.url.
+    // plain-text converter silently dropped attrs.url.
     const description: AdfDocument = {
       version: 1,
       type: 'doc',
@@ -696,9 +696,11 @@ describe('JiraProvider read path', () => {
     const { provider } = makeProvider(standardRoutes({ searchHandler }))
     await provider.getBoard()
     const task = await provider.getTask('ENG-12')
-    expect(task.description).toContain('Repo:')
-    expect(task.description).toContain('https://github.com/abpai/garage-band')
-    expect(task.description.split('\n')[0]).toBe('**Repo:** https://github.com/abpai/garage-band')
+    // The smart link renders as an autolink, which reads back as the same
+    // inlineCard; the bold stays on exactly the text Jira marked bold.
+    expect(task.description).toBe(
+      '**Repo**: <https://github.com/abpai/garage-band>\n\nIncrement SMOKE_TEST_TASK.md by 1.',
+    )
   })
 
   test('getBootstrap returns provider=jira and the adapted BoardConfig', async () => {

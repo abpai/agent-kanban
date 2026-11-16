@@ -117,28 +117,72 @@ transition from every status.
 
 ## How descriptions work
 
-Jira Cloud stores rich text as **Atlassian Document Format (ADF)**, a JSON tree.
-The provider does a best-effort round-trip between plain text and ADF:
+Jira Cloud stores rich text as **Atlassian Document Format (ADF)**, a JSON
+tree. Descriptions and comments both go through
+[`src/providers/jira-adf.ts`](../../src/providers/jira-adf.ts), which converts
+between ADF and GitHub-flavored markdown. Consumers can import it as
+`@andypai/agent-kanban/jira-adf`.
 
-- **Writes (plain text -> ADF).** The input string is wrapped in an ADF
-  document. The following node types are produced from simple markdown-ish
-  input:
-  - paragraphs (default for each non-empty line)
-  - bullet lists (`- item`)
-  - ordered lists (`1. item`)
-  - fenced code blocks (` ```lang ... ``` `)
+- **Reads never drop content.** `adfToMarkdown` renders every node as
+  markdown, or as a visible `[unsupported Jira content: <type> ...]` marker
+  plus an entry in `warnings`. Container markers wrap the content they hold
+  (`[end unsupported Jira content: <type>]`), so no text disappears. The
+  result also carries `lossless` (the markdown parses back to the same
+  normalized ADF) and `converterVersion`.
+- **Writes refuse what Jira cannot represent.** `markdownToAdf` returns
+  `{ ok: false, issues }` for images, raw HTML, table column alignment, block
+  types a list item or quote cannot hold, or markdown that still carries an
+  unsupported-content marker. The provider turns a refusal into
+  `INVALID_ARGUMENT` before any request is sent.
+- **Writes are confirmed structurally.** After a description or comment write,
+  the provider compares what Jira stored with what it sent using
+  `compareAdf`. A mismatch is `PROVIDER_UPSTREAM_ERROR` with the differing
+  paths.
 
-  Anything else is emitted as a plain paragraph.
+### Markdown syntax per ADF node
 
-- **Reads (ADF -> plain text).** The provider walks the ADF tree and flattens
-  it back to text. Supported node types round-trip cleanly. Headings are
-  flattened to their text content. Unknown node types are **skipped
-  gracefully** — the provider does not throw on unfamiliar ADF.
+| ADF                                          | Markdown                                                                                                          |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| paragraph, hardBreak                         | text, `\` at line end (a soft line break also writes one)                                                         |
+| heading 1-6                                  | `#` to `######`                                                                                                   |
+| bulletList, orderedList (any depth, `order`) | `-`, `1.` (`7.` keeps the start number)                                                                           |
+| listItem with several blocks                 | indented paragraphs, lists, and fenced code                                                                       |
+| taskList, taskItem                           | `- [ ]`, `- [x]`                                                                                                  |
+| codeBlock with language                      | fenced code                                                                                                       |
+| blockquote                                   | `>`                                                                                                               |
+| rule                                         | `---`                                                                                                             |
+| table (header row, one paragraph per cell)   | GFM table                                                                                                         |
+| expand, nestedExpand                         | `::: expand title="..."` ... `:::`                                                                                |
+| strong, em, strike, code, link               | `**`, `*`, `~~`, backticks, `[text](url)`                                                                         |
+| underline, subsup, textColor                 | `<u>`, `<sub>`/`<sup>`, `<span style="color: #rrggbb">`                                                           |
+| inlineCard                                   | `<https://...>`                                                                                                   |
+| mention, emoji, status, date                 | `[@Name](jira-mention:id)`, `[:smile:](jira-emoji:id)`, `[DONE](jira-status:green)`, `[2026-11-16](jira-date:ms)` |
 
-Content authored in the Jira web UI survives the round-trip as long as it only
-uses the node set above. Richer content (panels, media, status lozenges, etc.)
-is dropped on read. This is documented behavior, not a silent failure: expect
-to lose those nodes if you round-trip through `agent-kanban`.
+A bare URL stays plain text, the way Jira stores a typed URL.
+
+Shown as markers: panel, media nodes, decision lists, layouts, extensions,
+block and embed cards, placeholders, unknown node types, and tables a GFM
+table cannot hold (no header row, merged cells, block content in a cell,
+numbered rows, or cell colors). Those tables still render flattened behind the
+marker. Unsupported marks (for example `backgroundColor`, `annotation`,
+`alignment`) keep their text and add a warning.
+
+### Normalization
+
+`normalizeAdf` defines when two documents are the same. It ignores
+presentation-only data: `localId`, table layout and widths, column widths,
+default attribute values, empty spacer paragraphs, line breaks at the start or
+end of a paragraph, whitespace at the edges of a table cell, whitespace at the
+edges of bold or italic text, emoji `text`, and mention access level. It merges
+adjacent text with the same marks and treats `\n` inside text as a line break.
+
+### Converter version
+
+`JIRA_ADF_CONVERTER_VERSION` changes whenever the same ADF could render to
+different markdown. Store it next to anything derived from rendered text so
+the derived value can be recomputed. After an upgrade, cached descriptions
+re-render on the next full reconcile: same-instant snapshots with different
+text trigger the existing authoritative `GET /issue` read.
 
 ## Cache freshness
 
@@ -184,8 +228,9 @@ still updates the cache.
    write.** Moves always pick the first mapped status; if you need a different
    target status you must either reorder the board config or edit the issue
    directly in Jira.
-8. ADF node types outside paragraphs, bullet/ordered lists, and fenced code
-   blocks are dropped on read and not produced on write.
+8. Some ADF content has no markdown form. It is shown as a marker on read, and
+   markdown that still holds a marker is refused on write. See
+   [How descriptions work](#how-descriptions-work).
 
 ## Webhooks
 

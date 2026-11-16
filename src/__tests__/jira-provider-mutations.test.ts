@@ -3,7 +3,7 @@ import { mockFetch } from './helpers/fetch'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { ErrorCode } from '../errors'
-import { taskDescriptionText } from '../provider-runtime'
+import { adfToMarkdown, markdownToAdf } from '../providers/jira-adf'
 import {
   JiraClient,
   type JiraCreatePayload,
@@ -304,9 +304,7 @@ function fullSyncRoutes(extraIssues: JiraIssue[] = []): StubRoute[] {
 }
 
 describe('JiraProvider mutations', () => {
-  test('public description text confirms a real update/read round trip and rejects an ignored update', async () => {
-    fullSeed(db)
-    const issue = makeJiraIssueFixture(seedIssues[0]!)
+  function descriptionRoutes(issue: JiraIssue, opts: { ignoreUpdate: () => boolean }) {
     const syncRoutes = standardSyncRoutes({
       projectKey: 'ENG',
       columns: [{ name: 'To Do', statusIds: ['20000'] }],
@@ -315,32 +313,73 @@ describe('JiraProvider mutations', () => {
       issueTypes: seedIssueTypes,
       issues: [issue],
     })
-    let ignoreUpdate = false
     const mutationRoute: StubRoute = {
       match: (url, init) => url.endsWith('/rest/api/3/issue/ENG-1') && init?.method === 'PUT',
       handler: async (_url, init) => {
         const payload: { fields?: Pick<JiraIssue['fields'], 'description'> } = JSON.parse(
           await new Response(init?.body).text(),
         )
-        if (!ignoreUpdate) issue.fields.description = payload.fields?.description
+        if (!opts.ignoreUpdate()) issue.fields.description = payload.fields?.description
         return emptyResponse()
       },
     }
-    const { provider } = makeProvider(db, [mutationRoute, ...syncRoutes])
+    return [mutationRoute, ...syncRoutes]
+  }
+
+  test('a description write is confirmed structurally and read back as the same markdown', async () => {
+    fullSeed(db)
+    const issue = makeJiraIssueFixture(seedIssues[0]!)
+    const { provider } = makeProvider(db, descriptionRoutes(issue, { ignoreUpdate: () => false }))
     const requested =
-      '# Reading path\n1. Open report.txt\n2. Review it\n\n```python\n  first()\n\n    second()\n```'
+      '# Reading path\n\n1. Open report.txt\n2. Review it\n   - nested *detail*\n\n```python\n  first()\n\n    second()\n```'
     const updated = await provider.updateTask('ENG-1', { description: requested })
-    expect(updated.description).not.toBe(requested)
-    expect(updated.description).toBe(taskDescriptionText('jira', requested))
-    expect((await provider.getTask('ENG-1')).description).toBe(
-      taskDescriptionText('jira', requested),
-    )
-    ignoreUpdate = true
-    const ignored = await provider.updateTask('ENG-1', { description: 'A different reading path' })
-    expect(ignored.description).not.toBe(taskDescriptionText('jira', 'A different reading path'))
+    const written = markdownToAdf(requested)
+    if (!written.ok) throw new Error('fixture markdown must convert')
+    expect(issue.fields.description).toEqual(written.document)
+    expect(updated.description).toBe(adfToMarkdown(written.document).markdown)
+    expect(updated.description).toBe(requested)
+    expect((await provider.getTask('ENG-1')).description).toBe(requested)
   })
 
-  test('createTask happy path: plainTextToAdf invoked, priority mapped, assignee and issueType resolved', async () => {
+  test('an update Jira did not store fails confirmation with a structural diff', async () => {
+    fullSeed(db)
+    const issue = makeJiraIssueFixture(seedIssues[0]!)
+    const { provider } = makeProvider(db, descriptionRoutes(issue, { ignoreUpdate: () => true }))
+    const err = await provider
+      .updateTask('ENG-1', { description: 'A different reading path' })
+      .catch((cause: Error) => cause)
+    assertKanbanError(err)
+    expect(err.code).toBe(ErrorCode.PROVIDER_UPSTREAM_ERROR)
+    expect(err.message).toMatch(
+      /Jira stored a different description on ENG-1 than was written: content/,
+    )
+  })
+
+  test('markdown Jira cannot represent is refused before anything is written', async () => {
+    fullSeed(db)
+    const issue = makeJiraIssueFixture(seedIssues[0]!)
+    const routes = descriptionRoutes(issue, { ignoreUpdate: () => false })
+    const { provider, calls } = makeProvider(db, routes)
+    const image = await provider
+      .updateTask('ENG-1', { description: 'See ![diagram](https://x.test/a.png)' })
+      .catch((cause: Error) => cause)
+    assertKanbanError(image)
+    expect(image.code).toBe(ErrorCode.INVALID_ARGUMENT)
+    expect(image.message).toContain(
+      'Refusing to write the Jira description: line 1: A markdown image cannot be written',
+    )
+    const marker = await provider
+      .updateTask('ENG-1', {
+        description: 'Intro\n\n[unsupported Jira content: panel panelType="info"]\n\nbody',
+      })
+      .catch((cause: Error) => cause)
+    assertKanbanError(marker)
+    expect(marker.code).toBe(ErrorCode.INVALID_ARGUMENT)
+    expect(marker.message).toContain('unsupported-Jira-content marker')
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  })
+
+  test('createTask happy path: markdown converted to ADF, priority mapped, assignee and issueType resolved', async () => {
     fullSeed(db)
     // Shared issue pool: the POST /issue handler appends the created issue, which
     // hydrateIssueByKey then reads back through the GET /issue/{key} route so the
@@ -365,7 +404,11 @@ describe('JiraProvider mutations', () => {
     })
     const mutationRoute: StubRoute = {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
-      handler: () => {
+      handler: async (_url, init) => {
+        const payload: { fields: Pick<JiraIssue['fields'], 'description'> } = JSON.parse(
+          await new Response(init?.body).text(),
+        )
+        createdIssue.fields.description = payload.fields.description
         issues.push(createdIssue)
         return Response.json({
           id: '600',
@@ -401,13 +444,11 @@ describe('JiraProvider mutations', () => {
 
   test('updateTask happy path: summary + description + priority rewritten', async () => {
     fullSeed(db)
-    const syncRoutes = fullSyncRoutes()
-    const mutationRoute: StubRoute = {
-      match: (u, init) =>
-        u.endsWith('/rest/api/3/issue/ENG-1') && (init?.method ?? 'GET') === 'PUT',
-      handler: () => emptyResponse(204),
-    }
-    const { provider, calls } = makeProvider(db, [mutationRoute, ...syncRoutes])
+    const issue = makeJiraIssueFixture(seedIssues[0]!)
+    const { provider, calls } = makeProvider(
+      db,
+      descriptionRoutes(issue, { ignoreUpdate: () => false }),
+    )
     await provider.updateTask('ENG-1', {
       title: 'New',
       description: 'new body',
@@ -798,7 +839,11 @@ describe('JiraProvider mutations', () => {
     })
     const mutationRoute: StubRoute = {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
-      handler: () => {
+      handler: async (_url, init) => {
+        const payload: { fields: Pick<JiraIssue['fields'], 'description'> } = JSON.parse(
+          await new Response(init?.body).text(),
+        )
+        createdIssue.fields.description = payload.fields.description
         issues.push(createdIssue)
         return Response.json({ id: '600', key: 'ENG-10', self: 'x' })
       },
@@ -837,7 +882,11 @@ describe('JiraProvider mutations', () => {
     })
     const mutationRoute: StubRoute = {
       match: (u, init) => u.endsWith('/rest/api/3/issue') && (init?.method ?? 'GET') === 'POST',
-      handler: () => {
+      handler: async (_url, init) => {
+        const payload: { fields: Pick<JiraIssue['fields'], 'description'> } = JSON.parse(
+          await new Response(init?.body).text(),
+        )
+        createdIssue.fields.description = payload.fields.description
         issues.push(createdIssue)
         return Response.json({ id: '601', key: 'ENG-11', self: 'x' })
       },
