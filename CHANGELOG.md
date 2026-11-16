@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.0
+
+### Minor Changes
+
+- [#115](https://github.com/abpai/agent-kanban/pull/115) [`37f56e5`](https://github.com/abpai/agent-kanban/commit/37f56e586daa49fef0cb05c681bec18956e77242) Thanks [@abpai](https://github.com/abpai)! - Jira writes now follow Atlassian's published ADF schema, which the test suite checks every converted document against.
+  - Task lists inside list items and status lozenges with a `#rrggbb` color are written instead of refused; the schema allows both.
+  - A list item whose first child is a numbered list starting above 1, after a paragraph, now round-trips. Its markdown changes, so `JIRA_ADF_CONVERTER_VERSION` is now `agent-kanban/adf-markdown@3`.
+
 ## 2.0.0
 
 ### Major Changes
