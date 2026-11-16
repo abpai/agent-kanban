@@ -130,13 +130,17 @@ between ADF and GitHub-flavored markdown. Consumers can import it as
   result also carries `lossless` (the markdown parses back to the same
   normalized ADF) and `converterVersion`.
 - **Writes refuse what Jira cannot represent.** `markdownToAdf` returns
-  `{ ok: false, issues }` for images, raw HTML, table column alignment, block
+  `{ ok: false, issues }` for images, table column alignment, block
   types a container cannot hold under the ADF schema (a task list in a quote, a table in a nested
   expand), status colors outside the named set and `#rrggbb`, mentions with
   no account id, or markdown that still carries an unsupported-content marker
   (also when formatting or link syntax splits it). The provider turns a refusal
   into `INVALID_ARGUMENT` before any request is sent. `markdownToAdf` never
   throws.
+  HTML is written as literal text, since Jira has no HTML: `<integer>` or an
+  HTML block is stored as those characters and reads back escaped
+  (`\<integer>`), which writes back unchanged. Only `<u>`, `<sub>`, `<sup>` and
+  a `<span style="color: ...">` become formatting.
   The test suite checks every converted document against Atlassian's published
   ADF JSON Schema (`@atlaskit/adf-schema`, a pinned dev dependency), so these
   rules follow the schema Jira enforces rather than guesses.

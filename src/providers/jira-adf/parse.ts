@@ -71,12 +71,40 @@ type FlowScope = 'doc' | 'listItem' | 'blockquote' | 'expand' | 'nestedExpand'
 
 // What the ADF schema lets each container hold. Writing anything else gets a
 // 400 from Jira, so it is refused here with a line number instead.
+// An HTML block is written as a paragraph of literal text, so it is allowed
+// wherever a paragraph is.
 const ALLOWED_IN = {
-  doc: new Set(['paragraph', 'heading', 'list', 'code', 'blockquote', 'thematicBreak', 'table']),
-  expand: new Set(['paragraph', 'heading', 'list', 'code', 'blockquote', 'thematicBreak', 'table']),
-  nestedExpand: new Set(['paragraph', 'heading', 'list', 'code', 'blockquote', 'thematicBreak']),
-  listItem: new Set(['paragraph', 'list', 'code']),
-  blockquote: new Set(['paragraph', 'list', 'code']),
+  doc: new Set([
+    'paragraph',
+    'html',
+    'heading',
+    'list',
+    'code',
+    'blockquote',
+    'thematicBreak',
+    'table',
+  ]),
+  expand: new Set([
+    'paragraph',
+    'html',
+    'heading',
+    'list',
+    'code',
+    'blockquote',
+    'thematicBreak',
+    'table',
+  ]),
+  nestedExpand: new Set([
+    'paragraph',
+    'html',
+    'heading',
+    'list',
+    'code',
+    'blockquote',
+    'thematicBreak',
+  ]),
+  listItem: new Set(['paragraph', 'html', 'list', 'code']),
+  blockquote: new Set(['paragraph', 'html', 'list', 'code']),
 } satisfies Record<FlowScope, ReadonlySet<string>>
 
 // The ADF schema allows task lists everywhere except inside a quote.
@@ -136,7 +164,6 @@ function scopeName(scope: FlowScope): string {
 }
 
 function describeRefusal(node: RootContent, scope: FlowScope): string {
-  if (node.type === 'html') return 'Raw HTML blocks cannot be written to Jira.'
   if (node.type === 'footnoteDefinition') return 'Footnotes cannot be written to Jira.'
   if (node.type === 'yaml') return 'Front matter cannot be written to Jira.'
   return `A markdown ${node.type} cannot be written inside ${scopeName(scope)}.`
@@ -155,6 +182,12 @@ function flowNodeToAdf(node: RootContent, ctx: WriteContext): AdfNode | null {
       const heading: AdfNode = { type: 'heading', attrs: { level: node.depth } }
       if (content.length > 0) heading['content'] = content
       return heading
+    }
+    case 'html': {
+      // Jira has no HTML, so the faithful write is the characters as typed.
+      // They read back escaped (`\<div>`), which parses to the same text.
+      const content = textNodes(node.value, [])
+      return content.length > 0 ? { type: 'paragraph', content } : null
     }
     case 'thematicBreak':
       return { type: 'rule' }
@@ -487,7 +520,9 @@ function phrasingToAdf(
         } else if (tag && htmlMarks.at(-1)?.type === tag.close) {
           htmlMarks.pop()
         } else {
-          refuse(ctx, node, `Inline HTML ${node.value} cannot be written to Jira.`)
+          // Any other tag, such as `<integer>` or `<Suspense>`, is literal
+          // text: Jira has no HTML, and it reads back escaped (`\<integer>`).
+          out.push(...textNodes(node.value, active()))
         }
         break
       }
@@ -498,7 +533,28 @@ function phrasingToAdf(
   if (htmlMarks.length > 0) {
     refuse(ctx, null, `Unclosed inline HTML mark (${htmlMarks.map((m) => m.type).join(', ')}).`)
   }
-  return out
+  return mergeTextRuns(out)
+}
+
+// Literal HTML arrives as its own markdown node, so `a <x> b` would write three
+// text nodes while its read-back `a \<x> b` writes one. Jira stores them as
+// sent, and the description hash covers the stored document, so adjacent runs
+// with the same marks are merged to make a re-save of the read-back a no-op.
+function mergeTextRuns(nodes: AdfNode[]): AdfNode[] {
+  const merged: AdfNode[] = []
+  for (const node of nodes) {
+    const previous = merged.at(-1)
+    if (
+      previous?.type === 'text' &&
+      node.type === 'text' &&
+      JSON.stringify(previous['marks'] ?? []) === JSON.stringify(node['marks'] ?? [])
+    ) {
+      merged[merged.length - 1] = { ...previous, text: `${previous['text']}${node['text']}` }
+    } else {
+      merged.push(node)
+    }
+  }
+  return merged
 }
 
 interface ExpandSegment {
