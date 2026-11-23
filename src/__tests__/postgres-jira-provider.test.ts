@@ -629,7 +629,7 @@ describe('postgres jira provider', () => {
           isLast: true,
           issues: reconciled
             ? [makeIssue({ id: '1', key: 'ENG-1' })]
-            : [1, 2, 3].map((n) => makeIssue({ id: String(n), key: `ENG-${n}` })),
+            : [1, 2, 3, 4].map((n) => makeIssue({ id: String(n), key: `ENG-${n}` })),
         }),
     }
     globalThis.fetch = jiraFetchStub(routes).fn
@@ -644,6 +644,8 @@ describe('postgres jira provider', () => {
     await provider.getBoard()
     await sql`UPDATE jira_issues SET updated_at = '' WHERE key = 'ENG-2'`
     await sql`UPDATE jira_issues SET updated_at = '2026-02-30T25:61:00Z' WHERE key = 'ENG-3'`
+    // A parser rolls this invalid date into a valid one far past the scan.
+    await sql`UPDATE jira_issues SET updated_at = '2099-02-30T12:00:00Z' WHERE key = 'ENG-4'`
 
     reconciled = true
     await sql`DELETE FROM jira_sync_meta WHERE key = 'lastFullSyncAt'`

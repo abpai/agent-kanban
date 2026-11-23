@@ -25,6 +25,22 @@ export interface JiraIssueWriteOptions {
   authoritative?: boolean
 }
 
+/** The span of Jira `updated` stamps a full reconcile ran across, widened for clock skew. */
+export interface JiraScanWindow {
+  from: string
+  to: string
+}
+
+/**
+ * Whether a cached row changed while a full reconcile ran, so it may be missing from pages
+ * fetched before the change and must not be pruned. An unreadable stamp, or one outside the
+ * window, means no.
+ */
+export function changedDuringScan(updatedAt: string, scan: JiraScanWindow): boolean {
+  const at = Date.parse(updatedAt)
+  return at >= Date.parse(scan.from) && at <= Date.parse(scan.to)
+}
+
 export function prepareJiraIssueSnapshots(issues: JiraIssueSnapshot[]) {
   const newest = new Map<string, JiraIssueSnapshot>()
   const conflicts = new Set<string>()

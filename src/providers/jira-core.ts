@@ -1,4 +1,8 @@
-import type { JiraIssueSnapshot, JiraIssueWriteOptions } from './jira-issue-snapshot'
+import type {
+  JiraIssueSnapshot,
+  JiraIssueWriteOptions,
+  JiraScanWindow,
+} from './jira-issue-snapshot'
 import { ErrorCode, KanbanError } from '../errors'
 import type {
   ActivityEntry,
@@ -201,7 +205,7 @@ export interface JiraCachePort {
   pruneIssuesMissingUpstream(
     projectKey: string,
     upstreamIssueIds: string[],
-    updatedBefore: string,
+    scan: JiraScanWindow,
   ): Promise<void>
   adjustIssueCommentCount(idOrKey: string, delta: number): Promise<void>
 
@@ -245,6 +249,7 @@ interface RememberedDescription extends RenderedDescription {
  * reconcile of a large board never blocks the process that hosts the provider.
  */
 const RENDER_SLICE_MS = 20
+// Clock skew allowed between Jira's `updated` stamps and this host.
 const PRUNE_CLOCK_SKEW_MS = 60_000
 
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
@@ -410,10 +415,9 @@ export class JiraProviderCore implements KanbanProvider {
     // changelog call (~minutes). Writes get read-after-write freshness from
     // hydrateIssueByKey instead, so a forced sync stays a cheap delta.
     const fullReconcile = shouldRunFullReconcile(meta.lastFullSyncAt, now)
-    // The prune spares rows Jira changed after the scan began: a webhook may have written
-    // them after the pages that would include them were fetched. Backdated to absorb clock
-    // skew between Jira and this host.
-    const scanStartedAt = new Date(now - PRUNE_CLOCK_SKEW_MS).toISOString()
+    // The prune spares rows Jira changed while the scan ran: a webhook may have written them
+    // after the pages that would include them were fetched.
+    const scanStartedAt = now
 
     // 1. Resolve project.
     const project = await this.client.getProject(this.config.projectKey)
@@ -570,7 +574,10 @@ export class JiraProviderCore implements KanbanProvider {
     // reconcile; a delta sync's seenIssueIds is intentionally partial. (The scan
     // is known complete here — an incomplete scan returned above.)
     if (fullReconcile) {
-      await this.cache.pruneIssuesMissingUpstream(project.key, [...seenIssueIds], scanStartedAt)
+      await this.cache.pruneIssuesMissingUpstream(project.key, [...seenIssueIds], {
+        from: new Date(scanStartedAt - PRUNE_CLOCK_SKEW_MS).toISOString(),
+        to: new Date(Date.now() + PRUNE_CLOCK_SKEW_MS).toISOString(),
+      })
       for (const id of this.renderedDescriptions.keys()) {
         if (!seenIssueIds.has(id)) this.renderedDescriptions.delete(id)
       }

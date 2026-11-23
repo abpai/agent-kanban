@@ -1,5 +1,7 @@
 import {
+  changedDuringScan,
   prepareJiraIssueSnapshots,
+  type JiraScanWindow,
   type JiraIssueSnapshot,
   type JiraIssueWriteOptions,
 } from './jira-issue-snapshot'
@@ -18,7 +20,6 @@ import { ensureWebhookEventsSchema } from '../webhook-events'
 import { jiraTaskFromRow, type JiraTaskRow } from './cache-task-mappers'
 import { type Exec, recordsetJson } from './postgres-batch'
 import { parseProviderTeamInfo } from './team-info'
-import { parseSyncTimestamp } from './sync-core'
 
 export type JiraIssueRow = JiraTaskRow
 
@@ -430,12 +431,8 @@ export class PostgresJiraCache implements JiraCachePort {
   async pruneIssuesMissingUpstream(
     projectKey: string,
     upstreamIssueIds: string[],
-    updatedBefore: string,
+    scan: JiraScanWindow,
   ): Promise<void> {
-    // A row Jira changed after `updatedBefore` may be missing from pages fetched before the
-    // change, so only rows older than it are pruned. A row without a readable timestamp
-    // counts as old. Compared here, not in SQL, where a cast of such a row would throw.
-    const cutoff = parseSyncTimestamp(updatedBefore)
     await this.sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
       const unseen = await tx<{ id: string; updated_at: string }[]>`
@@ -444,7 +441,7 @@ export class PostgresJiraCache implements JiraCachePort {
           AND NOT (id = ANY(${upstreamIssueIds}::text[]))
       `
       const ids = unseen
-        .filter((row) => parseSyncTimestamp(row.updated_at) < cutoff)
+        .filter((row) => !changedDuringScan(row.updated_at, scan))
         .map((row) => row.id)
       if (ids.length === 0) return
       await tx`DELETE FROM jira_activity WHERE issue_id = ANY(${ids}::text[])`

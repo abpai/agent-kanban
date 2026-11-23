@@ -1,5 +1,7 @@
 import {
+  changedDuringScan,
   prepareJiraIssueSnapshots,
+  type JiraScanWindow,
   type JiraIssueSnapshot,
   type JiraIssueWriteOptions,
 } from './jira-issue-snapshot'
@@ -492,23 +494,21 @@ export function pruneJiraIssuesMissingUpstream(
   db: Database,
   projectKey: string,
   upstreamIssueIds: string[],
-  updatedBefore: string,
+  scan: JiraScanWindow,
 ): void {
-  // A row Jira changed after `updatedBefore` may be missing from pages fetched before the
-  // change, so only rows older than it are pruned. A row without a readable timestamp
-  // counts as old, so it can still be pruned.
-  const missing = `SELECT id FROM jira_issues
-    WHERE project_key = $projectKey
-      AND id NOT IN (SELECT value FROM json_each($ids))
-      AND coalesce(${jiraUpdatedAtSql('updated_at')}, 0) < julianday($updatedBefore)`
-  const params = {
-    $projectKey: projectKey,
-    $ids: JSON.stringify(upstreamIssueIds),
-    $updatedBefore: updatedBefore,
-  }
   db.transaction(() => {
-    db.query(`DELETE FROM jira_activity WHERE issue_id IN (${missing})`).run(params)
-    db.query(`DELETE FROM jira_issues WHERE id IN (${missing})`).run(params)
+    const unseen = db
+      .query<{ id: string; updated_at: string }, { $projectKey: string; $ids: string }>(
+        `SELECT id, updated_at FROM jira_issues
+         WHERE project_key = $projectKey AND id NOT IN (SELECT value FROM json_each($ids))`,
+      )
+      .all({ $projectKey: projectKey, $ids: JSON.stringify(upstreamIssueIds) })
+    const ids = JSON.stringify(
+      unseen.filter((row) => !changedDuringScan(row.updated_at, scan)).map((row) => row.id),
+    )
+    const pruned = 'SELECT value FROM json_each($ids)'
+    db.query(`DELETE FROM jira_activity WHERE issue_id IN (${pruned})`).run({ $ids: ids })
+    db.query(`DELETE FROM jira_issues WHERE id IN (${pruned})`).run({ $ids: ids })
   })()
 }
 
