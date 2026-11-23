@@ -2,7 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import postgres from 'postgres'
 import { getCachedTask, initJiraCacheSchema, upsertJiraIssues } from '../providers/jira-cache'
-import type { JiraIssueSnapshot, JiraIssueWriteOptions } from '../providers/jira-issue-snapshot'
+import {
+  changedDuringScan,
+  type JiraIssueSnapshot,
+  type JiraIssueWriteOptions,
+} from '../providers/jira-issue-snapshot'
 import type { Task } from '../types'
 import { PostgresJiraCache } from '../providers/postgres-jira-cache'
 
@@ -198,4 +202,26 @@ pgTest('separate Postgres writers cannot regress the shared task cache', async (
     await sql`DROP SCHEMA ${sql(schema)} CASCADE`
     await sql.end()
   }
+})
+
+describe('changedDuringScan', () => {
+  const scan = { from: '2026-02-28T00:00:00Z', to: '2026-03-03T00:00:00Z' }
+
+  test('spares a real stamp inside the scan, in either Jira offset form', () => {
+    expect(changedDuringScan('2026-03-02T12:00:00Z', scan)).toBe(true)
+    expect(changedDuringScan('2026-03-01T10:00:00.000+0200', scan)).toBe(true)
+    expect(changedDuringScan('2026-03-01T10:00:00.000+02:00', scan)).toBe(true)
+  })
+
+  test('does not spare a stamp outside the scan', () => {
+    expect(changedDuringScan('2026-02-27T23:59:59Z', scan)).toBe(false)
+    expect(changedDuringScan('2026-03-03T00:00:01Z', scan)).toBe(false)
+  })
+
+  test('does not spare an impossible stamp a parser would roll into the scan', () => {
+    // Date.parse reads Feb 30 as Mar 2, which lies inside the scan.
+    expect(changedDuringScan('2026-02-30T12:00:00Z', scan)).toBe(false)
+    expect(changedDuringScan('2026-03-01T25:00:00Z', scan)).toBe(false)
+    expect(changedDuringScan('', scan)).toBe(false)
+  })
 })

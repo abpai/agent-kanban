@@ -496,6 +496,8 @@ export function pruneJiraIssuesMissingUpstream(
   upstreamIssueIds: string[],
   scan: JiraScanWindow,
 ): void {
+  // Immediate: the read comes first, and a deferred read cannot always upgrade to a write
+  // after another connection commits (SQLITE_BUSY_SNAPSHOT).
   db.transaction(() => {
     const unseen = db
       .query<{ id: string; updated_at: string }, { $projectKey: string; $ids: string }>(
@@ -509,7 +511,7 @@ export function pruneJiraIssuesMissingUpstream(
     const pruned = 'SELECT value FROM json_each($ids)'
     db.query(`DELETE FROM jira_activity WHERE issue_id IN (${pruned})`).run({ $ids: ids })
     db.query(`DELETE FROM jira_issues WHERE id IN (${pruned})`).run({ $ids: ids })
-  })()
+  }).immediate()
 }
 
 export function adjustJiraIssueCommentCount(db: Database, idOrKey: string, delta: number): void {
