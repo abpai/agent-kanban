@@ -1359,3 +1359,76 @@ describe('JiraProvider fresh single-issue read', () => {
     expect(err.code).toBe(ErrorCode.TASK_NOT_FOUND)
   })
 })
+
+function paragraphs(...texts: string[]): AdfDocument {
+  return {
+    version: 1,
+    type: 'doc',
+    content: texts.map((text) => ({ type: 'paragraph', content: [{ type: 'text', text }] })),
+  }
+}
+
+test('a full reconcile renders an edited description again and keeps unchanged ones', async () => {
+  let edited = false
+  const searchHandler: StubHandler = () =>
+    Response.json({
+      startAt: 0,
+      maxResults: 100,
+      total: 2,
+      issues: [
+        makeIssue({ id: '1', key: 'ENG-1', statusId: '10001', description: paragraphs('Same.') }),
+        makeIssue({
+          id: '2',
+          key: 'ENG-2',
+          statusId: '10001',
+          updated: edited ? '2026-01-05T00:00:00Z' : '2026-01-02T00:00:00Z',
+          description: paragraphs(edited ? 'After the edit.' : 'Before the edit.'),
+        }),
+      ],
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  const baseNow = originalDateNow()
+  Date.now = () => baseNow
+  await provider.getBoard()
+
+  edited = true
+  Date.now = () => baseNow + 5 * 60_000 + 31_000
+  await provider.getBoard()
+
+  expect(
+    getCachedTasks(db)
+      .map((task) => [task.externalRef, task.description])
+      .sort(),
+  ).toEqual([
+    ['ENG-1', 'Same.'],
+    ['ENG-2', 'After the edit.'],
+  ])
+})
+
+test('rendering a large page of descriptions lets other work run before the sync ends', async () => {
+  // Each render re-parses its Markdown synchronously; 100 long descriptions take far longer
+  // than one render slice, so a timer set before the sync must run while it is still going.
+  const long = paragraphs(
+    ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} with *some* text.`),
+  )
+  const searchHandler: StubHandler = () =>
+    Response.json({
+      startAt: 0,
+      maxResults: 100,
+      total: 100,
+      issues: Array.from({ length: 100 }, (_, i) =>
+        makeIssue({ id: String(i + 1), key: `ENG-${i + 1}`, statusId: '10001', description: long }),
+      ),
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  let timerRanDuringSync = false
+  let syncDone = false
+  setTimeout(() => {
+    timerRanDuringSync = !syncDone
+  }, 0)
+
+  await provider.getBoard()
+  syncDone = true
+
+  expect(timerRanDuringSync).toBe(true)
+})

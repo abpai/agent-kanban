@@ -30,6 +30,7 @@ import {
   describeAdfDifferences,
   markdownToAdf,
   type AdfDocument,
+  type AdfMarkdown,
 } from './jira-adf'
 import { sha256Json } from './jira-adf/hash'
 import { buildDeltaJql, safeDeltaSince } from './jira-jql'
@@ -223,19 +224,35 @@ export interface JiraCachePort {
 
 type JiraCacheIssue = Parameters<JiraCachePort['upsertIssues']>[0][number]
 
+/** An issue description rendered to Markdown, with the hash of the raw ADF it came from. */
+interface RenderedDescription {
+  readonly hash: string | null
+  readonly rendered: AdfMarkdown
+}
+
+/**
+ * Rendering a description re-parses its Markdown to check the round trip, which is
+ * synchronous. Rendering yields to the event loop after this much work, so a full
+ * reconcile of a large board never blocks the process that hosts the provider.
+ */
+const RENDER_SLICE_MS = 20
+
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
 // Map a Jira API issue to the cache upsert row. Shared by bulk sync, direct
 // hydrate, and webhook ingest so every path caches the same issue shape.
 function toCacheIssue(
   issue: JiraIssue,
   baseUrl: string,
   fallbackProjectKey: string,
+  description: RenderedDescription,
 ): JiraCacheIssue {
   return {
     id: issue.id,
     key: issue.key,
     summary: issue.fields.summary,
-    descriptionText: adfToMarkdown(issue.fields.description).markdown,
-    descriptionHash: adfContentHash(issue.fields.description),
+    descriptionText: description.rendered.markdown,
+    descriptionHash: description.hash,
     statusId: issue.fields.status.id,
     priorityName: issue.fields.priority?.name ?? null,
     issueTypeName: issue.fields.issuetype?.name ?? '',
@@ -263,6 +280,10 @@ export class JiraProviderCore implements KanbanProvider {
   private readonly syncGate: SyncGate
   // Issue id -> last successfully ingested `updated` stamp. Process-local; a miss just re-fetches.
   private readonly activityReads = new Map<string, { updated: string; readAt: number }>()
+  // Issue id -> its description as last rendered. Process-local, so the converter cannot
+  // have changed since; a different ADF hash or a miss renders again. Without it, every
+  // full reconcile re-renders every description on the board.
+  private readonly renderedDescriptions = new Map<string, RenderedDescription>()
 
   constructor(
     protected readonly cache: JiraCachePort,
@@ -282,6 +303,36 @@ export class JiraProviderCore implements KanbanProvider {
 
   async initialize(): Promise<void> {
     await this.cache.ready
+  }
+
+  private renderDescription(issue: JiraIssue): RenderedDescription {
+    const hash = adfContentHash(issue.fields.description)
+    const known = this.renderedDescriptions.get(issue.id)
+    if (known !== undefined && known.hash === hash) return known
+    const described = { hash, rendered: adfToMarkdown(issue.fields.description) }
+    this.renderedDescriptions.set(issue.id, described)
+    return described
+  }
+
+  private cacheRow(issue: JiraIssue, projectKey: string): JiraCacheIssue {
+    return toCacheIssue(issue, this.config.baseUrl, projectKey, this.renderDescription(issue))
+  }
+
+  /** Cache rows for a page of issues, yielding to the event loop between render slices. */
+  private async cacheRows(
+    issues: readonly JiraIssue[],
+    projectKey: string,
+  ): Promise<JiraCacheIssue[]> {
+    const rows: JiraCacheIssue[] = []
+    let sliceStart = performance.now()
+    for (const issue of issues) {
+      rows.push(this.cacheRow(issue, projectKey))
+      if (performance.now() - sliceStart >= RENDER_SLICE_MS) {
+        await yieldToEventLoop()
+        sliceStart = performance.now()
+      }
+    }
+    return rows
   }
 
   protected async sync(force = false, viaWarmer = false): Promise<void> {
@@ -389,9 +440,7 @@ export class JiraProviderCore implements KanbanProvider {
         nextPageToken,
       })
 
-      await this.cacheIssueSnapshots(
-        page.issues.map((issue) => toCacheIssue(issue, this.config.baseUrl, project.key)),
-      )
+      await this.cacheIssueSnapshots(await this.cacheRows(page.issues, project.key))
 
       for (const issue of page.issues) {
         if (fullReconcile) seenIssueIds.add(issue.id)
@@ -457,6 +506,9 @@ export class JiraProviderCore implements KanbanProvider {
     // is known complete here — an incomplete scan returned above.)
     if (fullReconcile) {
       await this.cache.pruneIssuesMissingUpstream(project.key, [...seenIssueIds])
+      for (const id of this.renderedDescriptions.keys()) {
+        if (!seenIssueIds.has(id)) this.renderedDescriptions.delete(id)
+      }
     }
 
     // 5. Save sync meta.
@@ -631,9 +683,10 @@ export class JiraProviderCore implements KanbanProvider {
       )
     }
     const readAt = new Date().toISOString()
-    const description = adfToMarkdown(issue.fields.description)
+    const described = this.renderDescription(issue)
+    const description = described.rendered
     await this.cache.upsertIssues(
-      [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey)],
+      [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey, described)],
       { authoritative: true },
     )
     const cached = await this.cache.getCachedTask(issue.id)
@@ -661,7 +714,7 @@ export class JiraProviderCore implements KanbanProvider {
     return {
       ...cached,
       description: description.markdown,
-      description_hash: adfContentHash(issue.fields.description),
+      description_hash: described.hash,
       fresh_read: freshRead,
     }
   }
@@ -752,10 +805,9 @@ export class JiraProviderCore implements KanbanProvider {
     // anomaly (the upsert above did not land), not an ordinary not-found — surface
     // it rather than threading an unreachable null through every caller.
     const issue = await this.client.getIssue(key)
-    await this.cache.upsertIssues(
-      [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey)],
-      { authoritative: true },
-    )
+    await this.cache.upsertIssues([this.cacheRow(issue, this.config.projectKey)], {
+      authoritative: true,
+    })
     // Ingest the changelog like the sync loop does, so a just-applied transition
     // is recorded in jira_activity immediately (backs getActivity and the
     // poll-based `moved` trigger) rather than waiting for the next unthrottled
@@ -1146,9 +1198,7 @@ export class JiraProviderCore implements KanbanProvider {
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
         })
       }
-      await this.cacheIssueSnapshots([
-        toCacheIssue(issue, this.config.baseUrl, this.config.projectKey),
-      ])
+      await this.cacheIssueSnapshots([this.cacheRow(issue, this.config.projectKey)])
       if (event === 'jira:issue_updated') {
         await this.refreshIssueActivity(issue).catch((err) => {
           console.warn(`[jira] activity fetch for webhook issue ${issue.key} failed:`, err)
