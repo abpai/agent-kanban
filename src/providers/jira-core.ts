@@ -231,6 +231,11 @@ interface RenderedDescription {
 }
 
 /** A remembered rendering and the exact raw ADF JSON it was rendered from. */
+interface LiveIngest {
+  readonly deleted: Set<string>
+  readonly written: Set<string>
+}
+
 interface RememberedDescription extends RenderedDescription {
   readonly source: string
 }
@@ -289,10 +294,12 @@ export class JiraProviderCore implements KanbanProvider {
   // have changed since; different raw ADF or a miss renders again. Without it, every
   // full reconcile re-renders every description on the board.
   private readonly renderedDescriptions = new Map<string, RememberedDescription>()
-  // Issue ids a webhook deleted during the running sync. Rendering yields to the event
-  // loop, so a delete can land between a page's fetch and its write, and a lagging search
-  // index can return the issue again on a later page; the sync must not write it back.
-  private deletedDuringSync: Set<string> | undefined
+  // What live ingest (webhooks, fresh reads, writes) did to the cache during the running
+  // sync. Rendering and network waits yield to the event loop, so a delete can land
+  // between a page's fetch and its write, and a lagging search index can return the issue
+  // again on a later page: the sync must not write it back. A row written live may be
+  // missing from pages fetched earlier: a full reconcile must not prune it.
+  private liveDuringSync: LiveIngest | undefined
   // The sync running now. Syncs run one at a time: an overlapping full reconcile could
   // prune rows another sync just cached, or move the delta cursor backwards.
   private syncInFlight: Promise<void> | undefined
@@ -337,8 +344,8 @@ export class JiraProviderCore implements KanbanProvider {
 
   /**
    * Cache rows for a page of issues, yielding to the event loop between render slices.
-   * Leaves out the issues a webhook deleted during this sync, and forgets their
-   * descriptions. One description that takes longer than a slice still renders in one piece.
+   * Skips the issues a webhook deleted during this sync, and forgets their descriptions;
+   * the caller filters again as it writes. One description that takes longer than a slice still renders in one piece.
    */
   private async cacheRows(
     issues: readonly JiraIssue[],
@@ -356,7 +363,7 @@ export class JiraProviderCore implements KanbanProvider {
       }
     }
     for (const id of deleted) this.renderedDescriptions.delete(id)
-    return rows.filter((row) => !deleted.has(row.id))
+    return rows
   }
 
   protected async sync(force = false, viaWarmer = false): Promise<void> {
@@ -365,15 +372,15 @@ export class JiraProviderCore implements KanbanProvider {
     // decides whether a second sync is still due.
     if (this.syncInFlight !== undefined && (await this.servesWarmCache(force, viaWarmer))) return
     while (this.syncInFlight !== undefined) await this.syncInFlight.catch(() => undefined)
-    const deleted = new Set<string>()
-    this.deletedDuringSync = deleted
-    const run = this.syncOnce(force, viaWarmer, deleted)
+    const live: LiveIngest = { deleted: new Set(), written: new Set() }
+    this.liveDuringSync = live
+    const run = this.syncOnce(force, viaWarmer, live)
     this.syncInFlight = run
     try {
       await run
     } finally {
       this.syncInFlight = undefined
-      this.deletedDuringSync = undefined
+      this.liveDuringSync = undefined
     }
   }
 
@@ -383,11 +390,8 @@ export class JiraProviderCore implements KanbanProvider {
     return this.syncGate.shouldSkip({ force, viaWarmer, lastSyncAt: meta.lastSyncAt })
   }
 
-  private async syncOnce(
-    force: boolean,
-    viaWarmer: boolean,
-    deleted: ReadonlySet<string>,
-  ): Promise<void> {
+  private async syncOnce(force: boolean, viaWarmer: boolean, live: LiveIngest): Promise<void> {
+    const { deleted } = live
     await this.cache.ready
     const meta = await this.cache.loadSyncMeta()
     // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
@@ -492,8 +496,9 @@ export class JiraProviderCore implements KanbanProvider {
         nextPageToken,
       })
 
-      const rows = await this.cacheRows(page.issues, project.key, deleted)
-      await this.cacheIssueSnapshots(rows)
+      const rendered = await this.cacheRows(page.issues, project.key, deleted)
+      // Filter again as the write starts: a delete can land between the render loop and here.
+      await this.cacheIssueSnapshots(rendered.filter((row) => !deleted.has(row.id)))
       const liveIssues = page.issues.filter((issue) => !deleted.has(issue.id))
 
       for (const issue of liveIssues) {
@@ -559,6 +564,7 @@ export class JiraProviderCore implements KanbanProvider {
     // reconcile; a delta sync's seenIssueIds is intentionally partial. (The scan
     // is known complete here — an incomplete scan returned above.)
     if (fullReconcile) {
+      for (const id of live.written) if (!deleted.has(id)) seenIssueIds.add(id)
       await this.cache.pruneIssuesMissingUpstream(project.key, [...seenIssueIds])
       for (const id of this.renderedDescriptions.keys()) {
         if (!seenIssueIds.has(id)) this.renderedDescriptions.delete(id)
@@ -739,6 +745,7 @@ export class JiraProviderCore implements KanbanProvider {
     const readAt = new Date().toISOString()
     const described = this.renderDescription(issue)
     const description = described.rendered
+    this.liveDuringSync?.written.add(issue.id)
     await this.cache.upsertIssues(
       [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey, described)],
       { authoritative: true },
@@ -859,6 +866,7 @@ export class JiraProviderCore implements KanbanProvider {
     // anomaly (the upsert above did not land), not an ordinary not-found — surface
     // it rather than threading an unreachable null through every caller.
     const issue = await this.client.getIssue(key)
+    this.liveDuringSync?.written.add(issue.id)
     await this.cache.upsertIssues([this.cacheRow(issue, this.config.projectKey)], {
       authoritative: true,
     })
@@ -1239,7 +1247,7 @@ export class JiraProviderCore implements KanbanProvider {
     if (!issue) return attachVerdict({ handled: false, message: `No issue in payload (${event})` })
 
     if (event === 'jira:issue_deleted') {
-      this.deletedDuringSync?.add(issue.id)
+      this.liveDuringSync?.deleted.add(issue.id)
       this.renderedDescriptions.delete(issue.id)
       await this.cache.deleteIssue(issue.id)
       await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
@@ -1254,6 +1262,7 @@ export class JiraProviderCore implements KanbanProvider {
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
         })
       }
+      this.liveDuringSync?.written.add(issue.id)
       await this.cacheIssueSnapshots([this.cacheRow(issue, this.config.projectKey)])
       if (event === 'jira:issue_updated') {
         await this.refreshIssueActivity(issue).catch((err) => {

@@ -1525,3 +1525,97 @@ test('a warm read does not wait for the background warmer', async () => {
   releaseSearch()
   await warmer
 })
+
+/** Runs `body` with webhook signature checks off, as in local dev. */
+async function withOpenWebhooks(body: () => Promise<void>) {
+  const previousSecret = process.env['JIRA_WEBHOOK_SECRET']
+  delete process.env['JIRA_WEBHOOK_SECRET']
+  try {
+    await body()
+  } finally {
+    if (previousSecret !== undefined) process.env['JIRA_WEBHOOK_SECRET'] = previousSecret
+  }
+}
+
+test('a delete that lands as the render loop ends stays deleted', async () => {
+  let searches = 0
+  const searchHandler: StubHandler = () =>
+    Response.json({
+      isLast: true,
+      issues:
+        searches++ === 0
+          ? []
+          : [1, 2].map((n) =>
+              makeIssue({
+                id: String(n),
+                key: `ENG-${n}`,
+                statusId: '10001',
+                description: paragraphs(`Issue ${n}`),
+              }),
+            ),
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  const baseNow = originalDateNow()
+  Date.now = () => baseNow
+  await provider.getBoard()
+  Date.now = () => baseNow + 31_000
+  let webhook: Promise<unknown> | undefined
+  // The delete runs in microtasks queued by the page's last render, before the sync resumes.
+  const spy = spyOn(adf, 'adfToMarkdown').mockImplementation((doc) => {
+    const rendered = renderAdf(doc)
+    if (rendered.markdown.startsWith('Issue 2')) {
+      queueMicrotask(() => {
+        webhook = provider.handleWebhook({
+          headers: {},
+          rawBody: JSON.stringify({
+            webhookEvent: 'jira:issue_deleted',
+            issue: makeIssue({ id: '2', key: 'ENG-2', statusId: '10001' }),
+          }),
+        })
+      })
+    }
+    return rendered
+  })
+  await withOpenWebhooks(async () => {
+    try {
+      await provider.getBoard()
+      await webhook
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  expect(getCachedTasks(db).map((task) => task.externalRef)).toEqual(['ENG-1'])
+})
+
+test('a full reconcile keeps an issue a webhook created while it ran', async () => {
+  const long = (n: number) =>
+    makeIssue({
+      id: String(n),
+      key: `ENG-${n}`,
+      statusId: '10001',
+      description: paragraphs(
+        `Issue ${n}`,
+        ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`),
+      ),
+    })
+  // The search ran before ENG-101 existed, so the only page lacks it.
+  const searchHandler: StubHandler = () =>
+    Response.json({ isLast: true, issues: Array.from({ length: 100 }, (_, i) => long(i + 1)) })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  let webhook: Promise<unknown> | undefined
+  setTimeout(() => {
+    webhook = provider.handleWebhook({
+      headers: {},
+      rawBody: JSON.stringify({ webhookEvent: 'jira:issue_created', issue: long(101) }),
+    })
+  }, 0)
+  await withOpenWebhooks(async () => {
+    await provider.getBoard()
+    await webhook
+  })
+
+  const cached = getCachedTasks(db).map((task) => task.externalRef)
+  expect(cached).toHaveLength(101)
+  expect(cached).toContain('ENG-101')
+})
