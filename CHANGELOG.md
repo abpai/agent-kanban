@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.2
+
+### Patch Changes
+
+- [#121](https://github.com/abpai/agent-kanban/pull/121) [`f6669db`](https://github.com/abpai/agent-kanban/commit/f6669db9948b6b1ee25ae3edd98b1d1b4a408e11) Thanks [@abpai](https://github.com/abpai)! - Jira sync no longer blocks the host process while it renders descriptions. A full reconcile reuses the Markdown it already rendered for a description whose raw ADF has not changed, and it yields to the event loop every 20 ms of rendering.
+
 ## 2.2.1
 
 ### Patch Changes
