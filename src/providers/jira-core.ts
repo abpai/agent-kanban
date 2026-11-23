@@ -230,6 +230,11 @@ interface RenderedDescription {
   readonly rendered: AdfMarkdown
 }
 
+/** A remembered rendering and the exact raw ADF JSON it was rendered from. */
+interface RememberedDescription extends RenderedDescription {
+  readonly source: string
+}
+
 /**
  * Rendering a description re-parses its Markdown to check the round trip, which is
  * synchronous. Rendering yields to the event loop after this much work, so a full
@@ -281,9 +286,16 @@ export class JiraProviderCore implements KanbanProvider {
   // Issue id -> last successfully ingested `updated` stamp. Process-local; a miss just re-fetches.
   private readonly activityReads = new Map<string, { updated: string; readAt: number }>()
   // Issue id -> its description as last rendered. Process-local, so the converter cannot
-  // have changed since; a different ADF hash or a miss renders again. Without it, every
+  // have changed since; different raw ADF or a miss renders again. Without it, every
   // full reconcile re-renders every description on the board.
-  private readonly renderedDescriptions = new Map<string, RenderedDescription>()
+  private readonly renderedDescriptions = new Map<string, RememberedDescription>()
+  // Issue ids deleted by a webhook while a page of rows was being rendered. Rendering
+  // yields to the event loop, so a delete can land between a page's fetch and its write;
+  // the page must then not write the issue back.
+  private readonly deletedWhileRendering = new Set<Set<string>>()
+  // The sync running now. Syncs run one at a time: an overlapping full reconcile could
+  // prune rows another sync just cached, or move the delta cursor backwards.
+  private syncInFlight: Promise<void> | undefined
 
   constructor(
     protected readonly cache: JiraCachePort,
@@ -306,10 +318,15 @@ export class JiraProviderCore implements KanbanProvider {
   }
 
   private renderDescription(issue: JiraIssue): RenderedDescription {
-    const hash = adfContentHash(issue.fields.description)
+    // The exact JSON, not the key-sorted hash: rendering can depend on key order.
+    const source = JSON.stringify(issue.fields.description ?? null)
     const known = this.renderedDescriptions.get(issue.id)
-    if (known !== undefined && known.hash === hash) return known
-    const described = { hash, rendered: adfToMarkdown(issue.fields.description) }
+    if (known !== undefined && known.source === source) return known
+    const described = {
+      source,
+      hash: adfContentHash(issue.fields.description),
+      rendered: adfToMarkdown(issue.fields.description),
+    }
     this.renderedDescriptions.set(issue.id, described)
     return described
   }
@@ -318,24 +335,47 @@ export class JiraProviderCore implements KanbanProvider {
     return toCacheIssue(issue, this.config.baseUrl, projectKey, this.renderDescription(issue))
   }
 
-  /** Cache rows for a page of issues, yielding to the event loop between render slices. */
+  /**
+   * Cache rows for a page of issues, yielding to the event loop between render slices.
+   * Leaves out, and returns, the issues a webhook deleted meanwhile. One description
+   * that takes longer than a slice still renders in one piece.
+   */
   private async cacheRows(
     issues: readonly JiraIssue[],
     projectKey: string,
-  ): Promise<JiraCacheIssue[]> {
+  ): Promise<{ rows: JiraCacheIssue[]; deleted: ReadonlySet<string> }> {
     const rows: JiraCacheIssue[] = []
-    let sliceStart = performance.now()
-    for (const issue of issues) {
-      rows.push(this.cacheRow(issue, projectKey))
-      if (performance.now() - sliceStart >= RENDER_SLICE_MS) {
-        await yieldToEventLoop()
-        sliceStart = performance.now()
+    const deleted = new Set<string>()
+    this.deletedWhileRendering.add(deleted)
+    try {
+      let sliceStart = performance.now()
+      for (const issue of issues) {
+        rows.push(this.cacheRow(issue, projectKey))
+        if (performance.now() - sliceStart >= RENDER_SLICE_MS) {
+          await yieldToEventLoop()
+          sliceStart = performance.now()
+        }
       }
+    } finally {
+      this.deletedWhileRendering.delete(deleted)
     }
-    return rows
+    return { rows: rows.filter((row) => !deleted.has(row.id)), deleted }
   }
 
   protected async sync(force = false, viaWarmer = false): Promise<void> {
+    // A caller that arrives mid-sync waits for it; the sync gate then decides whether a
+    // second sync is still due.
+    while (this.syncInFlight !== undefined) await this.syncInFlight.catch(() => undefined)
+    const run = this.syncOnce(force, viaWarmer)
+    this.syncInFlight = run
+    try {
+      await run
+    } finally {
+      this.syncInFlight = undefined
+    }
+  }
+
+  private async syncOnce(force: boolean, viaWarmer: boolean): Promise<void> {
     await this.cache.ready
     const meta = await this.cache.loadSyncMeta()
     // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
@@ -440,9 +480,11 @@ export class JiraProviderCore implements KanbanProvider {
         nextPageToken,
       })
 
-      await this.cacheIssueSnapshots(await this.cacheRows(page.issues, project.key))
+      const { rows, deleted } = await this.cacheRows(page.issues, project.key)
+      await this.cacheIssueSnapshots(rows)
+      const liveIssues = page.issues.filter((issue) => !deleted.has(issue.id))
 
-      for (const issue of page.issues) {
+      for (const issue of liveIssues) {
         if (fullReconcile) seenIssueIds.add(issue.id)
         if (newestUpdatedAt === null || issue.fields.updated > newestUpdatedAt) {
           newestUpdatedAt = issue.fields.updated
@@ -456,7 +498,7 @@ export class JiraProviderCore implements KanbanProvider {
       // poll-based `moved` trigger works. Server-side dedupe
       // keyed on (issue_id, history_id, item_field) keeps this cheap
       // even if the same issue is updated repeatedly.
-      await mapWithConcurrency(page.issues, 5, async (issue) => {
+      await mapWithConcurrency(liveIssues, 5, async (issue) => {
         await this.refreshIssueActivity(issue).catch((err) => {
           // Activity is best-effort; the main sync shouldn't fail if
           // one changelog call 404s or rate-limits.
@@ -1185,6 +1227,8 @@ export class JiraProviderCore implements KanbanProvider {
     if (!issue) return attachVerdict({ handled: false, message: `No issue in payload (${event})` })
 
     if (event === 'jira:issue_deleted') {
+      for (const deleted of this.deletedWhileRendering) deleted.add(issue.id)
+      this.renderedDescriptions.delete(issue.id)
       await this.cache.deleteIssue(issue.id)
       await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
       return attachVerdict({ handled: true })

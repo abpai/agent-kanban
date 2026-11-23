@@ -1,6 +1,6 @@
 import { assertKanbanError } from './helpers/errors'
 import { mockFetch } from './helpers/fetch'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { ErrorCode } from '../errors'
 import {
@@ -13,6 +13,7 @@ import {
   type JiraUser,
 } from '../providers/jira-client'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
+import * as adf from '../providers/jira-adf'
 import { adfContentHash, JIRA_ADF_CONVERTER_VERSION, type AdfDocument } from '../providers/jira-adf'
 import { resetWarnOnce } from '../providers/warn-once'
 import {
@@ -50,6 +51,8 @@ const baseConfig: JiraProviderConfig = {
   apiToken: 'token',
   projectKey: 'ENG',
 }
+
+const renderAdf = adf.adfToMarkdown
 
 const projectFixture = { id: '10000', key: 'ENG', name: 'Engineering' }
 const usersFixture = [
@@ -1368,7 +1371,16 @@ function paragraphs(...texts: string[]): AdfDocument {
   }
 }
 
-test('a full reconcile renders an edited description again and keeps unchanged ones', async () => {
+/** Logs each description render by the first line of its Markdown, in order. */
+function countRenders(log: string[]) {
+  return spyOn(adf, 'adfToMarkdown').mockImplementation((doc) => {
+    const rendered = renderAdf(doc)
+    log.push(rendered.markdown.split('\n')[0] ?? '')
+    return rendered
+  })
+}
+
+test('a full reconcile renders only edited descriptions again', async () => {
   let edited = false
   const searchHandler: StubHandler = () =>
     Response.json({
@@ -1387,14 +1399,20 @@ test('a full reconcile renders an edited description again and keeps unchanged o
       ],
     })
   const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
-  const baseNow = originalDateNow()
-  Date.now = () => baseNow
-  await provider.getBoard()
+  const renders: string[] = []
+  const spy = countRenders(renders)
+  try {
+    const baseNow = originalDateNow()
+    Date.now = () => baseNow
+    await provider.getBoard()
+    edited = true
+    Date.now = () => baseNow + 5 * 60_000 + 31_000
+    await provider.getBoard()
+  } finally {
+    spy.mockRestore()
+  }
 
-  edited = true
-  Date.now = () => baseNow + 5 * 60_000 + 31_000
-  await provider.getBoard()
-
+  expect(renders).toEqual(['Same.', 'Before the edit.', 'After the edit.'])
   expect(
     getCachedTasks(db)
       .map((task) => [task.externalRef, task.description])
@@ -1405,30 +1423,70 @@ test('a full reconcile renders an edited description again and keeps unchanged o
   ])
 })
 
-test('rendering a large page of descriptions lets other work run before the sync ends', async () => {
-  // Each render re-parses its Markdown synchronously; 100 long descriptions take far longer
-  // than one render slice, so a timer set before the sync must run while it is still going.
-  const long = paragraphs(
-    ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} with *some* text.`),
-  )
+test('rendering a page yields between renders, and a delete meanwhile stays deleted', async () => {
+  // 100 long descriptions take far longer than one 20 ms render slice.
+  const long = (n: number) =>
+    paragraphs(`Issue ${n}`, ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`))
+  // The page arrives in a delta sync, which prunes nothing: only the filter keeps a
+  // deleted issue out.
+  let searches = 0
   const searchHandler: StubHandler = () =>
     Response.json({
       startAt: 0,
       maxResults: 100,
-      total: 100,
-      issues: Array.from({ length: 100 }, (_, i) =>
-        makeIssue({ id: String(i + 1), key: `ENG-${i + 1}`, statusId: '10001', description: long }),
+      isLast: true,
+      issues: Array.from({ length: searches++ === 0 ? 0 : 100 }, (_, i) =>
+        makeIssue({
+          id: String(i + 1),
+          key: `ENG-${i + 1}`,
+          statusId: '10001',
+          description: long(i + 1),
+        }),
       ),
     })
   const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
-  let timerRanDuringSync = false
-  let syncDone = false
-  setTimeout(() => {
-    timerRanDuringSync = !syncDone
-  }, 0)
-
+  const baseNow = originalDateNow()
+  Date.now = () => baseNow
   await provider.getBoard()
-  syncDone = true
+  Date.now = () => baseNow + 31_000
+  const events: string[] = []
+  const spy = countRenders(events)
+  const previousSecret = process.env['JIRA_WEBHOOK_SECRET']
+  delete process.env['JIRA_WEBHOOK_SECRET']
+  let webhook: Promise<unknown> | undefined
+  setTimeout(() => {
+    events.push('timer')
+    const body = JSON.stringify({
+      webhookEvent: 'jira:issue_deleted',
+      issue: makeIssue({ id: '100', key: 'ENG-100', statusId: '10001' }),
+    })
+    webhook = provider.handleWebhook({ headers: {}, rawBody: body })
+  }, 0)
+  try {
+    await provider.getBoard()
+    await webhook
+  } finally {
+    spy.mockRestore()
+    if (previousSecret !== undefined) process.env['JIRA_WEBHOOK_SECRET'] = previousSecret
+  }
 
-  expect(timerRanDuringSync).toBe(true)
+  const timerAt = events.indexOf('timer')
+  expect(timerAt).toBeGreaterThan(0)
+  expect(timerAt).toBeLessThan(events.indexOf('Issue 100'))
+  const cached = getCachedTasks(db).map((task) => task.externalRef)
+  expect(cached).toHaveLength(99)
+  expect(cached).not.toContain('ENG-100')
+})
+
+test('overlapping reads run one sync, not two racing full reconciles', async () => {
+  let searches = 0
+  const searchHandler: StubHandler = () => {
+    searches += 1
+    return Response.json({ startAt: 0, maxResults: 100, isLast: true, issues: [] })
+  }
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+
+  await Promise.all([provider.getBoard(), provider.getBoard()])
+
+  expect(searches).toBe(1)
 })
