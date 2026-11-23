@@ -495,11 +495,12 @@ export function pruneJiraIssuesMissingUpstream(
   updatedBefore: string,
 ): void {
   // A row Jira changed after `updatedBefore` may be missing from pages fetched before the
-  // change, so only rows older than it are pruned.
+  // change, so only rows older than it are pruned. A row without a readable timestamp
+  // counts as old, so it can still be pruned.
   const missing = `SELECT id FROM jira_issues
     WHERE project_key = $projectKey
       AND id NOT IN (SELECT value FROM json_each($ids))
-      AND ${jiraUpdatedAtSql('updated_at')} < julianday($updatedBefore)`
+      AND coalesce(${jiraUpdatedAtSql('updated_at')}, 0) < julianday($updatedBefore)`
   const params = {
     $projectKey: projectKey,
     $ids: JSON.stringify(upstreamIssueIds),

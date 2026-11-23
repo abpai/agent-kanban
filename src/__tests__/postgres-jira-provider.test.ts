@@ -616,4 +616,39 @@ describe('postgres jira provider', () => {
     // ENG-2 must survive: the incomplete scan is not authoritative for pruning.
     expect(await issueKeys()).toEqual(['ENG-1', 'ENG-2'])
   })
+
+  pgTest('full reconcile prunes a missing issue whose cached timestamp is unreadable', async () => {
+    if (!sql) throw new Error('expected postgres test connection')
+    let reconciled = false
+    const routes = standardRoutes()
+    const sIdx = routes.findIndex((route) => route.match('https://x/rest/api/3/search/jql'))
+    routes[sIdx] = {
+      match: (url) => url.includes('/rest/api/3/search/jql'),
+      handler: () =>
+        Response.json({
+          isLast: true,
+          issues: reconciled
+            ? [makeIssue({ id: '1', key: 'ENG-1' })]
+            : [makeIssue({ id: '1', key: 'ENG-1' }), makeIssue({ id: '2', key: 'ENG-2' })],
+        }),
+    }
+    globalThis.fetch = jiraFetchStub(routes).fn
+    const provider = new PostgresJiraProvider(sql, {
+      baseUrl: 'https://example.atlassian.net',
+      email: 'user@example.com',
+      apiToken: 'token',
+      projectKey: 'ENG',
+      boardId: 1006,
+      pollingSyncIntervalMs: 0,
+    })
+    await provider.getBoard()
+    await sql`UPDATE jira_issues SET updated_at = '' WHERE key = 'ENG-2'`
+
+    reconciled = true
+    await sql`DELETE FROM jira_sync_meta WHERE key = 'lastFullSyncAt'`
+    await provider.getBoard()
+
+    const keys = await sql<{ key: string }[]>`SELECT key FROM jira_issues ORDER BY key`
+    expect(keys.map((row) => row.key)).toEqual(['ENG-1'])
+  })
 })

@@ -432,14 +432,19 @@ export class PostgresJiraCache implements JiraCachePort {
     updatedBefore: string,
   ): Promise<void> {
     // A row Jira changed after `updatedBefore` may be missing from pages fetched before the
-    // change, so only rows older than it are pruned.
+    // change, so only rows older than it are pruned. A row without a readable timestamp
+    // counts as old; CASE keeps the cast from running on it.
     await this.sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
       const missing = await tx<{ id: string }[]>`
         SELECT id FROM jira_issues
         WHERE project_key = ${projectKey}
           AND NOT (id = ANY(${upstreamIssueIds}::text[]))
-          AND updated_at::timestamptz < ${updatedBefore}::timestamptz
+          AND CASE
+            WHEN updated_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+              THEN updated_at::timestamptz < ${updatedBefore}::timestamptz
+            ELSE true
+          END
       `
       if (missing.length === 0) return
       const ids = missing.map((row) => row.id)
