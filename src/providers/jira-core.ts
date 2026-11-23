@@ -289,10 +289,10 @@ export class JiraProviderCore implements KanbanProvider {
   // have changed since; different raw ADF or a miss renders again. Without it, every
   // full reconcile re-renders every description on the board.
   private readonly renderedDescriptions = new Map<string, RememberedDescription>()
-  // Issue ids deleted by a webhook while a page of rows was being rendered. Rendering
-  // yields to the event loop, so a delete can land between a page's fetch and its write;
-  // the page must then not write the issue back.
-  private readonly deletedWhileRendering = new Set<Set<string>>()
+  // Issue ids a webhook deleted during the running sync. Rendering yields to the event
+  // loop, so a delete can land between a page's fetch and its write, and a lagging search
+  // index can return the issue again on a later page; the sync must not write it back.
+  private deletedDuringSync: Set<string> | undefined
   // The sync running now. Syncs run one at a time: an overlapping full reconcile could
   // prune rows another sync just cached, or move the delta cursor backwards.
   private syncInFlight: Promise<void> | undefined
@@ -337,45 +337,57 @@ export class JiraProviderCore implements KanbanProvider {
 
   /**
    * Cache rows for a page of issues, yielding to the event loop between render slices.
-   * Leaves out, and returns, the issues a webhook deleted meanwhile. One description
-   * that takes longer than a slice still renders in one piece.
+   * Leaves out the issues a webhook deleted during this sync, and forgets their
+   * descriptions. One description that takes longer than a slice still renders in one piece.
    */
   private async cacheRows(
     issues: readonly JiraIssue[],
     projectKey: string,
-  ): Promise<{ rows: JiraCacheIssue[]; deleted: ReadonlySet<string> }> {
+    deleted: ReadonlySet<string>,
+  ): Promise<JiraCacheIssue[]> {
     const rows: JiraCacheIssue[] = []
-    const deleted = new Set<string>()
-    this.deletedWhileRendering.add(deleted)
-    try {
-      let sliceStart = performance.now()
-      for (const issue of issues) {
-        rows.push(this.cacheRow(issue, projectKey))
-        if (performance.now() - sliceStart >= RENDER_SLICE_MS) {
-          await yieldToEventLoop()
-          sliceStart = performance.now()
-        }
+    let sliceStart = performance.now()
+    for (const issue of issues) {
+      if (deleted.has(issue.id)) continue
+      rows.push(this.cacheRow(issue, projectKey))
+      if (performance.now() - sliceStart >= RENDER_SLICE_MS) {
+        await yieldToEventLoop()
+        sliceStart = performance.now()
       }
-    } finally {
-      this.deletedWhileRendering.delete(deleted)
     }
-    return { rows: rows.filter((row) => !deleted.has(row.id)), deleted }
+    for (const id of deleted) this.renderedDescriptions.delete(id)
+    return rows.filter((row) => !deleted.has(row.id))
   }
 
   protected async sync(force = false, viaWarmer = false): Promise<void> {
-    // A caller that arrives mid-sync waits for it; the sync gate then decides whether a
-    // second sync is still due.
+    // A read that may serve the warm cache never waits on a sync in flight, which can be
+    // a minutes-long full reconcile. Any other caller waits for it; the sync gate then
+    // decides whether a second sync is still due.
+    if (this.syncInFlight !== undefined && (await this.servesWarmCache(force, viaWarmer))) return
     while (this.syncInFlight !== undefined) await this.syncInFlight.catch(() => undefined)
-    const run = this.syncOnce(force, viaWarmer)
+    const deleted = new Set<string>()
+    this.deletedDuringSync = deleted
+    const run = this.syncOnce(force, viaWarmer, deleted)
     this.syncInFlight = run
     try {
       await run
     } finally {
       this.syncInFlight = undefined
+      this.deletedDuringSync = undefined
     }
   }
 
-  private async syncOnce(force: boolean, viaWarmer: boolean): Promise<void> {
+  private async servesWarmCache(force: boolean, viaWarmer: boolean): Promise<boolean> {
+    await this.cache.ready
+    const meta = await this.cache.loadSyncMeta()
+    return this.syncGate.shouldSkip({ force, viaWarmer, lastSyncAt: meta.lastSyncAt })
+  }
+
+  private async syncOnce(
+    force: boolean,
+    viaWarmer: boolean,
+    deleted: ReadonlySet<string>,
+  ): Promise<void> {
     await this.cache.ready
     const meta = await this.cache.loadSyncMeta()
     // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
@@ -480,7 +492,7 @@ export class JiraProviderCore implements KanbanProvider {
         nextPageToken,
       })
 
-      const { rows, deleted } = await this.cacheRows(page.issues, project.key)
+      const rows = await this.cacheRows(page.issues, project.key, deleted)
       await this.cacheIssueSnapshots(rows)
       const liveIssues = page.issues.filter((issue) => !deleted.has(issue.id))
 
@@ -1227,7 +1239,7 @@ export class JiraProviderCore implements KanbanProvider {
     if (!issue) return attachVerdict({ handled: false, message: `No issue in payload (${event})` })
 
     if (event === 'jira:issue_deleted') {
-      for (const deleted of this.deletedWhileRendering) deleted.add(issue.id)
+      this.deletedDuringSync?.add(issue.id)
       this.renderedDescriptions.delete(issue.id)
       await this.cache.deleteIssue(issue.id)
       await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })

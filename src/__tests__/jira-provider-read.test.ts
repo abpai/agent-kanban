@@ -1426,24 +1426,29 @@ test('a full reconcile renders only edited descriptions again', async () => {
 test('rendering a page yields between renders, and a delete meanwhile stays deleted', async () => {
   // 100 long descriptions take far longer than one 20 ms render slice.
   const long = (n: number) =>
-    paragraphs(`Issue ${n}`, ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`))
-  // The page arrives in a delta sync, which prunes nothing: only the filter keeps a
-  // deleted issue out.
-  let searches = 0
-  const searchHandler: StubHandler = () =>
-    Response.json({
-      startAt: 0,
-      maxResults: 100,
-      isLast: true,
-      issues: Array.from({ length: searches++ === 0 ? 0 : 100 }, (_, i) =>
-        makeIssue({
-          id: String(i + 1),
-          key: `ENG-${i + 1}`,
-          statusId: '10001',
-          description: long(i + 1),
-        }),
+    makeIssue({
+      id: String(n),
+      key: `ENG-${n}`,
+      statusId: '10001',
+      description: paragraphs(
+        `Issue ${n}`,
+        ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`),
       ),
     })
+  // The pages arrive in a delta sync, which prunes nothing: only the sync's record of
+  // deletes keeps a deleted issue out. A lagging search index returns it on page two too.
+  let searches = 0
+  const searchHandler: StubHandler = (url) => {
+    if (searches++ === 0) return Response.json({ isLast: true, issues: [] })
+    if (new URL(url).searchParams.get('nextPageToken') === null) {
+      return Response.json({
+        nextPageToken: 'page-2',
+        isLast: false,
+        issues: Array.from({ length: 100 }, (_, i) => long(i + 1)),
+      })
+    }
+    return Response.json({ isLast: true, issues: [long(100)] })
+  }
   const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
   const baseNow = originalDateNow()
   Date.now = () => baseNow
@@ -1470,9 +1475,11 @@ test('rendering a page yields between renders, and a delete meanwhile stays dele
     if (previousSecret !== undefined) process.env['JIRA_WEBHOOK_SECRET'] = previousSecret
   }
 
-  const timerAt = events.indexOf('timer')
-  expect(timerAt).toBeGreaterThan(0)
-  expect(timerAt).toBeLessThan(events.indexOf('Issue 100'))
+  // The delete lands mid-page, and the deleted issue is never rendered (nor remembered)
+  // afterwards, on that page or the next.
+  expect(events.indexOf('timer')).toBeGreaterThan(0)
+  expect(events).not.toContain('Issue 100')
+  expect(events.filter((event) => event !== 'timer')).toHaveLength(99)
   const cached = getCachedTasks(db).map((task) => task.externalRef)
   expect(cached).toHaveLength(99)
   expect(cached).not.toContain('ENG-100')
@@ -1489,4 +1496,32 @@ test('overlapping reads run one sync, not two racing full reconciles', async () 
   await Promise.all([provider.getBoard(), provider.getBoard()])
 
   expect(searches).toBe(1)
+})
+
+test('a warm read does not wait for the background warmer', async () => {
+  let releaseSearch: () => void = () => undefined
+  const searchHandler: StubHandler = () =>
+    new Promise<Response>((resolve) => {
+      releaseSearch = () => resolve(Response.json({ isLast: true, issues: [] }))
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  provider.setBackgroundManaged(true)
+  saveJiraSyncMeta(db, {
+    projectKey: 'ENG',
+    lastSyncAt: '2026-01-01T00:00:00.000Z',
+    lastFullSyncAt: '2026-01-01T00:00:00.000Z',
+    lastIssueUpdatedAt: '2026-01-01T00:00:00.000Z',
+  })
+  Date.now = () => Date.parse('2026-01-01T01:00:00.000Z')
+  let warmerDone = false
+  const warmer = provider.syncCache().then(() => {
+    warmerDone = true
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  await provider.getBoard()
+
+  expect(warmerDone).toBe(false)
+  releaseSearch()
+  await warmer
 })
