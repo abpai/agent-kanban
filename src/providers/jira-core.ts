@@ -848,9 +848,9 @@ export class JiraProviderCore implements KanbanProvider {
     }
   }
 
-  private async cachedRowMatches(issue: JiraIssue): Promise<boolean> {
+  private async isNewerThanCache(issue: JiraIssue): Promise<boolean> {
     const cached = await this.cache.getCachedTask(issue.id)
-    return cached !== null && Date.parse(cached.updated_at) <= Date.parse(issue.fields.updated)
+    return cached === null || Date.parse(cached.updated_at) < Date.parse(issue.fields.updated)
   }
 
   private async cacheIssueSnapshots(issues: JiraIssueSnapshot[]): Promise<void> {
@@ -1268,11 +1268,12 @@ export class JiraProviderCore implements KanbanProvider {
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
         })
       }
+      // Only a webhook newer than the cached row writes it, and only that write may keep its
+      // row through a running reconcile's prune; a delayed or replayed webhook may not.
+      // Recorded before the write starts, so a prune cannot run between the two.
       const live = this.liveDuringSync
+      if (live !== undefined && (await this.isNewerThanCache(issue))) live.written.add(issue.id)
       await this.cacheIssueSnapshots([this.cacheRow(issue, this.config.projectKey)])
-      // A delayed webhook older than the cached row is rejected; only an applied write
-      // may keep its row through a running reconcile's prune.
-      if (live !== undefined && (await this.cachedRowMatches(issue))) live.written.add(issue.id)
       if (event === 'jira:issue_updated') {
         await this.refreshIssueActivity(issue).catch((err) => {
           console.warn(`[jira] activity fetch for webhook issue ${issue.key} failed:`, err)
