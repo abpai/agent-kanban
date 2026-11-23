@@ -1,4 +1,8 @@
-import type { JiraIssueSnapshot, JiraIssueWriteOptions } from './jira-issue-snapshot'
+import type {
+  JiraIssueSnapshot,
+  JiraIssueWriteOptions,
+  JiraScanWindow,
+} from './jira-issue-snapshot'
 import { ErrorCode, KanbanError } from '../errors'
 import type {
   ActivityEntry,
@@ -30,6 +34,7 @@ import {
   describeAdfDifferences,
   markdownToAdf,
   type AdfDocument,
+  type AdfMarkdown,
 } from './jira-adf'
 import { sha256Json } from './jira-adf/hash'
 import { buildDeltaJql, safeDeltaSince } from './jira-jql'
@@ -197,7 +202,11 @@ export interface JiraCachePort {
   // Issue writes
   upsertIssues(issues: JiraIssueSnapshot[], options?: JiraIssueWriteOptions): Promise<string[]>
   deleteIssue(idOrKey: string): Promise<void>
-  pruneIssuesMissingUpstream(projectKey: string, upstreamIssueIds: string[]): Promise<void>
+  pruneIssuesMissingUpstream(
+    projectKey: string,
+    upstreamIssueIds: string[],
+    scan: JiraScanWindow,
+  ): Promise<void>
   adjustIssueCommentCount(idOrKey: string, delta: number): Promise<void>
 
   // Activity
@@ -223,19 +232,42 @@ export interface JiraCachePort {
 
 type JiraCacheIssue = Parameters<JiraCachePort['upsertIssues']>[0][number]
 
+/** An issue description rendered to Markdown, with the hash of the raw ADF it came from. */
+interface RenderedDescription {
+  readonly hash: string | null
+  readonly rendered: AdfMarkdown
+}
+
+/** A remembered rendering and the exact raw ADF JSON it was rendered from. */
+interface RememberedDescription extends RenderedDescription {
+  readonly source: string
+}
+
+/**
+ * Rendering a description re-parses its Markdown to check the round trip, which is
+ * synchronous. Rendering yields to the event loop after this much work, so a full
+ * reconcile of a large board never blocks the process that hosts the provider.
+ */
+const RENDER_SLICE_MS = 20
+// Clock skew allowed between Jira's `updated` stamps and this host.
+const PRUNE_CLOCK_SKEW_MS = 60_000
+
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
 // Map a Jira API issue to the cache upsert row. Shared by bulk sync, direct
 // hydrate, and webhook ingest so every path caches the same issue shape.
 function toCacheIssue(
   issue: JiraIssue,
   baseUrl: string,
   fallbackProjectKey: string,
+  description: RenderedDescription,
 ): JiraCacheIssue {
   return {
     id: issue.id,
     key: issue.key,
     summary: issue.fields.summary,
-    descriptionText: adfToMarkdown(issue.fields.description).markdown,
-    descriptionHash: adfContentHash(issue.fields.description),
+    descriptionText: description.rendered.markdown,
+    descriptionHash: description.hash,
     statusId: issue.fields.status.id,
     priorityName: issue.fields.priority?.name ?? null,
     issueTypeName: issue.fields.issuetype?.name ?? '',
@@ -263,6 +295,17 @@ export class JiraProviderCore implements KanbanProvider {
   private readonly syncGate: SyncGate
   // Issue id -> last successfully ingested `updated` stamp. Process-local; a miss just re-fetches.
   private readonly activityReads = new Map<string, { updated: string; readAt: number }>()
+  // Issue id -> its description as last rendered. Process-local, so the converter cannot
+  // have changed since; different raw ADF or a miss renders again. Without it, every
+  // full reconcile re-renders every description on the board.
+  private readonly renderedDescriptions = new Map<string, RememberedDescription>()
+  // Issue ids a webhook deleted during the running sync. Rendering yields to the event
+  // loop, so a delete can land between a page's fetch and its write, and a lagging search
+  // index can return the issue again on a later page; the sync must not write it back.
+  private deletedDuringSync: Set<string> | undefined
+  // The sync running now. Syncs run one at a time: an overlapping full reconcile could
+  // prune rows another sync just cached, or move the delta cursor backwards.
+  private syncInFlight: Promise<void> | undefined
 
   constructor(
     protected readonly cache: JiraCachePort,
@@ -284,7 +327,78 @@ export class JiraProviderCore implements KanbanProvider {
     await this.cache.ready
   }
 
+  private renderDescription(issue: JiraIssue): RenderedDescription {
+    // The exact JSON, not the key-sorted hash: rendering can depend on key order.
+    const source = JSON.stringify(issue.fields.description ?? null)
+    const known = this.renderedDescriptions.get(issue.id)
+    if (known !== undefined && known.source === source) return known
+    const described = {
+      source,
+      hash: adfContentHash(issue.fields.description),
+      rendered: adfToMarkdown(issue.fields.description),
+    }
+    this.renderedDescriptions.set(issue.id, described)
+    return described
+  }
+
+  private cacheRow(issue: JiraIssue, projectKey: string): JiraCacheIssue {
+    return toCacheIssue(issue, this.config.baseUrl, projectKey, this.renderDescription(issue))
+  }
+
+  /**
+   * Cache rows for a page of issues, yielding to the event loop between render slices.
+   * Skips the issues a webhook deleted during this sync, and forgets their descriptions;
+   * the caller filters again as it writes. One description that takes longer than a slice still renders in one piece.
+   */
+  private async cacheRows(
+    issues: readonly JiraIssue[],
+    projectKey: string,
+    deleted: ReadonlySet<string>,
+  ): Promise<JiraCacheIssue[]> {
+    const rows: JiraCacheIssue[] = []
+    let sliceStart = performance.now()
+    for (const issue of issues) {
+      if (deleted.has(issue.id)) continue
+      rows.push(this.cacheRow(issue, projectKey))
+      if (performance.now() - sliceStart >= RENDER_SLICE_MS) {
+        await yieldToEventLoop()
+        sliceStart = performance.now()
+      }
+    }
+    for (const id of deleted) this.renderedDescriptions.delete(id)
+    return rows
+  }
+
   protected async sync(force = false, viaWarmer = false): Promise<void> {
+    // A read that may serve the warm cache never waits on a sync in flight, which can be
+    // a minutes-long full reconcile. Any other caller waits for it and shares its failure,
+    // so a stalled Jira fails waiting reads together instead of retrying it one by one;
+    // after a success, the sync gate decides whether a second sync is still due.
+    if (this.syncInFlight !== undefined && (await this.servesWarmCache(force, viaWarmer))) return
+    while (this.syncInFlight !== undefined) await this.syncInFlight
+    const deleted = new Set<string>()
+    this.deletedDuringSync = deleted
+    const run = this.syncOnce(force, viaWarmer, deleted)
+    this.syncInFlight = run
+    try {
+      await run
+    } finally {
+      this.syncInFlight = undefined
+      this.deletedDuringSync = undefined
+    }
+  }
+
+  private async servesWarmCache(force: boolean, viaWarmer: boolean): Promise<boolean> {
+    await this.cache.ready
+    const meta = await this.cache.loadSyncMeta()
+    return this.syncGate.shouldSkip({ force, viaWarmer, lastSyncAt: meta.lastSyncAt })
+  }
+
+  private async syncOnce(
+    force: boolean,
+    viaWarmer: boolean,
+    deleted: ReadonlySet<string>,
+  ): Promise<void> {
     await this.cache.ready
     const meta = await this.cache.loadSyncMeta()
     // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
@@ -301,6 +415,9 @@ export class JiraProviderCore implements KanbanProvider {
     // changelog call (~minutes). Writes get read-after-write freshness from
     // hydrateIssueByKey instead, so a forced sync stays a cheap delta.
     const fullReconcile = shouldRunFullReconcile(meta.lastFullSyncAt, now)
+    // The prune spares rows Jira changed while the scan ran: a webhook may have written them
+    // after the pages that would include them were fetched.
+    const scanStartedAt = now
 
     // 1. Resolve project.
     const project = await this.client.getProject(this.config.projectKey)
@@ -389,11 +506,12 @@ export class JiraProviderCore implements KanbanProvider {
         nextPageToken,
       })
 
-      await this.cacheIssueSnapshots(
-        page.issues.map((issue) => toCacheIssue(issue, this.config.baseUrl, project.key)),
-      )
+      const rendered = await this.cacheRows(page.issues, project.key, deleted)
+      // Filter again as the write starts: a delete can land between the render loop and here.
+      await this.cacheIssueSnapshots(rendered.filter((row) => !deleted.has(row.id)))
+      const liveIssues = page.issues.filter((issue) => !deleted.has(issue.id))
 
-      for (const issue of page.issues) {
+      for (const issue of liveIssues) {
         if (fullReconcile) seenIssueIds.add(issue.id)
         if (newestUpdatedAt === null || issue.fields.updated > newestUpdatedAt) {
           newestUpdatedAt = issue.fields.updated
@@ -407,7 +525,7 @@ export class JiraProviderCore implements KanbanProvider {
       // poll-based `moved` trigger works. Server-side dedupe
       // keyed on (issue_id, history_id, item_field) keeps this cheap
       // even if the same issue is updated repeatedly.
-      await mapWithConcurrency(page.issues, 5, async (issue) => {
+      await mapWithConcurrency(liveIssues, 5, async (issue) => {
         await this.refreshIssueActivity(issue).catch((err) => {
           // Activity is best-effort; the main sync shouldn't fail if
           // one changelog call 404s or rate-limits.
@@ -456,7 +574,13 @@ export class JiraProviderCore implements KanbanProvider {
     // reconcile; a delta sync's seenIssueIds is intentionally partial. (The scan
     // is known complete here — an incomplete scan returned above.)
     if (fullReconcile) {
-      await this.cache.pruneIssuesMissingUpstream(project.key, [...seenIssueIds])
+      await this.cache.pruneIssuesMissingUpstream(project.key, [...seenIssueIds], {
+        from: new Date(scanStartedAt - PRUNE_CLOCK_SKEW_MS).toISOString(),
+        to: new Date(Date.now() + PRUNE_CLOCK_SKEW_MS).toISOString(),
+      })
+      for (const id of this.renderedDescriptions.keys()) {
+        if (!seenIssueIds.has(id)) this.renderedDescriptions.delete(id)
+      }
     }
 
     // 5. Save sync meta.
@@ -631,9 +755,10 @@ export class JiraProviderCore implements KanbanProvider {
       )
     }
     const readAt = new Date().toISOString()
-    const description = adfToMarkdown(issue.fields.description)
+    const described = this.renderDescription(issue)
+    const description = described.rendered
     await this.cache.upsertIssues(
-      [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey)],
+      [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey, described)],
       { authoritative: true },
     )
     const cached = await this.cache.getCachedTask(issue.id)
@@ -661,7 +786,7 @@ export class JiraProviderCore implements KanbanProvider {
     return {
       ...cached,
       description: description.markdown,
-      description_hash: adfContentHash(issue.fields.description),
+      description_hash: described.hash,
       fresh_read: freshRead,
     }
   }
@@ -752,10 +877,9 @@ export class JiraProviderCore implements KanbanProvider {
     // anomaly (the upsert above did not land), not an ordinary not-found — surface
     // it rather than threading an unreachable null through every caller.
     const issue = await this.client.getIssue(key)
-    await this.cache.upsertIssues(
-      [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey)],
-      { authoritative: true },
-    )
+    await this.cache.upsertIssues([this.cacheRow(issue, this.config.projectKey)], {
+      authoritative: true,
+    })
     // Ingest the changelog like the sync loop does, so a just-applied transition
     // is recorded in jira_activity immediately (backs getActivity and the
     // poll-based `moved` trigger) rather than waiting for the next unthrottled
@@ -1133,6 +1257,8 @@ export class JiraProviderCore implements KanbanProvider {
     if (!issue) return attachVerdict({ handled: false, message: `No issue in payload (${event})` })
 
     if (event === 'jira:issue_deleted') {
+      this.deletedDuringSync?.add(issue.id)
+      this.renderedDescriptions.delete(issue.id)
       await this.cache.deleteIssue(issue.id)
       await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
       return attachVerdict({ handled: true })
@@ -1146,9 +1272,7 @@ export class JiraProviderCore implements KanbanProvider {
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
         })
       }
-      await this.cacheIssueSnapshots([
-        toCacheIssue(issue, this.config.baseUrl, this.config.projectKey),
-      ])
+      await this.cacheIssueSnapshots([this.cacheRow(issue, this.config.projectKey)])
       if (event === 'jira:issue_updated') {
         await this.refreshIssueActivity(issue).catch((err) => {
           console.warn(`[jira] activity fetch for webhook issue ${issue.key} failed:`, err)

@@ -1,5 +1,7 @@
 import {
+  changedDuringScan,
   prepareJiraIssueSnapshots,
+  type JiraScanWindow,
   type JiraIssueSnapshot,
   type JiraIssueWriteOptions,
 } from './jira-issue-snapshot'
@@ -492,41 +494,24 @@ export function pruneJiraIssuesMissingUpstream(
   db: Database,
   projectKey: string,
   upstreamIssueIds: string[],
+  scan: JiraScanWindow,
 ): void {
-  const run = db.transaction(() => {
-    if (upstreamIssueIds.length === 0) {
-      db.query(
-        `DELETE FROM jira_activity
-         WHERE issue_id IN (SELECT id FROM jira_issues WHERE project_key = $projectKey)`,
-      ).run({ $projectKey: projectKey })
-      db.query('DELETE FROM jira_issues WHERE project_key = $projectKey').run({
-        $projectKey: projectKey,
-      })
-      return
-    }
-
-    const placeholders = upstreamIssueIds.map((_, index) => `$id${index}`).join(', ')
-    const params = Object.fromEntries([
-      ['$projectKey', projectKey],
-      ...upstreamIssueIds.map((issueId, index) => [`$id${index}`, issueId]),
-    ])
-
-    db.query(
-      `DELETE FROM jira_activity
-       WHERE issue_id IN (
-         SELECT id
-         FROM jira_issues
-         WHERE project_key = $projectKey
-           AND id NOT IN (${placeholders})
-       )`,
-    ).run(params)
-    db.query(
-      `DELETE FROM jira_issues
-       WHERE project_key = $projectKey
-         AND id NOT IN (${placeholders})`,
-    ).run(params)
-  })
-  run()
+  // Immediate: the read comes first, and a deferred read cannot always upgrade to a write
+  // after another connection commits (SQLITE_BUSY_SNAPSHOT).
+  db.transaction(() => {
+    const unseen = db
+      .query<{ id: string; updated_at: string }, { $projectKey: string; $ids: string }>(
+        `SELECT id, updated_at FROM jira_issues
+         WHERE project_key = $projectKey AND id NOT IN (SELECT value FROM json_each($ids))`,
+      )
+      .all({ $projectKey: projectKey, $ids: JSON.stringify(upstreamIssueIds) })
+    const ids = JSON.stringify(
+      unseen.filter((row) => !changedDuringScan(row.updated_at, scan)).map((row) => row.id),
+    )
+    const pruned = 'SELECT value FROM json_each($ids)'
+    db.query(`DELETE FROM jira_activity WHERE issue_id IN (${pruned})`).run({ $ids: ids })
+    db.query(`DELETE FROM jira_issues WHERE id IN (${pruned})`).run({ $ids: ids })
+  }).immediate()
 }
 
 export function adjustJiraIssueCommentCount(db: Database, idOrKey: string, delta: number): void {

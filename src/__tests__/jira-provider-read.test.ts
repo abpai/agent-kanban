@@ -1,6 +1,6 @@
 import { assertKanbanError } from './helpers/errors'
 import { mockFetch } from './helpers/fetch'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { ErrorCode } from '../errors'
 import {
@@ -13,6 +13,7 @@ import {
   type JiraUser,
 } from '../providers/jira-client'
 import { JiraProvider, type JiraProviderConfig } from '../providers/jira'
+import * as adf from '../providers/jira-adf'
 import { adfContentHash, JIRA_ADF_CONVERTER_VERSION, type AdfDocument } from '../providers/jira-adf'
 import { resetWarnOnce } from '../providers/warn-once'
 import {
@@ -50,6 +51,8 @@ const baseConfig: JiraProviderConfig = {
   apiToken: 'token',
   projectKey: 'ENG',
 }
+
+const renderAdf = adf.adfToMarkdown
 
 const projectFixture = { id: '10000', key: 'ENG', name: 'Engineering' }
 const usersFixture = [
@@ -1358,4 +1361,401 @@ describe('JiraProvider fresh single-issue read', () => {
     assertKanbanError(err)
     expect(err.code).toBe(ErrorCode.TASK_NOT_FOUND)
   })
+})
+
+function paragraphs(...texts: string[]): AdfDocument {
+  return {
+    version: 1,
+    type: 'doc',
+    content: texts.map((text) => ({ type: 'paragraph', content: [{ type: 'text', text }] })),
+  }
+}
+
+/** Logs each description render by the first line of its Markdown, in order. */
+function countRenders(log: string[]) {
+  return spyOn(adf, 'adfToMarkdown').mockImplementation((doc) => {
+    const rendered = renderAdf(doc)
+    log.push(rendered.markdown.split('\n')[0] ?? '')
+    return rendered
+  })
+}
+
+test('a full reconcile renders only edited descriptions again', async () => {
+  let edited = false
+  const searchHandler: StubHandler = () =>
+    Response.json({
+      startAt: 0,
+      maxResults: 100,
+      total: 2,
+      issues: [
+        makeIssue({ id: '1', key: 'ENG-1', statusId: '10001', description: paragraphs('Same.') }),
+        makeIssue({
+          id: '2',
+          key: 'ENG-2',
+          statusId: '10001',
+          updated: edited ? '2026-01-05T00:00:00Z' : '2026-01-02T00:00:00Z',
+          description: paragraphs(edited ? 'After the edit.' : 'Before the edit.'),
+        }),
+      ],
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  const renders: string[] = []
+  const spy = countRenders(renders)
+  try {
+    const baseNow = originalDateNow()
+    Date.now = () => baseNow
+    await provider.getBoard()
+    edited = true
+    Date.now = () => baseNow + 5 * 60_000 + 31_000
+    await provider.getBoard()
+  } finally {
+    spy.mockRestore()
+  }
+
+  expect(renders).toEqual(['Same.', 'Before the edit.', 'After the edit.'])
+  expect(
+    getCachedTasks(db)
+      .map((task) => [task.externalRef, task.description])
+      .sort(),
+  ).toEqual([
+    ['ENG-1', 'Same.'],
+    ['ENG-2', 'After the edit.'],
+  ])
+})
+
+test('rendering a page yields between renders, and a delete meanwhile stays deleted', async () => {
+  // 100 long descriptions take far longer than one 20 ms render slice.
+  const long = (n: number) =>
+    makeIssue({
+      id: String(n),
+      key: `ENG-${n}`,
+      statusId: '10001',
+      description: paragraphs(
+        `Issue ${n}`,
+        ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`),
+      ),
+    })
+  // The pages arrive in a delta sync, which prunes nothing: only the sync's record of
+  // deletes keeps a deleted issue out. A lagging search index returns it on page two too.
+  let searches = 0
+  const searchHandler: StubHandler = (url) => {
+    if (searches++ === 0) return Response.json({ isLast: true, issues: [] })
+    if (new URL(url).searchParams.get('nextPageToken') === null) {
+      return Response.json({
+        nextPageToken: 'page-2',
+        isLast: false,
+        issues: Array.from({ length: 100 }, (_, i) => long(i + 1)),
+      })
+    }
+    return Response.json({ isLast: true, issues: [long(100)] })
+  }
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  const baseNow = originalDateNow()
+  Date.now = () => baseNow
+  await provider.getBoard()
+  Date.now = () => baseNow + 31_000
+  const events: string[] = []
+  const spy = countRenders(events)
+  const previousSecret = process.env['JIRA_WEBHOOK_SECRET']
+  delete process.env['JIRA_WEBHOOK_SECRET']
+  let webhook: Promise<unknown> | undefined
+  setTimeout(() => {
+    events.push('timer')
+    const body = JSON.stringify({
+      webhookEvent: 'jira:issue_deleted',
+      issue: makeIssue({ id: '100', key: 'ENG-100', statusId: '10001' }),
+    })
+    webhook = provider.handleWebhook({ headers: {}, rawBody: body })
+  }, 0)
+  try {
+    await provider.getBoard()
+    await webhook
+  } finally {
+    spy.mockRestore()
+    if (previousSecret !== undefined) process.env['JIRA_WEBHOOK_SECRET'] = previousSecret
+  }
+
+  // The delete lands mid-page, and the deleted issue is never rendered (nor remembered)
+  // afterwards, on that page or the next.
+  expect(events.indexOf('timer')).toBeGreaterThan(0)
+  expect(events).not.toContain('Issue 100')
+  expect(events.filter((event) => event !== 'timer')).toHaveLength(99)
+  const cached = getCachedTasks(db).map((task) => task.externalRef)
+  expect(cached).toHaveLength(99)
+  expect(cached).not.toContain('ENG-100')
+})
+
+test('overlapping reads run one sync, not two racing full reconciles', async () => {
+  let searches = 0
+  const searchHandler: StubHandler = () => {
+    searches += 1
+    return Response.json({ startAt: 0, maxResults: 100, isLast: true, issues: [] })
+  }
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+
+  await Promise.all([provider.getBoard(), provider.getBoard()])
+
+  expect(searches).toBe(1)
+})
+
+test('a warm read does not wait for the background warmer', async () => {
+  let releaseSearch: () => void = () => undefined
+  const searchHandler: StubHandler = () =>
+    new Promise<Response>((resolve) => {
+      releaseSearch = () => resolve(Response.json({ isLast: true, issues: [] }))
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  provider.setBackgroundManaged(true)
+  saveJiraSyncMeta(db, {
+    projectKey: 'ENG',
+    lastSyncAt: '2026-01-01T00:00:00.000Z',
+    lastFullSyncAt: '2026-01-01T00:00:00.000Z',
+    lastIssueUpdatedAt: '2026-01-01T00:00:00.000Z',
+  })
+  Date.now = () => Date.parse('2026-01-01T01:00:00.000Z')
+  let warmerDone = false
+  const warmer = provider.syncCache().then(() => {
+    warmerDone = true
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  await provider.getBoard()
+
+  expect(warmerDone).toBe(false)
+  releaseSearch()
+  await warmer
+})
+
+/** Runs `body` with webhook signature checks off, as in local dev. */
+async function withOpenWebhooks(body: () => Promise<void>) {
+  const previousSecret = process.env['JIRA_WEBHOOK_SECRET']
+  delete process.env['JIRA_WEBHOOK_SECRET']
+  try {
+    await body()
+  } finally {
+    if (previousSecret !== undefined) process.env['JIRA_WEBHOOK_SECRET'] = previousSecret
+  }
+}
+
+test('a delete that lands as the render loop ends stays deleted', async () => {
+  let searches = 0
+  const searchHandler: StubHandler = () =>
+    Response.json({
+      isLast: true,
+      issues:
+        searches++ === 0
+          ? []
+          : [1, 2].map((n) =>
+              makeIssue({
+                id: String(n),
+                key: `ENG-${n}`,
+                statusId: '10001',
+                description: paragraphs(`Issue ${n}`),
+              }),
+            ),
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  const baseNow = originalDateNow()
+  Date.now = () => baseNow
+  await provider.getBoard()
+  Date.now = () => baseNow + 31_000
+  let webhook: Promise<unknown> | undefined
+  // The delete runs in microtasks queued by the page's last render, before the sync resumes.
+  const spy = spyOn(adf, 'adfToMarkdown').mockImplementation((doc) => {
+    const rendered = renderAdf(doc)
+    if (rendered.markdown.startsWith('Issue 2')) {
+      queueMicrotask(() => {
+        webhook = provider.handleWebhook({
+          headers: {},
+          rawBody: JSON.stringify({
+            webhookEvent: 'jira:issue_deleted',
+            issue: makeIssue({ id: '2', key: 'ENG-2', statusId: '10001' }),
+          }),
+        })
+      })
+    }
+    return rendered
+  })
+  await withOpenWebhooks(async () => {
+    try {
+      await provider.getBoard()
+      await webhook
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  expect(getCachedTasks(db).map((task) => task.externalRef)).toEqual(['ENG-1'])
+})
+
+test('a full reconcile keeps an issue a webhook created while it ran', async () => {
+  const long = (n: number) =>
+    makeIssue({
+      id: String(n),
+      key: `ENG-${n}`,
+      statusId: '10001',
+      description: paragraphs(
+        `Issue ${n}`,
+        ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`),
+      ),
+    })
+  // The search ran before ENG-101 was created, so the only page lacks it.
+  const searchHandler: StubHandler = () =>
+    Response.json({ isLast: true, issues: Array.from({ length: 100 }, (_, i) => long(i + 1)) })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  let webhook: Promise<unknown> | undefined
+  setTimeout(() => {
+    webhook = provider.handleWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        webhookEvent: 'jira:issue_created',
+        issue: { ...long(101), fields: { ...long(101).fields, updated: new Date().toISOString() } },
+      }),
+    })
+  }, 0)
+  await withOpenWebhooks(async () => {
+    await provider.getBoard()
+    await webhook
+  })
+
+  const cached = getCachedTasks(db).map((task) => task.externalRef)
+  expect(cached).toHaveLength(101)
+  expect(cached).toContain('ENG-101')
+})
+
+test('overlapping reads share a failed sync instead of retrying it one by one', async () => {
+  let searches = 0
+  const searchHandler: StubHandler = () => {
+    searches += 1
+    return Response.json({ errorMessages: ['bad query'] }, { status: 400 })
+  }
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+
+  const results = await Promise.allSettled([provider.getBoard(), provider.getBoard()])
+
+  expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected'])
+  expect(searches).toBe(1)
+})
+
+test.each([
+  ['delayed', '2026-01-02T00:00:00Z'],
+  ['replayed', '2026-01-03T00:00:00Z'],
+])(
+  'a full reconcile prunes an issue whose %s webhook did not write its row',
+  async (_, webhookUpdated) => {
+    const long = (n: number) =>
+      makeIssue({
+        id: String(n),
+        key: `ENG-${n}`,
+        statusId: '10001',
+        description: paragraphs(
+          `Issue ${n}`,
+          ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`),
+        ),
+      })
+    const moved = (updated: string) =>
+      makeIssue({ id: '200', key: 'ENG-200', statusId: '10001', updated })
+    // ENG-200 is cached, then moves out of the project, so the next full scan omits it.
+    let searches = 0
+    const searchHandler: StubHandler = () =>
+      Response.json({
+        isLast: true,
+        issues:
+          searches++ === 0
+            ? [moved('2026-01-03T00:00:00Z')]
+            : Array.from({ length: 100 }, (_, i) => long(i + 1)),
+      })
+    const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+    const baseNow = originalDateNow()
+    Date.now = () => baseNow
+    await provider.getBoard()
+    Date.now = () => baseNow + 5 * 60_000 + 31_000
+    // A webhook from before the move, or a replay of its last one, arrives mid-scan, still
+    // carrying the old project.
+    let webhook: Promise<unknown> | undefined
+    setTimeout(() => {
+      webhook = provider.handleWebhook({
+        headers: {},
+        rawBody: JSON.stringify({
+          webhookEvent: 'jira:issue_updated',
+          issue: moved(webhookUpdated),
+        }),
+      })
+    }, 0)
+    await withOpenWebhooks(async () => {
+      await provider.getBoard()
+      await webhook
+    })
+
+    const cached = getCachedTasks(db).map((task) => task.externalRef)
+    expect(cached).toHaveLength(100)
+    expect(cached).not.toContain('ENG-200')
+  },
+)
+
+test('a delete webhook after an update webhook wins while a sync runs', async () => {
+  const long = (n: number) =>
+    makeIssue({
+      id: String(n),
+      key: `ENG-${n}`,
+      statusId: '10001',
+      description: paragraphs(
+        `Issue ${n}`,
+        ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`),
+      ),
+    })
+  let searches = 0
+  const searchHandler: StubHandler = () =>
+    Response.json({
+      isLast: true,
+      issues: searches++ === 0 ? [long(7)] : Array.from({ length: 100 }, (_, i) => long(i + 10)),
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  const baseNow = originalDateNow()
+  Date.now = () => baseNow
+  await provider.getBoard()
+  Date.now = () => baseNow + 31_000
+  const send = (webhookEvent: string, issue: JiraIssue) =>
+    provider.handleWebhook({ headers: {}, rawBody: JSON.stringify({ webhookEvent, issue }) })
+  // Both webhooks start mid-sync, the update first, before either is awaited.
+  let webhooks: Promise<unknown> | undefined
+  setTimeout(() => {
+    const updated = { ...long(7), fields: { ...long(7).fields, updated: '2026-01-09T00:00:00Z' } }
+    webhooks = Promise.all([
+      send('jira:issue_updated', updated),
+      send('jira:issue_deleted', long(7)),
+    ])
+  }, 0)
+  await withOpenWebhooks(async () => {
+    await provider.getBoard()
+    await webhooks
+  })
+
+  expect(getCachedTasks(db).map((task) => task.externalRef)).not.toContain('ENG-7')
+})
+
+test('a full reconcile prunes a missing issue whose cached timestamp is unreadable', async () => {
+  let searches = 0
+  const searchHandler: StubHandler = () =>
+    Response.json({
+      isLast: true,
+      issues: [
+        makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' }),
+        ...(searches++ === 0
+          ? [2, 3, 4].map((n) => makeIssue({ id: String(n), key: `ENG-${n}`, statusId: '10001' }))
+          : []),
+      ],
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  const baseNow = originalDateNow()
+  Date.now = () => baseNow
+  await provider.getBoard()
+  db.run(`UPDATE jira_issues SET updated_at = '' WHERE key = 'ENG-2'`)
+  db.run(`UPDATE jira_issues SET updated_at = '2026-02-30T25:61:00Z' WHERE key = 'ENG-3'`)
+  // A parser rolls this invalid date into a valid one far past the scan.
+  db.run(`UPDATE jira_issues SET updated_at = '2099-02-30T12:00:00Z' WHERE key = 'ENG-4'`)
+  Date.now = () => baseNow + 5 * 60_000 + 31_000
+  await provider.getBoard()
+
+  expect(getCachedTasks(db).map((task) => task.externalRef)).toEqual(['ENG-1'])
 })

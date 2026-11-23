@@ -25,6 +25,36 @@ export interface JiraIssueWriteOptions {
   authoritative?: boolean
 }
 
+/** The span of Jira `updated` stamps a full reconcile ran across, widened for clock skew. */
+export interface JiraScanWindow {
+  from: string
+  to: string
+}
+
+/**
+ * Whether a cached row changed while a full reconcile ran, so it may be missing from pages
+ * fetched before the change and must not be pruned. An unreadable stamp, or one outside the
+ * window, means no.
+ */
+export function changedDuringScan(updatedAt: string, scan: JiraScanWindow): boolean {
+  const at = parseJiraStamp(updatedAt)
+  return at >= Date.parse(scan.from) && at <= Date.parse(scan.to)
+}
+
+const JIRA_STAMP =
+  /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/
+
+/** Epoch ms of a Jira `updated` stamp, or NaN unless it names a real calendar date and time. */
+function parseJiraStamp(value: string): number {
+  const match = JIRA_STAMP.exec(value)
+  if (match === null) return Number.NaN
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  // Date.parse rolls an impossible day (Feb 30) into the next month; refuse it instead.
+  const calendar = new Date(Date.UTC(year, month - 1, day))
+  if (calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) return Number.NaN
+  return Date.parse(value)
+}
+
 export function prepareJiraIssueSnapshots(issues: JiraIssueSnapshot[]) {
   const newest = new Map<string, JiraIssueSnapshot>()
   const conflicts = new Set<string>()

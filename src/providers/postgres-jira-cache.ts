@@ -1,5 +1,7 @@
 import {
+  changedDuringScan,
   prepareJiraIssueSnapshots,
+  type JiraScanWindow,
   type JiraIssueSnapshot,
   type JiraIssueWriteOptions,
 } from './jira-issue-snapshot'
@@ -426,31 +428,24 @@ export class PostgresJiraCache implements JiraCachePort {
     })
   }
 
-  async pruneIssuesMissingUpstream(projectKey: string, upstreamIssueIds: string[]): Promise<void> {
+  async pruneIssuesMissingUpstream(
+    projectKey: string,
+    upstreamIssueIds: string[],
+    scan: JiraScanWindow,
+  ): Promise<void> {
     await this.sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
-      if (upstreamIssueIds.length === 0) {
-        await tx`
-          DELETE FROM jira_activity
-          WHERE issue_id IN (SELECT id FROM jira_issues WHERE project_key = ${projectKey})
-        `
-        await tx`DELETE FROM jira_issues WHERE project_key = ${projectKey}`
-        return
-      }
-
-      await tx`
-        DELETE FROM jira_activity
-        WHERE issue_id IN (
-          SELECT id FROM jira_issues
-          WHERE project_key = ${projectKey}
-            AND NOT (id = ANY(${upstreamIssueIds}))
-        )
-      `
-      await tx`
-        DELETE FROM jira_issues
+      const unseen = await tx<{ id: string; updated_at: string }[]>`
+        SELECT id, updated_at FROM jira_issues
         WHERE project_key = ${projectKey}
-          AND NOT (id = ANY(${upstreamIssueIds}))
+          AND NOT (id = ANY(${upstreamIssueIds}::text[]))
       `
+      const ids = unseen
+        .filter((row) => !changedDuringScan(row.updated_at, scan))
+        .map((row) => row.id)
+      if (ids.length === 0) return
+      await tx`DELETE FROM jira_activity WHERE issue_id = ANY(${ids}::text[])`
+      await tx`DELETE FROM jira_issues WHERE id = ANY(${ids}::text[])`
     })
   }
 

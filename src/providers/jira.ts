@@ -1,4 +1,8 @@
-import type { JiraIssueSnapshot, JiraIssueWriteOptions } from './jira-issue-snapshot'
+import type {
+  JiraIssueSnapshot,
+  JiraIssueWriteOptions,
+  JiraScanWindow,
+} from './jira-issue-snapshot'
 import type { Database } from 'bun:sqlite'
 import type { BoardView, ProviderTeamInfo, Task } from '../types'
 import type { JiraClient } from './jira-client'
@@ -102,8 +106,12 @@ class SqliteJiraCache implements JiraCachePort {
     deleteJiraIssue(this.db, idOrKey)
   }
 
-  async pruneIssuesMissingUpstream(projectKey: string, upstreamIssueIds: string[]): Promise<void> {
-    pruneJiraIssuesMissingUpstream(this.db, projectKey, upstreamIssueIds)
+  async pruneIssuesMissingUpstream(
+    projectKey: string,
+    upstreamIssueIds: string[],
+    scan: JiraScanWindow,
+  ): Promise<void> {
+    pruneJiraIssuesMissingUpstream(this.db, projectKey, upstreamIssueIds, scan)
   }
 
   async adjustIssueCommentCount(idOrKey: string, delta: number): Promise<void> {
