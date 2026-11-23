@@ -1741,7 +1741,9 @@ test('a full reconcile prunes a missing issue whose cached timestamp is unreadab
       isLast: true,
       issues: [
         makeIssue({ id: '1', key: 'ENG-1', statusId: '10001' }),
-        ...(searches++ === 0 ? [makeIssue({ id: '2', key: 'ENG-2', statusId: '10001' })] : []),
+        ...(searches++ === 0
+          ? [2, 3].map((n) => makeIssue({ id: String(n), key: `ENG-${n}`, statusId: '10001' }))
+          : []),
       ],
     })
   const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
@@ -1749,6 +1751,7 @@ test('a full reconcile prunes a missing issue whose cached timestamp is unreadab
   Date.now = () => baseNow
   await provider.getBoard()
   db.run(`UPDATE jira_issues SET updated_at = '' WHERE key = 'ENG-2'`)
+  db.run(`UPDATE jira_issues SET updated_at = '2026-02-30T25:61:00Z' WHERE key = 'ENG-3'`)
   Date.now = () => baseNow + 5 * 60_000 + 31_000
   await provider.getBoard()
 
