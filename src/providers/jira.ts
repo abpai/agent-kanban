@@ -102,8 +102,12 @@ class SqliteJiraCache implements JiraCachePort {
     deleteJiraIssue(this.db, idOrKey)
   }
 
-  async pruneIssuesMissingUpstream(projectKey: string, upstreamIssueIds: string[]): Promise<void> {
-    pruneJiraIssuesMissingUpstream(this.db, projectKey, upstreamIssueIds)
+  async pruneIssuesMissingUpstream(
+    projectKey: string,
+    upstreamIssueIds: string[],
+    updatedBefore: string,
+  ): Promise<void> {
+    pruneJiraIssuesMissingUpstream(this.db, projectKey, upstreamIssueIds, updatedBefore)
   }
 
   async adjustIssueCommentCount(idOrKey: string, delta: number): Promise<void> {

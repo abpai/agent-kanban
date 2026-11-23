@@ -1599,7 +1599,7 @@ test('a full reconcile keeps an issue a webhook created while it ran', async () 
         ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`),
       ),
     })
-  // The search ran before ENG-101 existed, so the only page lacks it.
+  // The search ran before ENG-101 was created, so the only page lacks it.
   const searchHandler: StubHandler = () =>
     Response.json({ isLast: true, issues: Array.from({ length: 100 }, (_, i) => long(i + 1)) })
   const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
@@ -1607,7 +1607,10 @@ test('a full reconcile keeps an issue a webhook created while it ran', async () 
   setTimeout(() => {
     webhook = provider.handleWebhook({
       headers: {},
-      rawBody: JSON.stringify({ webhookEvent: 'jira:issue_created', issue: long(101) }),
+      rawBody: JSON.stringify({
+        webhookEvent: 'jira:issue_created',
+        issue: { ...long(101), fields: { ...long(101).fields, updated: new Date().toISOString() } },
+      }),
     })
   }, 0)
   await withOpenWebhooks(async () => {

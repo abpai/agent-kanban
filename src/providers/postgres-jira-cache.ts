@@ -426,31 +426,25 @@ export class PostgresJiraCache implements JiraCachePort {
     })
   }
 
-  async pruneIssuesMissingUpstream(projectKey: string, upstreamIssueIds: string[]): Promise<void> {
+  async pruneIssuesMissingUpstream(
+    projectKey: string,
+    upstreamIssueIds: string[],
+    updatedBefore: string,
+  ): Promise<void> {
+    // A row Jira changed after `updatedBefore` may be missing from pages fetched before the
+    // change, so only rows older than it are pruned.
     await this.sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(hashtext('agent-kanban:postgres-jira:issues'))`
-      if (upstreamIssueIds.length === 0) {
-        await tx`
-          DELETE FROM jira_activity
-          WHERE issue_id IN (SELECT id FROM jira_issues WHERE project_key = ${projectKey})
-        `
-        await tx`DELETE FROM jira_issues WHERE project_key = ${projectKey}`
-        return
-      }
-
-      await tx`
-        DELETE FROM jira_activity
-        WHERE issue_id IN (
-          SELECT id FROM jira_issues
-          WHERE project_key = ${projectKey}
-            AND NOT (id = ANY(${upstreamIssueIds}))
-        )
-      `
-      await tx`
-        DELETE FROM jira_issues
+      const missing = await tx<{ id: string }[]>`
+        SELECT id FROM jira_issues
         WHERE project_key = ${projectKey}
-          AND NOT (id = ANY(${upstreamIssueIds}))
+          AND NOT (id = ANY(${upstreamIssueIds}::text[]))
+          AND updated_at::timestamptz < ${updatedBefore}::timestamptz
       `
+      if (missing.length === 0) return
+      const ids = missing.map((row) => row.id)
+      await tx`DELETE FROM jira_activity WHERE issue_id = ANY(${ids}::text[])`
+      await tx`DELETE FROM jira_issues WHERE id = ANY(${ids}::text[])`
     })
   }
 

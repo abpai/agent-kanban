@@ -492,41 +492,23 @@ export function pruneJiraIssuesMissingUpstream(
   db: Database,
   projectKey: string,
   upstreamIssueIds: string[],
+  updatedBefore: string,
 ): void {
-  const run = db.transaction(() => {
-    if (upstreamIssueIds.length === 0) {
-      db.query(
-        `DELETE FROM jira_activity
-         WHERE issue_id IN (SELECT id FROM jira_issues WHERE project_key = $projectKey)`,
-      ).run({ $projectKey: projectKey })
-      db.query('DELETE FROM jira_issues WHERE project_key = $projectKey').run({
-        $projectKey: projectKey,
-      })
-      return
-    }
-
-    const placeholders = upstreamIssueIds.map((_, index) => `$id${index}`).join(', ')
-    const params = Object.fromEntries([
-      ['$projectKey', projectKey],
-      ...upstreamIssueIds.map((issueId, index) => [`$id${index}`, issueId]),
-    ])
-
-    db.query(
-      `DELETE FROM jira_activity
-       WHERE issue_id IN (
-         SELECT id
-         FROM jira_issues
-         WHERE project_key = $projectKey
-           AND id NOT IN (${placeholders})
-       )`,
-    ).run(params)
-    db.query(
-      `DELETE FROM jira_issues
-       WHERE project_key = $projectKey
-         AND id NOT IN (${placeholders})`,
-    ).run(params)
-  })
-  run()
+  // A row Jira changed after `updatedBefore` may be missing from pages fetched before the
+  // change, so only rows older than it are pruned.
+  const missing = `SELECT id FROM jira_issues
+    WHERE project_key = $projectKey
+      AND id NOT IN (SELECT value FROM json_each($ids))
+      AND ${jiraUpdatedAtSql('updated_at')} < julianday($updatedBefore)`
+  const params = {
+    $projectKey: projectKey,
+    $ids: JSON.stringify(upstreamIssueIds),
+    $updatedBefore: updatedBefore,
+  }
+  db.transaction(() => {
+    db.query(`DELETE FROM jira_activity WHERE issue_id IN (${missing})`).run(params)
+    db.query(`DELETE FROM jira_issues WHERE id IN (${missing})`).run(params)
+  })()
 }
 
 export function adjustJiraIssueCommentCount(db: Database, idOrKey: string, delta: number): void {

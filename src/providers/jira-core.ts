@@ -198,7 +198,11 @@ export interface JiraCachePort {
   // Issue writes
   upsertIssues(issues: JiraIssueSnapshot[], options?: JiraIssueWriteOptions): Promise<string[]>
   deleteIssue(idOrKey: string): Promise<void>
-  pruneIssuesMissingUpstream(projectKey: string, upstreamIssueIds: string[]): Promise<void>
+  pruneIssuesMissingUpstream(
+    projectKey: string,
+    upstreamIssueIds: string[],
+    updatedBefore: string,
+  ): Promise<void>
   adjustIssueCommentCount(idOrKey: string, delta: number): Promise<void>
 
   // Activity
@@ -231,11 +235,6 @@ interface RenderedDescription {
 }
 
 /** A remembered rendering and the exact raw ADF JSON it was rendered from. */
-interface LiveIngest {
-  readonly deleted: Set<string>
-  readonly written: Set<string>
-}
-
 interface RememberedDescription extends RenderedDescription {
   readonly source: string
 }
@@ -246,6 +245,7 @@ interface RememberedDescription extends RenderedDescription {
  * reconcile of a large board never blocks the process that hosts the provider.
  */
 const RENDER_SLICE_MS = 20
+const PRUNE_CLOCK_SKEW_MS = 60_000
 
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 
@@ -294,12 +294,10 @@ export class JiraProviderCore implements KanbanProvider {
   // have changed since; different raw ADF or a miss renders again. Without it, every
   // full reconcile re-renders every description on the board.
   private readonly renderedDescriptions = new Map<string, RememberedDescription>()
-  // What live ingest (webhooks, fresh reads, writes) did to the cache during the running
-  // sync. Rendering and network waits yield to the event loop, so a delete can land
-  // between a page's fetch and its write, and a lagging search index can return the issue
-  // again on a later page: the sync must not write it back. A row written live may be
-  // missing from pages fetched earlier: a full reconcile must not prune it.
-  private liveDuringSync: LiveIngest | undefined
+  // Issue ids a webhook deleted during the running sync. Rendering yields to the event
+  // loop, so a delete can land between a page's fetch and its write, and a lagging search
+  // index can return the issue again on a later page; the sync must not write it back.
+  private deletedDuringSync: Set<string> | undefined
   // The sync running now. Syncs run one at a time: an overlapping full reconcile could
   // prune rows another sync just cached, or move the delta cursor backwards.
   private syncInFlight: Promise<void> | undefined
@@ -373,15 +371,15 @@ export class JiraProviderCore implements KanbanProvider {
     // after a success, the sync gate decides whether a second sync is still due.
     if (this.syncInFlight !== undefined && (await this.servesWarmCache(force, viaWarmer))) return
     while (this.syncInFlight !== undefined) await this.syncInFlight
-    const live: LiveIngest = { deleted: new Set(), written: new Set() }
-    this.liveDuringSync = live
-    const run = this.syncOnce(force, viaWarmer, live)
+    const deleted = new Set<string>()
+    this.deletedDuringSync = deleted
+    const run = this.syncOnce(force, viaWarmer, deleted)
     this.syncInFlight = run
     try {
       await run
     } finally {
       this.syncInFlight = undefined
-      this.liveDuringSync = undefined
+      this.deletedDuringSync = undefined
     }
   }
 
@@ -391,8 +389,11 @@ export class JiraProviderCore implements KanbanProvider {
     return this.syncGate.shouldSkip({ force, viaWarmer, lastSyncAt: meta.lastSyncAt })
   }
 
-  private async syncOnce(force: boolean, viaWarmer: boolean, live: LiveIngest): Promise<void> {
-    const { deleted } = live
+  private async syncOnce(
+    force: boolean,
+    viaWarmer: boolean,
+    deleted: ReadonlySet<string>,
+  ): Promise<void> {
     await this.cache.ready
     const meta = await this.cache.loadSyncMeta()
     // Server mode: a background warmer (syncCache(), viaWarmer=true) owns refresh.
@@ -409,6 +410,10 @@ export class JiraProviderCore implements KanbanProvider {
     // changelog call (~minutes). Writes get read-after-write freshness from
     // hydrateIssueByKey instead, so a forced sync stays a cheap delta.
     const fullReconcile = shouldRunFullReconcile(meta.lastFullSyncAt, now)
+    // The prune spares rows Jira changed after the scan began: a webhook may have written
+    // them after the pages that would include them were fetched. Backdated to absorb clock
+    // skew between Jira and this host.
+    const scanStartedAt = new Date(now - PRUNE_CLOCK_SKEW_MS).toISOString()
 
     // 1. Resolve project.
     const project = await this.client.getProject(this.config.projectKey)
@@ -565,8 +570,7 @@ export class JiraProviderCore implements KanbanProvider {
     // reconcile; a delta sync's seenIssueIds is intentionally partial. (The scan
     // is known complete here — an incomplete scan returned above.)
     if (fullReconcile) {
-      for (const id of live.written) if (!deleted.has(id)) seenIssueIds.add(id)
-      await this.cache.pruneIssuesMissingUpstream(project.key, [...seenIssueIds])
+      await this.cache.pruneIssuesMissingUpstream(project.key, [...seenIssueIds], scanStartedAt)
       for (const id of this.renderedDescriptions.keys()) {
         if (!seenIssueIds.has(id)) this.renderedDescriptions.delete(id)
       }
@@ -746,7 +750,6 @@ export class JiraProviderCore implements KanbanProvider {
     const readAt = new Date().toISOString()
     const described = this.renderDescription(issue)
     const description = described.rendered
-    this.liveDuringSync?.written.add(issue.id)
     await this.cache.upsertIssues(
       [toCacheIssue(issue, this.config.baseUrl, this.config.projectKey, described)],
       { authoritative: true },
@@ -848,11 +851,6 @@ export class JiraProviderCore implements KanbanProvider {
     }
   }
 
-  private async isNewerThanCache(issue: JiraIssue): Promise<boolean> {
-    const cached = await this.cache.getCachedTask(issue.id)
-    return cached === null || Date.parse(cached.updated_at) < Date.parse(issue.fields.updated)
-  }
-
   private async cacheIssueSnapshots(issues: JiraIssueSnapshot[]): Promise<void> {
     const conflicts = await this.cache.upsertIssues(issues)
     await mapWithConcurrency(conflicts, 5, async (key) => {
@@ -872,7 +870,6 @@ export class JiraProviderCore implements KanbanProvider {
     // anomaly (the upsert above did not land), not an ordinary not-found — surface
     // it rather than threading an unreachable null through every caller.
     const issue = await this.client.getIssue(key)
-    this.liveDuringSync?.written.add(issue.id)
     await this.cache.upsertIssues([this.cacheRow(issue, this.config.projectKey)], {
       authoritative: true,
     })
@@ -1253,7 +1250,7 @@ export class JiraProviderCore implements KanbanProvider {
     if (!issue) return attachVerdict({ handled: false, message: `No issue in payload (${event})` })
 
     if (event === 'jira:issue_deleted') {
-      this.liveDuringSync?.deleted.add(issue.id)
+      this.deletedDuringSync?.add(issue.id)
       this.renderedDescriptions.delete(issue.id)
       await this.cache.deleteIssue(issue.id)
       await this.cache.saveSyncMeta({ lastWebhookAt: new Date().toISOString() })
@@ -1267,17 +1264,6 @@ export class JiraProviderCore implements KanbanProvider {
           handled: false,
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
         })
-      }
-      // Only a webhook newer than the cached row writes it, and only that write may keep its
-      // row through a running reconcile's prune; a delayed or replayed webhook may not.
-      // Recorded before the write starts, so a prune cannot run between the two.
-      const live = this.liveDuringSync
-      if (live !== undefined) {
-        const newer = await this.isNewerThanCache(issue)
-        // A delete webhook may have landed during that lookup; it wins, as it would have
-        // without the lookup.
-        if (live.deleted.has(issue.id)) return attachVerdict({ handled: true })
-        if (newer) live.written.add(issue.id)
       }
       await this.cacheIssueSnapshots([this.cacheRow(issue, this.config.projectKey)])
       if (event === 'jira:issue_updated') {
