@@ -1619,3 +1619,66 @@ test('a full reconcile keeps an issue a webhook created while it ran', async () 
   expect(cached).toHaveLength(101)
   expect(cached).toContain('ENG-101')
 })
+
+test('overlapping reads share a failed sync instead of retrying it one by one', async () => {
+  let searches = 0
+  const searchHandler: StubHandler = () => {
+    searches += 1
+    return Response.json({ errorMessages: ['bad query'] }, { status: 400 })
+  }
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+
+  const results = await Promise.allSettled([provider.getBoard(), provider.getBoard()])
+
+  expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected'])
+  expect(searches).toBe(1)
+})
+
+test('a full reconcile prunes an issue whose delayed webhook was older than its cached row', async () => {
+  const long = (n: number) =>
+    makeIssue({
+      id: String(n),
+      key: `ENG-${n}`,
+      statusId: '10001',
+      description: paragraphs(
+        `Issue ${n}`,
+        ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`),
+      ),
+    })
+  const moved = (updated: string) =>
+    makeIssue({ id: '200', key: 'ENG-200', statusId: '10001', updated })
+  // ENG-200 is cached, then moves out of the project, so the next full scan omits it.
+  let searches = 0
+  const searchHandler: StubHandler = () =>
+    Response.json({
+      isLast: true,
+      issues:
+        searches++ === 0
+          ? [moved('2026-01-03T00:00:00Z')]
+          : Array.from({ length: 100 }, (_, i) => long(i + 1)),
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  const baseNow = originalDateNow()
+  Date.now = () => baseNow
+  await provider.getBoard()
+  Date.now = () => baseNow + 5 * 60_000 + 31_000
+  // A webhook from before the move arrives mid-scan, still carrying the old project.
+  let webhook: Promise<unknown> | undefined
+  setTimeout(() => {
+    webhook = provider.handleWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        webhookEvent: 'jira:issue_updated',
+        issue: moved('2026-01-02T00:00:00Z'),
+      }),
+    })
+  }, 0)
+  await withOpenWebhooks(async () => {
+    await provider.getBoard()
+    await webhook
+  })
+
+  const cached = getCachedTasks(db).map((task) => task.externalRef)
+  expect(cached).toHaveLength(100)
+  expect(cached).not.toContain('ENG-200')
+})

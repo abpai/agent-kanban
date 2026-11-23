@@ -368,10 +368,11 @@ export class JiraProviderCore implements KanbanProvider {
 
   protected async sync(force = false, viaWarmer = false): Promise<void> {
     // A read that may serve the warm cache never waits on a sync in flight, which can be
-    // a minutes-long full reconcile. Any other caller waits for it; the sync gate then
-    // decides whether a second sync is still due.
+    // a minutes-long full reconcile. Any other caller waits for it and shares its failure,
+    // so a stalled Jira fails waiting reads together instead of retrying it one by one;
+    // after a success, the sync gate decides whether a second sync is still due.
     if (this.syncInFlight !== undefined && (await this.servesWarmCache(force, viaWarmer))) return
-    while (this.syncInFlight !== undefined) await this.syncInFlight.catch(() => undefined)
+    while (this.syncInFlight !== undefined) await this.syncInFlight
     const live: LiveIngest = { deleted: new Set(), written: new Set() }
     this.liveDuringSync = live
     const run = this.syncOnce(force, viaWarmer, live)
@@ -847,6 +848,11 @@ export class JiraProviderCore implements KanbanProvider {
     }
   }
 
+  private async cachedRowMatches(issue: JiraIssue): Promise<boolean> {
+    const cached = await this.cache.getCachedTask(issue.id)
+    return cached !== null && Date.parse(cached.updated_at) <= Date.parse(issue.fields.updated)
+  }
+
   private async cacheIssueSnapshots(issues: JiraIssueSnapshot[]): Promise<void> {
     const conflicts = await this.cache.upsertIssues(issues)
     await mapWithConcurrency(conflicts, 5, async (key) => {
@@ -1262,8 +1268,11 @@ export class JiraProviderCore implements KanbanProvider {
           message: `Ignoring issue from project '${projectKey ?? 'unknown'}'`,
         })
       }
-      this.liveDuringSync?.written.add(issue.id)
+      const live = this.liveDuringSync
       await this.cacheIssueSnapshots([this.cacheRow(issue, this.config.projectKey)])
+      // A delayed webhook older than the cached row is rejected; only an applied write
+      // may keep its row through a running reconcile's prune.
+      if (live !== undefined && (await this.cachedRowMatches(issue))) live.written.add(issue.id)
       if (event === 'jira:issue_updated') {
         await this.refreshIssueActivity(issue).catch((err) => {
           console.warn(`[jira] activity fetch for webhook issue ${issue.key} failed:`, err)
