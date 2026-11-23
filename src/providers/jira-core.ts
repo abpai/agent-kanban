@@ -1272,7 +1272,13 @@ export class JiraProviderCore implements KanbanProvider {
       // row through a running reconcile's prune; a delayed or replayed webhook may not.
       // Recorded before the write starts, so a prune cannot run between the two.
       const live = this.liveDuringSync
-      if (live !== undefined && (await this.isNewerThanCache(issue))) live.written.add(issue.id)
+      if (live !== undefined) {
+        const newer = await this.isNewerThanCache(issue)
+        // A delete webhook may have landed during that lookup; it wins, as it would have
+        // without the lookup.
+        if (live.deleted.has(issue.id)) return attachVerdict({ handled: true })
+        if (newer) live.written.add(issue.id)
+      }
       await this.cacheIssueSnapshots([this.cacheRow(issue, this.config.projectKey)])
       if (event === 'jira:issue_updated') {
         await this.refreshIssueActivity(issue).catch((err) => {

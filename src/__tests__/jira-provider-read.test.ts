@@ -1689,3 +1689,44 @@ test.each([
     expect(cached).not.toContain('ENG-200')
   },
 )
+
+test('a delete webhook after an update webhook wins while a sync runs', async () => {
+  const long = (n: number) =>
+    makeIssue({
+      id: String(n),
+      key: `ENG-${n}`,
+      statusId: '10001',
+      description: paragraphs(
+        `Issue ${n}`,
+        ...Array.from({ length: 200 }, (_, i) => `Paragraph ${i} *text*.`),
+      ),
+    })
+  let searches = 0
+  const searchHandler: StubHandler = () =>
+    Response.json({
+      isLast: true,
+      issues: searches++ === 0 ? [long(7)] : Array.from({ length: 100 }, (_, i) => long(i + 10)),
+    })
+  const { provider } = makeProviderWithBoard(standardRoutes({ searchHandler }), 3)
+  const baseNow = originalDateNow()
+  Date.now = () => baseNow
+  await provider.getBoard()
+  Date.now = () => baseNow + 31_000
+  const send = (webhookEvent: string, issue: JiraIssue) =>
+    provider.handleWebhook({ headers: {}, rawBody: JSON.stringify({ webhookEvent, issue }) })
+  // Both webhooks start mid-sync, the update first, before either is awaited.
+  let webhooks: Promise<unknown> | undefined
+  setTimeout(() => {
+    const updated = { ...long(7), fields: { ...long(7).fields, updated: '2026-01-09T00:00:00Z' } }
+    webhooks = Promise.all([
+      send('jira:issue_updated', updated),
+      send('jira:issue_deleted', long(7)),
+    ])
+  }, 0)
+  await withOpenWebhooks(async () => {
+    await provider.getBoard()
+    await webhooks
+  })
+
+  expect(getCachedTasks(db).map((task) => task.externalRef)).not.toContain('ENG-7')
+})
